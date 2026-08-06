@@ -66,6 +66,25 @@ class NotificationManager {
         UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
     }
 
+    /// Batch generation can finish while the app is closed (Anthropic's Batch API takes up
+    /// to ~24h) -- without this, the only way to know a book's questions are ready was
+    /// remembering to open the app and manually tap "Check Status." Fires immediately
+    /// (a 1-second trigger, the minimum `UNTimeIntervalNotificationTrigger` allows, rather
+    /// than a calendar-scheduled one) since this is reporting something that already
+    /// happened, not scheduling something for later.
+    func notifyBatchGenerationComplete(bookTitle: String, questionsInserted: Int) {
+        let content = UNMutableNotificationContent()
+        content.title = "Cobux"
+        content.body = questionsInserted > 0
+            ? "\(bookTitle)'s background quiz generation finished — \(questionsInserted) question\(questionsInserted == 1 ? "" : "s") ready."
+            : "\(bookTitle)'s background quiz generation finished."
+        content.sound = .default
+
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        let request = UNNotificationRequest(identifier: "cobux_batch_generation_complete", content: content, trigger: trigger)
+        UNUserNotificationCenter.current().add(request) { _ in }
+    }
+
     func getPendingCount() async -> Int {
         let requests = await UNUserNotificationCenter.current().pendingNotificationRequests()
         return requests.count

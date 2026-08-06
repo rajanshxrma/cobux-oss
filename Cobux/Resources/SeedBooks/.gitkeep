@@ -1,0 +1,5 @@
+Real seed book content (highlights/chapter summaries derived from commercially published books)
+is deliberately excluded from this public repo -- see README.md. This directory exists as a
+placeholder only, so XcodeGen's `path: Cobux/Resources/SeedBooks` folder reference resolves on a
+fresh clone. The app runs fine with this directory empty; it just seeds with an empty library
+until you add your own books through the UI.

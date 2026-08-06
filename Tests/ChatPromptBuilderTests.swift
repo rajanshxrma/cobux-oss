@@ -28,7 +28,14 @@ final class ChatPromptBuilderTests: XCTestCase {
         let bookA = makeBook("Atomic Habits", author: "James Clear", in: context)
         let bookB = makeBook("Attached", author: "Amir Levine", in: context)
 
-        let assembled = ChatPromptBuilder.assemble(userMessage: "How do habits form?", books: [bookA, bookB], selectedBookID: bookA.id, symposiumModeEnabled: true)
+        // Deliberately mentions both books by title -- SearchService.buildContext only
+        // populates citedTitles from books that actually matched (keyword/title or semantic),
+        // by design: a vague query that falls back to the whole library must NOT claim every
+        // book as "referenced" just because it was included as context (see buildContext's own
+        // doc comment). A query with no embeddings set up and no title/author mention -- the
+        // original "How do habits form?" -- legitimately produces empty citedTitles and isn't
+        // testing what this test's name says it's testing.
+        let assembled = ChatPromptBuilder.assemble(userMessage: "Compare Atomic Habits and Attached on behavior change", books: [bookA, bookB], selectedBookID: bookA.id, symposiumModeEnabled: true)
 
         guard case .symposium(let systemPrompt, let titles) = assembled else {
             return XCTFail("symposium mode must always produce .symposium, even with a book selected")

@@ -6,6 +6,7 @@ struct ContentView: View {
     @State private var notificationManager = NotificationManager()
     @State private var selectedTab = 0
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.modelContext) private var modelContext
     @Query private var books: [Book]
     @Query private var chatMessages: [ChatMessage]
     @AppStorage("hasOfferedPostUpgradeExport") private var hasOfferedPostUpgradeExport = false
@@ -97,9 +98,26 @@ struct ContentView: View {
             guard newPhase == .active || newPhase == .background else { return }
             WatchSyncService.sync(books: books)
         }
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else { return }
+            checkPendingBatchGeneration()
+        }
         .onAppear(perform: maybeOfferPostUpgradeExport)
         .sheet(isPresented: $showingPostUpgradeExportPrompt, onDismiss: { hasOfferedPostUpgradeExport = true }) {
             PostUpgradeExportPromptView(books: books, chatMessages: chatMessages)
+        }
+    }
+
+    /// Promotes background quiz generation from "the user has to remember to come back and
+    /// tap Check Status" to actually automatic -- checked opportunistically on every
+    /// foreground, same pattern as `WatchSyncService.sync` above. A no-op almost always
+    /// (`applyResultsIfDone` returns nil immediately if nothing is pending or the batch
+    /// isn't done yet), so this is cheap to call this often.
+    private func checkPendingBatchGeneration() {
+        guard BatchGenerationService.pendingBatch != nil else { return }
+        Task {
+            guard let result = try? await BatchGenerationService.applyResultsIfDone(claudeService: claudeService, modelContext: modelContext) else { return }
+            notificationManager.notifyBatchGenerationComplete(bookTitle: result.bookTitle, questionsInserted: result.questionsInserted)
         }
     }
 

@@ -212,8 +212,13 @@ enum QuizGenerationService {
             cacheCreationTokens: 0, cacheReadTokens: 0, model: pieces.model.rateTableModel
         )
 
+        // Settings' own footer promises this cap applies to "this month's estimated
+        // generation spend" -- it was actually checking the combined chat+generation
+        // total, so a normal month of chatting could exhaust the generation budget
+        // before any generation happened, making the (usually cheap) thing that isn't
+        // the real cost driver look like the expensive one.
         let decision = BudgetGuard(capDollars: budgetCapDollars).evaluate(
-            alreadySpentDollars: UsageTracker.currentMonthEstimate(),
+            alreadySpentDollars: UsageTracker.currentMonthEstimate(for: .generation),
             proposedCostDollars: proposedCost
         )
         guard decision.allowed else {

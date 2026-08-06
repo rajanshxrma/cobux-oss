@@ -25,6 +25,11 @@ enum BatchGenerationService {
         let bookTitle: String
         let chapterIDs: [UUID]
         let submittedAt: Date
+        /// Chapter UUID string (matches each item's customID) -> the model it was actually
+        /// submitted with. A batch mixes Haiku (bulk) and Sonnet (clinical vignettes) items
+        /// per `QuestionQuality`, so this is what lets usage recording price each result
+        /// correctly instead of assuming one model for the whole batch.
+        var modelsByChapterID: [String: CobuxModelID] = [:]
     }
 
     enum BatchGenerationError: LocalizedError {
@@ -46,6 +51,7 @@ enum BatchGenerationService {
     }
 
     struct ApplyResult {
+        let bookTitle: String
         let chaptersUpdated: Int
         let questionsInserted: Int
         let chaptersFailed: Int
@@ -77,6 +83,7 @@ enum BatchGenerationService {
 
         var items: [ClaudeService.BatchItem] = []
         var chapterIDs: [UUID] = []
+        var modelsByChapterID: [String: CobuxModelID] = [:]
         for chapter in needing {
             guard let pieces = QuizGenerationService.requestPieces(for: chapter, in: book) else { continue }
             items.append(ClaudeService.BatchItem(
@@ -87,11 +94,12 @@ enum BatchGenerationService {
                 jsonSchema: QuizGenerationService.questionsJSONSchema
             ))
             chapterIDs.append(chapter.id)
+            modelsByChapterID[chapter.id.uuidString] = pieces.model
         }
         guard !items.isEmpty else { throw BatchGenerationError.noneNeeded }
 
         let handle = try await claudeService.submitBatch(items)
-        savePending(PendingBatch(batchID: handle.id, bookTitle: book.title, chapterIDs: chapterIDs, submittedAt: .now))
+        savePending(PendingBatch(batchID: handle.id, bookTitle: book.title, chapterIDs: chapterIDs, submittedAt: .now, modelsByChapterID: modelsByChapterID))
     }
 
     /// Polls the in-flight batch's current state without applying anything.
@@ -121,9 +129,9 @@ enum BatchGenerationService {
         guard let resultsURL = status.resultsURL else {
             // Ended with no results URL (e.g. every item expired/canceled) --
             // nothing to apply, but the job is over either way.
-            return ApplyResult(chaptersUpdated: 0, questionsInserted: 0, chaptersFailed: status.errored + status.processing)
+            return ApplyResult(bookTitle: pending.bookTitle, chaptersUpdated: 0, questionsInserted: 0, chaptersFailed: status.errored + status.processing)
         }
-        let results = try await claudeService.batchResults(handle, resultsURL: resultsURL)
+        let results = try await claudeService.batchResults(handle, resultsURL: resultsURL, modelByCustomID: pending.modelsByChapterID)
 
         var chaptersUpdated = 0
         var questionsInserted = 0
@@ -150,7 +158,7 @@ enum BatchGenerationService {
             questionsInserted += inserted
         }
 
-        return ApplyResult(chaptersUpdated: chaptersUpdated, questionsInserted: questionsInserted, chaptersFailed: chaptersFailed)
+        return ApplyResult(bookTitle: pending.bookTitle, chaptersUpdated: chaptersUpdated, questionsInserted: questionsInserted, chaptersFailed: chaptersFailed)
     }
 
     /// Cancels the in-flight batch. Items already completed before the

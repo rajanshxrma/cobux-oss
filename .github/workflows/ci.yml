@@ -1,8 +1,15 @@
 name: CI
 
+# Real bug found 2026-08-06: this only ever triggered on `main`/`feature/**`, so every branch
+# since `feature/2.0.0` merged forward (hotfix/2.0.1, post-2.0.0, 2.1.0 -- none matching either
+# pattern) has pushed commits with ZERO CI signal for over a week, completely silently. Same
+# class of bug as the CI-pin/codesign/FoundationModels failures found earlier in the 2.0.0 cycle
+# ("the safety net actually providing zero signal") -- this time the safety net didn't even fire.
+# Branch naming has drifted too much (feature/*, hotfix/*, post-*, bare version numbers) for any
+# allowlist pattern to stay reliable, so this triggers on every branch push instead of guessing
+# the next naming convention.
 on:
   push:
-    branches: [main, 'feature/**']
   pull_request:
     branches: [main]
 

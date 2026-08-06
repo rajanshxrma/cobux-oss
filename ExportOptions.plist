@@ -8,5 +8,7 @@
     <string>58Q76NHADF</string>
     <key>signingStyle</key>
     <string>automatic</string>
+    <key>destination</key>
+    <string>upload</string>
 </dict>
 </plist>

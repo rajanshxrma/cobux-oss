@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import AVFoundation
 import CobuxCore
 
 struct SettingsView: View {
@@ -10,6 +11,7 @@ struct SettingsView: View {
     @Query private var chatMessages: [ChatMessage]
 
     @AppStorage("themePreference") private var themeRaw: String = ThemePreference.system.rawValue
+    @State private var selectedVoiceIdentifier: String = VoicePreference.selectedVoice()?.identifier ?? ""
 
     // Read/written by `QuizGenerationService` directly via matching
     // UserDefaults keys — the same "one durable place to configure it"
@@ -23,7 +25,6 @@ struct SettingsView: View {
     @State private var apiKeyDraft: String = ""
     @State private var hasStoredKey: Bool = false
     @State private var saveConfirmation: String?
-    @State private var monthlyEstimate: Double = 0
     @State private var exportDocument: BackupFileDocument?
     @State private var showExporter = false
     @State private var showImporter = false
@@ -39,6 +40,27 @@ struct SettingsView: View {
                             Text(theme.label).tag(theme.rawValue)
                         }
                     }
+                }
+
+                Section {
+                    let voices = VoicePreference.availableVoices()
+                    Picker("Voice", selection: $selectedVoiceIdentifier) {
+                        ForEach(voices, id: \.identifier) { voice in
+                            Text(voice.cobuxDisplayLabel).tag(voice.identifier)
+                        }
+                    }
+                    .onChange(of: selectedVoiceIdentifier) { _, newValue in
+                        VoicePreference.selectedVoiceIdentifier = newValue.isEmpty ? nil : newValue
+                    }
+                    if VoicePreference.onlyDefaultQualityVoicesAvailable {
+                        Text("For a more natural voice, download an Enhanced or Premium voice in iOS Settings → Accessibility → Spoken Content → Voices.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Voice Mode")
+                } footer: {
+                    Text("The voice Cobux speaks with in Voice Mode. Higher-quality voices sound more natural but take up more storage on your device.")
                 }
 
                 Section {
@@ -75,17 +97,16 @@ struct SettingsView: View {
                     HStack {
                         Text("Estimated spend this month")
                         Spacer()
-                        Text(formattedEstimate)
+                        Text(formattedChatEstimate)
                             .foregroundStyle(.secondary)
                     }
                 } header: {
                     Text("AI Chat")
                 } footer: {
-                    Text("Your Anthropic API key is stored securely on this device and used only to talk to Claude. It's never included in the app itself. The spend estimate above is calculated from Claude's own token counts on this device — it's a helpful approximation, not the same as Anthropic's own billing, which is always the final word.")
+                    Text("Your Anthropic API key is stored securely on this device and used only to talk to Claude. It's never included in the app itself. The spend estimate above is calculated from Claude's own token counts on this device, and only counts chat -- quiz generation is tracked separately below, since it's a different, much smaller, one-time-per-chapter cost. Neither is the same as Anthropic's own billing, which is always the final word.")
                 }
                 .onAppear {
                     hasStoredKey = KeychainManager.load(key: KeychainManager.anthropicAPIKey)?.isEmpty == false
-                    monthlyEstimate = UsageTracker.currentMonthEstimate()
                 }
 
                 Section {
@@ -104,10 +125,16 @@ struct SettingsView: View {
                         "Generation budget: $\(String(format: "%.2f", budgetCapDollars))",
                         value: $budgetCapDollars, in: 0.50...20.0, step: 0.50
                     )
+                    HStack {
+                        Text("Estimated generation spend this month")
+                        Spacer()
+                        Text(formattedGenerationEstimate)
+                            .foregroundStyle(.secondary)
+                    }
                 } header: {
                     Text("Quiz Generation")
                 } footer: {
-                    Text("Generating a chapter's quiz questions spends a small amount from your Anthropic key. Once this month's estimated generation spend would cross the budget above, new generation is blocked until you raise it or the month resets — this is separate from, and stricter than, the overall spend estimate shown below.")
+                    Text("Generating a chapter's quiz questions spends a small amount from your Anthropic key -- typically a fraction of a cent per chapter, and only once per chapter unless its content changes. Once this month's estimated generation spend above would cross the budget cap, new generation is blocked until you raise it or the month resets. Tracked separately from chat spend above, since they're different, unrelated costs.")
                 }
 
                 Section {
@@ -198,7 +225,11 @@ struct SettingsView: View {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
     }
 
-    private var formattedEstimate: String {
-        String(format: "~$%.2f", monthlyEstimate)
+    private var formattedChatEstimate: String {
+        String(format: "~$%.2f", UsageTracker.currentMonthEstimate(for: .chat))
+    }
+
+    private var formattedGenerationEstimate: String {
+        String(format: "~$%.2f", UsageTracker.currentMonthEstimate(for: .generation))
     }
 }

@@ -62,12 +62,17 @@ extension ClaudeService {
         }
 
         if let usage = json["usage"] as? [String: Any] {
+            // purpose: .generation explicitly -- this function is only ever called for quiz
+            // generation, even when it runs on Sonnet (.thorough quality, or any exam-style
+            // chapter). Inferring purpose from model would book those as chat, the exact bug
+            // this explicit parameter exists to prevent.
             UsageTracker.record(
                 inputTokens: usage["input_tokens"] as? Int ?? 0,
                 outputTokens: usage["output_tokens"] as? Int ?? 0,
                 cacheCreationTokens: usage["cache_creation_input_tokens"] as? Int ?? 0,
                 cacheReadTokens: usage["cache_read_input_tokens"] as? Int ?? 0,
-                model: model.rateTableModel
+                model: model.rateTableModel,
+                purpose: .generation
             )
         }
 
@@ -250,7 +255,12 @@ extension ClaudeService {
 
     /// Fetches and decodes a finished batch's results (JSONL, one result
     /// object per line, returned unordered — matched back up via `customID`).
-    func batchResults(_ handle: BatchHandle, resultsURL: String) async throws -> [BatchResult] {
+    /// `modelByCustomID` is how the real per-item model (Haiku for bulk chapters, Sonnet
+    /// for clinical-vignette chapters — `submitBatch` items aren't all the same model) gets
+    /// to the usage recording below; without it every batch result was being priced at
+    /// Sonnet's rate regardless of which model actually ran, and at full live-call rates
+    /// despite the batch discount, together overstating real batched-Haiku spend ~4x.
+    func batchResults(_ handle: BatchHandle, resultsURL: String, modelByCustomID: [String: CobuxModelID] = [:]) async throws -> [BatchResult] {
         guard !apiKey.isEmpty else { throw ClaudeError.missingAPIKey }
         guard let url = URL(string: resultsURL) else { throw ClaudeError.invalidResponse }
 
@@ -277,15 +287,18 @@ extension ClaudeService {
                let content = message["content"] as? [[String: Any]],
                let text = content.first(where: { $0["type"] as? String == "text" })?["text"] as? String {
                 if let usage = message["usage"] as? [String: Any] {
-                    // Batch pricing is roughly half live-call rate; RateTable
-                    // prices at standard rates, so the running estimate is
-                    // conservative (slightly overstates true batch cost)
-                    // rather than ever understating real spend.
+                    // The real per-item model (falls back to Sonnet, the more expensive
+                    // side, only if a caller genuinely didn't supply the map -- e.g. an
+                    // in-flight batch submitted before this fix landed).
+                    let model = modelByCustomID[customID]?.rateTableModel ?? .sonnet5
                     UsageTracker.record(
                         inputTokens: usage["input_tokens"] as? Int ?? 0,
                         outputTokens: usage["output_tokens"] as? Int ?? 0,
                         cacheCreationTokens: usage["cache_creation_input_tokens"] as? Int ?? 0,
-                        cacheReadTokens: usage["cache_read_input_tokens"] as? Int ?? 0
+                        cacheReadTokens: usage["cache_read_input_tokens"] as? Int ?? 0,
+                        model: model,
+                        batch: true,
+                        purpose: .generation
                     )
                 }
                 results.append(BatchResult(customID: customID, succeeded: true, text: text, errorMessage: nil))
@@ -319,7 +332,7 @@ extension ClaudeService {
 /// type from `CobuxCore.CobuxModel` (which prices, not calls) so a caller
 /// can't accidentally pass a chat-path model string here — mapped
 /// explicitly to `CobuxCore.CobuxModel` for pricing via `rateTableModel`.
-enum CobuxModelID: String {
+enum CobuxModelID: String, Codable {
     case sonnet5 = "claude-sonnet-5"
     case haiku45 = "claude-haiku-4-5"
 

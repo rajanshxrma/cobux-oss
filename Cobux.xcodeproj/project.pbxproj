@@ -55,6 +55,7 @@
 		3E6FB3BC0C8CA02E8B661BC2 /* Figure.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6368232EE1E8FE9CBFDFFFC /* Figure.swift */; };
 		3F77C9E03141FDC9D221DCEA /* QuizSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEADC31B57813A498F6EC982 /* QuizSessionView.swift */; };
 		41F468EC105339694B585567 /* QuizQuestion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E596AAA84F6911E713FD747 /* QuizQuestion.swift */; };
+		45E312A58046D96C2EA9B71B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6123BAAF6E4ABBDED5ADA484 /* Assets.xcassets */; };
 		47508892EADF6ECB71107C80 /* GoodreadsShelfView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2138BA6E85DDF8A15F842534 /* GoodreadsShelfView.swift */; };
 		497AD86CEF4383FC55BCBD45 /* CobuxWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B0E7CBFFB94AE01AD7970AA /* CobuxWidgetBundle.swift */; };
 		4D15C1D171130C206208A604 /* HighlightMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8E136E477B457AC5FDD8601 /* HighlightMemory.swift */; };
@@ -78,6 +79,7 @@
 		68631E31D4C2C0AE89937930 /* CobuxCore in Frameworks */ = {isa = PBXBuildFile; productRef = 68F9903D8D28A3ADDE02B397 /* CobuxCore */; };
 		6974FF0C99799CF571B7BC80 /* TypingIndicatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DA562C64CAE1EAFCE786DC7 /* TypingIndicatorView.swift */; };
 		6CD93A9A41B027FC9D046C87 /* QuizAnswerRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53DB090E85EC483A62CCF353 /* QuizAnswerRecord.swift */; };
+		703610C40CDD5D78A81AB0E2 /* SearchServicePromptBudgetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F576B61191F92B4C1D3087A2 /* SearchServicePromptBudgetTests.swift */; };
 		739C5D415E2462F9E3503C6E /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C203F1D00416182B13EE1FEB /* SettingsView.swift */; };
 		740B010D75E405860895524A /* RandomHighlightIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 131047F53835D6832E39275E /* RandomHighlightIntent.swift */; };
 		76793C5A38F09DE232079E46 /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C9BBDA62B9B0556D67004C3 /* ChatMessage.swift */; };
@@ -100,6 +102,7 @@
 		93D98C001EF1ABDBD80AA0E0 /* Chapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBB4E3F90056D53AF363BDFE /* Chapter.swift */; };
 		963BA1EB5DCBC05A0A773B65 /* WatchConnectivityReceiver.swift in Sources */ = {isa = PBXBuildFile; fileRef = E83965C589C881C2E733A6C7 /* WatchConnectivityReceiver.swift */; };
 		9895DF6ED06EF1E07FD83E8A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07E1CF234FE88FA0273FDC31 /* ContentView.swift */; };
+		98AA8199252572A119893FAD /* FigureSeedLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = C43C85536E20E5CE6F37609C /* FigureSeedLoader.swift */; };
 		99367BA64732246843C42803 /* HighlightMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8E136E477B457AC5FDD8601 /* HighlightMemory.swift */; };
 		9AB387A4CF9603D284744F53 /* SnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7F15D451D9449A32B00C76F /* SnapshotTests.swift */; };
 		9B2E8764D6CF1173F4B647B7 /* WisdomGraphView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D0AFD19FB0C004F0D21D6D7 /* WisdomGraphView.swift */; };
@@ -141,6 +144,7 @@
 		D004C4626DF5C64AA9FBBF94 /* ChatBubbleShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8414D0628E5AE2AA92CD4D1D /* ChatBubbleShape.swift */; };
 		D0A74D5BA291EC3C9DEB1A50 /* BackupServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3068900EC788911B8D6D7336 /* BackupServiceTests.swift */; };
 		D4BDBE92B7B09726938543BB /* GoodreadsSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C26076A984380378B1C68697 /* GoodreadsSyncService.swift */; };
+		D717C8208C142A5782DB886B /* VoicePreference.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BE928B5AA3F7EA5DEBD194E /* VoicePreference.swift */; };
 		D742292252BB465FC7D9E907 /* QuizAttempt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D54F15452B939FD1B677228 /* QuizAttempt.swift */; };
 		D93B6F35582CE9B35758F66E /* PostUpgradeExportPromptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7203A7B54DBAC5751EDF576 /* PostUpgradeExportPromptView.swift */; };
 		DB01BCE0E916AB416CC543D2 /* BookEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E4F715D31054686F99D409D /* BookEntity.swift */; };
@@ -158,6 +162,7 @@
 		E510860E8F03F97B328C0043 /* CrossProcessSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBADC779C25B7AC840A718F0 /* CrossProcessSync.swift */; };
 		E573C7E706B960AE6F53DA52 /* DailyReviewServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D2ED13E606388B5178CDE4E /* DailyReviewServiceTests.swift */; };
 		E57EEA33063D263D644042C0 /* UsageTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBE1484B1C852ACBE6D588C1 /* UsageTracker.swift */; };
+		E80EB49C9181653AE69A3888 /* DuplicateIDRepairTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD9F08E625509D9FE9521FFA /* DuplicateIDRepairTests.swift */; };
 		E84F062486478FE385A0DC18 /* CobuxColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6ACED4AACD9517B5DCBA9727 /* CobuxColor.swift */; };
 		EB6A35D15F3FE0AE90EABA62 /* Figures in Resources */ = {isa = PBXBuildFile; fileRef = 5D73AF9F182439AFCE0136FF /* Figures */; };
 		EBE847ADFD1F8266999F526E /* WatchPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C990C7A44F7DE916CB6E1EB /* WatchPayload.swift */; };
@@ -303,7 +308,9 @@
 		5F5A65C4C5DB1179F348B0A9 /* ClaudeGenerationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeGenerationService.swift; sourceTree = "<group>"; };
 		60A3A767984A58F7CE8D7965 /* CobuxApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxApp.swift; sourceTree = "<group>"; };
 		611605354AF06480E2DC6120 /* CobuxQuizLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxQuizLiveActivity.swift; sourceTree = "<group>"; };
+		6123BAAF6E4ABBDED5ADA484 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		6ACED4AACD9517B5DCBA9727 /* CobuxColor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxColor.swift; sourceTree = "<group>"; };
+		6BE928B5AA3F7EA5DEBD194E /* VoicePreference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoicePreference.swift; sourceTree = "<group>"; };
 		6C990C7A44F7DE916CB6E1EB /* WatchPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchPayload.swift; sourceTree = "<group>"; };
 		6D2ED13E606388B5178CDE4E /* DailyReviewServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyReviewServiceTests.swift; sourceTree = "<group>"; };
 		6E708E06493AF20904F429A5 /* ChangelogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangelogView.swift; sourceTree = "<group>"; };
@@ -350,6 +357,7 @@
 		C203F1D00416182B13EE1FEB /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		C243B00D7EDA55572B2B9292 /* QuizScopeBuilderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizScopeBuilderView.swift; sourceTree = "<group>"; };
 		C26076A984380378B1C68697 /* GoodreadsSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoodreadsSyncService.swift; sourceTree = "<group>"; };
+		C43C85536E20E5CE6F37609C /* FigureSeedLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FigureSeedLoader.swift; sourceTree = "<group>"; };
 		C4F8B76944E9F145DEA74FCD /* GoodreadsBook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoodreadsBook.swift; sourceTree = "<group>"; };
 		C69FBF56D1E87F47C48C7826 /* ClosingInterviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClosingInterviewView.swift; sourceTree = "<group>"; };
 		CAA48DAAB8CF6E14A33B78EE /* HighlightProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HighlightProvider.swift; sourceTree = "<group>"; };
@@ -358,6 +366,7 @@
 		CBADC779C25B7AC840A718F0 /* CrossProcessSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossProcessSync.swift; sourceTree = "<group>"; };
 		CBE1484B1C852ACBE6D588C1 /* UsageTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageTracker.swift; sourceTree = "<group>"; };
 		CD5DA5E67B4C577339639DF6 /* CoverGradientView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoverGradientView.swift; sourceTree = "<group>"; };
+		CD9F08E625509D9FE9521FFA /* DuplicateIDRepairTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuplicateIDRepairTests.swift; sourceTree = "<group>"; };
 		D3166B0170E1E772068CBCA3 /* CobuxShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxShortcuts.swift; sourceTree = "<group>"; };
 		D5BFF79C6ECEE577B7FC18F8 /* CobuxWatchContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxWatchContentView.swift; sourceTree = "<group>"; };
 		D7203A7B54DBAC5751EDF576 /* PostUpgradeExportPromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostUpgradeExportPromptView.swift; sourceTree = "<group>"; };
@@ -383,6 +392,7 @@
 		ED6A19C36F25E92810E4D45D /* AddBookView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddBookView.swift; sourceTree = "<group>"; };
 		EE6C84B49BB2EC27AB5DEB2D /* BookCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookCard.swift; sourceTree = "<group>"; };
 		EFCFCE764ABF84A13FD81CAF /* DailyReviewService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyReviewService.swift; sourceTree = "<group>"; };
+		F576B61191F92B4C1D3087A2 /* SearchServicePromptBudgetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchServicePromptBudgetTests.swift; sourceTree = "<group>"; };
 		F5789670FA8F4FA2DC035C49 /* AddHighlightView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddHighlightView.swift; sourceTree = "<group>"; };
 		F8736ED3FDDC2271DFE4B9CE /* Color+Hex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+Hex.swift"; sourceTree = "<group>"; };
 		FD6EED76CF67AE929E6B9259 /* BuildInfoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildInfoTests.swift; sourceTree = "<group>"; };
@@ -436,6 +446,7 @@
 			isa = PBXGroup;
 			children = (
 				E486BE23B1253015E941403B /* SpokenQuizController.swift */,
+				6BE928B5AA3F7EA5DEBD194E /* VoicePreference.swift */,
 				E5E1373826961B633993C943 /* VoiceSessionController.swift */,
 			);
 			path = Voice;
@@ -445,7 +456,6 @@
 			isa = PBXGroup;
 			children = (
 				2F4C60064521B40D68E58877 /* Figures */,
-				8DF6B687CB2537B6C681BA5B /* SeedBooks */,
 				5B9D4AA9ADC79117B1E4AF37 /* Assets.xcassets */,
 				5D73AF9F182439AFCE0136FF /* Figures */,
 				A64255B17CC9583B60E20F95 /* SeedBooks */,
@@ -547,6 +557,7 @@
 				EFCFCE764ABF84A13FD81CAF /* DailyReviewService.swift */,
 				D918FC576393F7E9EFD37AEB /* EmbeddingService.swift */,
 				2D1BC90D98AC8DBA611B4D44 /* FigureImageLoader.swift */,
+				C43C85536E20E5CE6F37609C /* FigureSeedLoader.swift */,
 				576A455D879739EDE1996C5C /* FSRSService.swift */,
 				C26076A984380378B1C68697 /* GoodreadsSyncService.swift */,
 				9561C55CEEFD5B7EFC30741C /* KeychainManager.swift */,
@@ -579,13 +590,6 @@
 				131047F53835D6832E39275E /* RandomHighlightIntent.swift */,
 			);
 			path = Intents;
-			sourceTree = "<group>";
-		};
-		8DF6B687CB2537B6C681BA5B /* SeedBooks */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = SeedBooks;
 			sourceTree = "<group>";
 		};
 		94FC90DCBC1B8ED5D0670840 /* Settings */ = {
@@ -661,8 +665,10 @@
 				E230CE027D8FBD1D8900189B /* ClaudeServiceTests.swift */,
 				0C5C38EE11D75F9F3DBD1E3C /* ClozeServiceTests.swift */,
 				6D2ED13E606388B5178CDE4E /* DailyReviewServiceTests.swift */,
+				CD9F08E625509D9FE9521FFA /* DuplicateIDRepairTests.swift */,
 				BFF690C1C6703FC808300C38 /* MigrationTests.swift */,
 				3E87E503E43376C71B8BF8E7 /* QuizGenerationServiceTests.swift */,
+				F576B61191F92B4C1D3087A2 /* SearchServicePromptBudgetTests.swift */,
 				9C4A6CB3784F8B6679A44F43 /* SearchServiceTests.swift */,
 				D7F15D451D9449A32B00C76F /* SnapshotTests.swift */,
 			);
@@ -705,6 +711,7 @@
 		DF78DD3E3B955C3E6BA9614F /* CobuxWatch */ = {
 			isa = PBXGroup;
 			children = (
+				6123BAAF6E4ABBDED5ADA484 /* Assets.xcassets */,
 				24B22C3636F5EEBBD4675530 /* CobuxWatch.entitlements */,
 				0FA71B2684D2C7416F69C194 /* CobuxWatchApp.swift */,
 				D5BFF79C6ECEE577B7FC18F8 /* CobuxWatchContentView.swift */,
@@ -846,6 +853,7 @@
 			buildConfigurationList = 354542A57BA1B66A4FD716D8 /* Build configuration list for PBXNativeTarget "CobuxWatch" */;
 			buildPhases = (
 				1727D5577F4D7B4E606D7195 /* Sources */,
+				D4209976ECDBCF98B4D390B5 /* Resources */,
 				4DE6ED5840288ECE3DDC8A75 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
@@ -976,6 +984,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D4209976ECDBCF98B4D390B5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				45E312A58046D96C2EA9B71B /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -1070,6 +1086,7 @@
 				3E6FB3BC0C8CA02E8B661BC2 /* Figure.swift in Sources */,
 				54410696B577C773BFA1DD6A /* FigureIDView.swift in Sources */,
 				067ABA5EEF0D77A61C204C09 /* FigureImageLoader.swift in Sources */,
+				98AA8199252572A119893FAD /* FigureSeedLoader.swift in Sources */,
 				FDF0E3BD45EE4982E0BAFD34 /* GoodreadsBook.swift in Sources */,
 				47508892EADF6ECB71107C80 /* GoodreadsShelfView.swift in Sources */,
 				D4BDBE92B7B09726938543BB /* GoodreadsSyncService.swift in Sources */,
@@ -1115,6 +1132,7 @@
 				C5EF26B234E90E1656CFFDD5 /* View+CobuxCard.swift in Sources */,
 				1CF06AF0F8D20DA1A0F39D83 /* View+ZoomTransition.swift in Sources */,
 				0F19F879E792E3062E8BEF38 /* VoiceModeView.swift in Sources */,
+				D717C8208C142A5782DB886B /* VoicePreference.swift in Sources */,
 				8CDF9AD329A8D5CEF777E991 /* VoiceSessionController.swift in Sources */,
 				EBE847ADFD1F8266999F526E /* WatchPayload.swift in Sources */,
 				2AD9EE20FE5438F6827C1FCB /* WatchSyncService.swift in Sources */,
@@ -1144,8 +1162,10 @@
 				3BE1948B94FE30A203010625 /* ClaudeServiceTests.swift in Sources */,
 				63710BE1EA4887559C35DF85 /* ClozeServiceTests.swift in Sources */,
 				E573C7E706B960AE6F53DA52 /* DailyReviewServiceTests.swift in Sources */,
+				E80EB49C9181653AE69A3888 /* DuplicateIDRepairTests.swift in Sources */,
 				099E189E42EC6CE3C56DC2CA /* MigrationTests.swift in Sources */,
 				E5092F470959C294ACD65C18 /* QuizGenerationServiceTests.swift in Sources */,
+				703610C40CDD5D78A81AB0E2 /* SearchServicePromptBudgetTests.swift in Sources */,
 				EF44A488615EC6B355383E03 /* SearchServiceTests.swift in Sources */,
 				9AB387A4CF9603D284744F53 /* SnapshotTests.swift in Sources */,
 			);
@@ -1415,7 +1435,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 58Q76NHADF;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -1520,7 +1540,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 58Q76NHADF;
 				ENABLE_NS_ASSERTIONS = NO;

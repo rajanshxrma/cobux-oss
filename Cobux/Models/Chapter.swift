@@ -30,6 +30,7 @@ final class Chapter {
     var quizQuestions: [QuizQuestion] = []
 
     init(title: String, summary: String, keyLessons: [String] = [], chapterNumber: Int? = nil, isCompleted: Bool = false) {
+        self.id = UUID()
         self.title = title
         self.summary = summary
         self.keyLessons = keyLessons

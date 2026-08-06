@@ -26,21 +26,34 @@ struct UsageTracker {
 
     /// Adds one turn's token usage to this calendar month's running total.
     /// Safe to call with all-zero counts (e.g. if a stream never reported
-    /// usage) — a no-op in that case.
+    /// usage) — a no-op in that case. This overload is chat-only (used by
+    /// `ClaudeService`'s streaming/one-shot chat paths, always Sonnet 5).
     static func record(inputTokens: Int, outputTokens: Int, cacheCreationTokens: Int, cacheReadTokens: Int) {
-        record(inputTokens: inputTokens, outputTokens: outputTokens, cacheCreationTokens: cacheCreationTokens, cacheReadTokens: cacheReadTokens, model: .sonnet5)
+        record(inputTokens: inputTokens, outputTokens: outputTokens, cacheCreationTokens: cacheCreationTokens, cacheReadTokens: cacheReadTokens, model: .sonnet5, purpose: .chat)
     }
 
     /// Model-aware variant — used by generation calls that may run on
     /// Haiku 4.5 rather than the chat path's fixed Sonnet 5, so bulk quiz
     /// generation doesn't get priced at Sonnet rates in the running estimate.
-    static func record(inputTokens: Int, outputTokens: Int, cacheCreationTokens: Int, cacheReadTokens: Int, model: CobuxModel) {
-        let cost = estimatedCost(inputTokens: inputTokens, outputTokens: outputTokens, cacheCreationTokens: cacheCreationTokens, cacheReadTokens: cacheReadTokens, model: model)
+    /// `batch` applies Anthropic's real -50% Batch API discount — omitting it
+    /// (as the batch results path used to) overstates real batched spend 2x
+    /// on its own, and 4x combined with defaulting to Sonnet's rate instead
+    /// of the actual model that ran.
+    ///
+    /// `purpose` is explicit, not inferred from `model` — generation legitimately
+    /// runs on Sonnet 5 too (`.thorough` question quality, and every exam-style
+    /// chapter regardless of quality setting), so "model == .sonnet5 means chat"
+    /// was a real bug: the most expensive generation calls were being booked as
+    /// chat, leaving BudgetGuard's generation-only check blind to them.
+    static func record(inputTokens: Int, outputTokens: Int, cacheCreationTokens: Int, cacheReadTokens: Int, model: CobuxModel, batch: Bool = false, purpose: SpendPurpose) {
+        let cost = estimatedCost(inputTokens: inputTokens, outputTokens: outputTokens, cacheCreationTokens: cacheCreationTokens, cacheReadTokens: cacheReadTokens, model: model, batch: batch)
         guard cost > 0 else { return }
 
         let key = monthKey()
         let current = defaults.double(forKey: key)
         defaults.set(current + cost, forKey: key)
+
+        recordByPurpose(purpose, cost: cost)
     }
 
     /// This calendar month's running estimated spend, in US dollars.
@@ -56,14 +69,44 @@ struct UsageTracker {
         outputTokens: Int,
         cacheCreationTokens: Int,
         cacheReadTokens: Int,
-        model: CobuxModel = .sonnet5
+        model: CobuxModel = .sonnet5,
+        batch: Bool = false
     ) -> Double {
         RateTable.estimatedCost(
             model: model,
             inputTokens: inputTokens,
             outputTokens: outputTokens,
             cacheCreationTokens: cacheCreationTokens,
-            cacheReadTokens: cacheReadTokens
+            cacheReadTokens: cacheReadTokens,
+            batch: batch
         )
+    }
+
+    // MARK: - Per-purpose split
+
+    /// Chat (the recurring, per-turn Sonnet 5 cost) and quiz generation (hash-gated,
+    /// effectively one-time per chapter, whichever model ran) are different cost shapes
+    /// with different causes — merging them into one number hid a real accounting bug
+    /// (generation's BudgetGuard was checking the combined total, so a normal chat month
+    /// could exhaust "the generation budget" before any generation happened). Settings
+    /// shows both lines now instead of one merged figure.
+    enum SpendPurpose: String {
+        case chat
+        case generation
+    }
+
+    private static func purposeKey(_ purpose: SpendPurpose, for date: Date = .now) -> String {
+        monthKey(for: date) + "." + purpose.rawValue
+    }
+
+    private static func recordByPurpose(_ purpose: SpendPurpose, cost: Double) {
+        let key = purposeKey(purpose)
+        let current = defaults.double(forKey: key)
+        defaults.set(current + cost, forKey: key)
+    }
+
+    /// This calendar month's running estimated spend for one purpose only.
+    static func currentMonthEstimate(for purpose: SpendPurpose) -> Double {
+        defaults.double(forKey: purposeKey(purpose))
     }
 }

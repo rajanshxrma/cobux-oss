@@ -51,6 +51,24 @@ class ClaudeService: AIService {
     // Cap how much history is sent per request so long chats don't bloat cost.
     private let maxHistoryMessages = 20
 
+    /// `URLSession.shared`'s default `timeoutIntervalForRequest` is 60s — for
+    /// a streaming request this is an IDLE timer (time until the first
+    /// byte/event arrives), not a total-duration cap. A cold prompt cache
+    /// forces Anthropic to finish writing the entire cache before it can
+    /// stream back a single token, so a large-but-legitimate stable prefix
+    /// (even after `SearchService`'s dynamic-budget fix) can still take
+    /// longer than 60s to produce a first token on a genuinely cold cache —
+    /// most likely a user's very first message, or any message after the
+    /// ~5-minute cache TTL lapses. This is a backstop for that legitimate
+    /// case, not a substitute for the prompt-size fix itself. All three
+    /// network call sites below share one instance instead of
+    /// `URLSession.shared` so the timeout applies everywhere.
+    private static let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 120
+        return URLSession(configuration: config)
+    }()
+
     init(apiKey: String = "") {
         self.apiKey = apiKey
     }
@@ -70,7 +88,7 @@ class ClaudeService: AIService {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            (data, response) = try await Self.session.data(for: request)
         } catch {
             throw ClaudeError.networkError(error)
         }
@@ -107,7 +125,21 @@ class ClaudeService: AIService {
         return text
     }
 
+    /// `AIService`-conforming overload -- kept as an exact-signature match (a default-valued
+    /// `options` parameter on a single method does NOT satisfy protocol conformance the same
+    /// way; Swift needs the literal 3-arg signature to exist) that just forwards to the
+    /// options-aware overload below with `.default`.
     func streamMessage(userMessage: String, conversationHistory: [AIMessage], systemPrompt: String) -> AsyncThrowingStream<String, Error> {
+        streamMessage(userMessage: userMessage, conversationHistory: conversationHistory, systemPrompt: systemPrompt, options: .default)
+    }
+
+    /// Voice mode's symposium branch passes `RequestOptions(maxTokens: 1024, thinkingDisabled:
+    /// true)` explicitly, the same options the book-scoped/general voice branches already
+    /// used -- without this overload existing at all, symposium voice turns ran with adaptive
+    /// thinking on and an 8192-token cap, both real avoidable cost and a spoken reply the queue
+    /// could take minutes to finish reading. Text chat's Symposium/Decision Consultation/Ask
+    /// Intent callers keep using the 3-arg overload above, unaffected.
+    func streamMessage(userMessage: String, conversationHistory: [AIMessage], systemPrompt: String, options: RequestOptions) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let producer = Task {
                 do {
@@ -119,13 +151,14 @@ class ClaudeService: AIService {
                     let request = try buildRequest(
                         userMessage: userMessage,
                         conversationHistory: conversationHistory,
-                        systemPrompt: systemPrompt,
-                        stream: true
+                        systemPrompt: .plain(systemPrompt),
+                        stream: true,
+                        options: options
                     )
 
                     let (bytes, response): (URLSession.AsyncBytes, URLResponse)
                     do {
-                        (bytes, response) = try await URLSession.shared.bytes(for: request)
+                        (bytes, response) = try await Self.session.bytes(for: request)
                     } catch {
                         continuation.finish(throwing: ClaudeError.networkError(error))
                         return
@@ -199,7 +232,7 @@ class ClaudeService: AIService {
 
                     let (bytes, response): (URLSession.AsyncBytes, URLResponse)
                     do {
-                        (bytes, response) = try await URLSession.shared.bytes(for: request)
+                        (bytes, response) = try await Self.session.bytes(for: request)
                     } catch {
                         continuation.finish(throwing: ClaudeError.networkError(error))
                         return

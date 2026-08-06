@@ -307,13 +307,19 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
         let assembled = ChatPromptBuilder.assemble(userMessage: question, books: books, selectedBookID: selectedBookID, symposiumModeEnabled: symposiumModeEnabled, isVoice: true)
 
         // Cost guards, spoken not just displayed — eyes-free mode needs eyes-free errors.
-        // Two layers, per Fable's ruling: the existing monthly BudgetGuard (shared with quiz
-        // generation, never previously applied to chat) and a new, additional session-scoped
-        // soft ceiling that exists specifically because a hands-free session can rack up turns
-        // with no screen to glance at.
+        // Two layers, per Fable's ruling: a monthly BudgetGuard (reusing the same cap dollar
+        // value as quiz generation's Settings control -- no separate UI needed -- but checked
+        // against CHAT spend only, not the combined chat+generation total) and a new,
+        // additional session-scoped soft ceiling that exists specifically because a hands-free
+        // session can rack up turns with no screen to glance at.
+        //
+        // Checking the combined total against a generation-scoped cap was a real bug: once a
+        // normal chatting month crossed the generation cap on its own, every voice turn would
+        // fail with "exceeds your monthly budget" even with zero quiz generation that month.
+        // Voice turns are chat, cost-wise, so they're checked against chat spend.
         let proposedCost = estimatedTurnCost(question: question, assembled: assembled)
         let monthlyDecision = BudgetGuard(capDollars: QuizGenerationService.budgetCapDollars).evaluate(
-            alreadySpentDollars: UsageTracker.currentMonthEstimate(),
+            alreadySpentDollars: UsageTracker.currentMonthEstimate(for: .chat),
             proposedCostDollars: proposedCost
         )
         guard monthlyDecision.allowed else {
@@ -343,7 +349,10 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
         let stream: AsyncThrowingStream<String, Error>
         switch assembled {
         case .symposium(let systemPrompt, _):
-            stream = claudeService.streamMessage(userMessage: question, conversationHistory: historySnapshot, systemPrompt: systemPrompt)
+            stream = claudeService.streamMessage(
+                userMessage: question, conversationHistory: historySnapshot, systemPrompt: systemPrompt,
+                options: ClaudeService.RequestOptions(maxTokens: Self.voiceMaxTokens, thinkingDisabled: true)
+            )
         case .bookScoped(let stableSystemPrompt, let dynamicContext):
             stream = claudeService.streamMessageCached(
                 userMessage: question, conversationHistory: historySnapshot,
@@ -444,6 +453,7 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
         let utterance = AVSpeechUtterance(string: next)
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
         utterance.pitchMultiplier = 1.0
+        utterance.voice = VoicePreference.selectedVoice()
         synthesizer.speak(utterance)
     }
 

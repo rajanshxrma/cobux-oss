@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import UIKit
+import CobuxCore
 
 /// Eyes-free quizzing -- listens to the question read aloud, listens for a spoken answer,
 /// grades it the same way `.application` questions are (embedding similarity against
@@ -13,6 +14,7 @@ struct SpokenQuizView: View {
     let onDone: () -> Void
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Query private var books: [Book]
 
     @State private var controller: SpokenQuizController?
     @State private var showPermissionAlert = false
@@ -166,12 +168,35 @@ struct SpokenQuizView: View {
         attempt.answeredCount += 1
         if isCorrect { attempt.correctCount += 1 }
 
-        FSRSService.recordReview(for: question, isCorrect: isCorrect, confidence: nil)
+        // Same exam-cap-aware path QuizSessionView.recordCurrentAnswer uses -- without this,
+        // a card from a book with an exam date, reviewed through Spoken Quiz, could be
+        // scheduled past the exam. Spoken Quiz pulls from the same due queue Daily Review
+        // does, so this was a live path, not a theoretical one.
+        if let examDate = question.book?.examDate {
+            let daysLeft = ExamCountdown.daysLeft(from: .now, to: examDate)
+            FSRSService.recordReview(
+                for: question,
+                isCorrect: isCorrect,
+                confidence: nil,
+                desiredRetention: ExamCountdown.desiredRetention(daysLeft: daysLeft),
+                maxIntervalDays: ExamCountdown.maxIntervalDays(daysLeft: daysLeft)
+            )
+        } else {
+            FSRSService.recordReview(for: question, isCorrect: isCorrect, confidence: nil)
+        }
     }
 
     private func finishAttempt() {
         attempt.completedAt = .now
         try? modelContext.save()
+        // Spoken Quiz never routes through QuizResultsView (it dismisses straight back to Quiz
+        // Home instead of showing a results screen), so it must do these itself -- otherwise a
+        // spoken-only session left the streak and the watch complication silently stale, unlike
+        // every other quiz mode.
+        if !attempt.answers.isEmpty {
+            StreakTracker.recordActivityToday()
+        }
+        WatchSyncService.sync(books: books)
         isEnding = true
         onDone()
         dismiss()

@@ -32,12 +32,49 @@ enum BuildInfo {
     static let changelog: [ChangelogEntry] = [
         ChangelogEntry(
             version: "2.1.0",
+            build: "4",
+            date: "Aug 6, 2026",
+            changes: [
+                "Fixed a data bug where a book's chapter list could show only one chapter instead of all of them",
+                "Fixed a latent bug where a generated quiz question could attach to the wrong highlight"
+            ]
+        ),
+        ChangelogEntry(
+            version: "2.1.0",
+            build: "3",
+            date: "Aug 6, 2026",
+            changes: [
+                "Added a voice picker to Settings so Voice Mode can use a higher-quality system voice instead of always the default",
+                "Fixed Spoken Quiz sessions not updating your daily streak or the Watch complication"
+            ]
+        ),
+        ChangelogEntry(
+            version: "2.1.0",
+            build: "2",
+            date: "Aug 6, 2026",
+            changes: [
+                "Fixed the first chat message (or the first message after leaving the app idle for a few minutes) sometimes timing out entirely instead of replying"
+            ]
+        ),
+        ChangelogEntry(
+            version: "2.1.0",
             build: "1",
             date: "Aug 6, 2026",
             changes: [
                 "Added Voice Mode — tap the mic in any chat thread to talk hands-free. Cobux listens, transcribes, and speaks its answer back as it streams in, sentence by sentence, instead of waiting for the whole reply. Text chat is still there too — voice is additive, not a replacement",
                 "Added an Apple Watch companion — your streak, due-review count, and a featured quote as watch face complications, plus a small glanceable app. Read-only: nothing to review or grade on the watch, just a nudge to open your phone",
                 "Added a Share Extension — capture a quote from Kindle, Books, Safari, or anywhere else that shares text, straight into Cobux. Files it to a book, or leaves it in a new \"Unsorted\" list until you do",
+                "Added four new ways to practice from the Quiz tab: Rapid Recall (a short review-only top-up), Discrimination Drills (questions you tend to confuse, pulled from what you've actually gotten wrong), Chapter Cram (pick any chapter across any book and drill it directly), and Weak Spots (targeted practice on your lowest-retention topics) — plus Spoken Quiz, an eyes-free mode that reads questions aloud and grades your spoken answer",
+                "Fixed Daily Review never actually surfacing newly generated questions — including every free on-device cloze card — so it only ever showed pre-existing progress",
+                "Fixed quiz progress (spaced-repetition scheduling state) being silently lost when a chapter's questions regenerated, with no way to recover it — now included in backup/restore",
+                "Fixed Exam Countdown's date cap not applying to cards reviewed through Daily Review",
+                "Fixed the per-book due-review counts on the Quiz tab sometimes disagreeing with Daily Review's count for the same book",
+                "Replaced open-ended question self-grading (\"did you get it right?\") with real grading — your typed or spoken answer is now compared against the reference answer automatically",
+                "Added a one-tap backup prompt the first time you open the app after this update, since it changes how quiz progress is stored",
+                "Added a mastery view and a weakest-topics view to Quiz Analytics",
+                "Fixed the book picker in Chat not scrolling reliably once your library grows past about 15 books — it's a proper searchable list now",
+                "Finished applying the visual design refresh from 2.0.0 to the Quiz tab and a few remaining screens that were missed the first time",
+                "Extended each book's own accent color into its chat thread and quiz sessions, not just its library page",
                 "Updated the app icon to match the design refreshed in 2.0.0"
             ]
         ),

@@ -196,63 +196,99 @@ struct SearchService {
         return (context, citedTitles)
     }
 
+    /// Hard ceiling, in characters, on the DYNAMIC (uncached) section of a
+    /// chat turn's context. Exists specifically because the empty-`unionBooks`
+    /// fallback below (a vague or unmatched first message — common before
+    /// background embedding backfill finishes) used to dump every book's full
+    /// highlight set into this uncached section unconditionally. On a
+    /// 17-book library that was measured at up to ~850k characters on a
+    /// single turn — an uncached block that large must finish prefilling
+    /// before Anthropic streams back a single token, which routinely blew
+    /// past `URLSession`'s default 60s idle timeout and looked, from the
+    /// user's side, like "the first message just times out." ~150k chars is
+    /// comfortably inside the model's context window even stacked on top of
+    /// the (now title-only) cached prefix, while still leaving real headroom
+    /// for a genuinely broad query.
+    static let dynamicContextCharBudget = 150_000
+
+    /// Per-book cap on how many of a SMALL (non-retrieval-gated) book's
+    /// highlights get full-dumped into the dynamic section when it's
+    /// relevant. Large books are already capped by `chunkTopK`; small books
+    /// previously had no cap at all, so a single heavily-highlighted small
+    /// book could still eat a large slice of `dynamicContextCharBudget` on
+    /// its own.
+    static let maxHighlightsPerBookInDynamicContext = 40
+
     /// Same retrieval as `buildContext`, but splits the result into a STABLE
     /// prefix and a DYNAMIC suffix instead of one combined string, so the
     /// caller can mark the stable piece as an Anthropic prompt-cache
     /// breakpoint (`cache_control`) and avoid re-billing it on every message.
     ///
-    /// The stable piece is every book's chapter summaries and key lessons,
-    /// unconditionally — NOT gated by per-query relevance. This is a
-    /// deliberate change from `buildContext`'s per-book behavior: chapter
-    /// summaries were never part of citation logic for either large or small
-    /// books (citation is driven entirely by highlight contribution below),
-    /// so always including them doesn't change who gets cited — it just
-    /// means this block is byte-identical across every question in a
-    /// session (and across sessions, until the library itself changes),
-    /// which is exactly what a cache breakpoint needs to actually hit. At
-    /// reference-book scale this is also the single biggest resent-every-turn
-    /// cost identified in this codebase (up to ~116 chapter summary/key-lesson
-    /// lines across the two medical textbooks) — caching it is the main point.
+    /// The stable piece is a TITLES-ONLY chapter index for every book,
+    /// unconditionally — NOT the chapter summaries/key lessons themselves.
+    /// Full summaries used to live here, on the theory that a byte-identical
+    /// block is exactly what a cache breakpoint needs — true, but it also
+    /// meant this "stable" block grew unboundedly as books were added (up to
+    /// ~1M characters across 17 books), and a giant cache-cold prefill has
+    /// the exact same first-token-latency problem as a giant uncached one,
+    /// just on the FIRST turn of a session (or any turn after the ~5-minute
+    /// cache TTL lapses) instead of every turn. A titles-only index is small
+    /// regardless of library size (a chapter title is a name, not content),
+    /// so cache-cold prefill time stays bounded no matter how many books get
+    /// added later. Chapter summaries/key lessons moved into the dynamic
+    /// section below, gated by the same per-query relevance as everything
+    /// else there.
     ///
-    /// The dynamic piece keeps the EXACT existing per-query behavior:
-    /// relevant small books' full highlight dumps, and large reference
-    /// books' top-K ranked highlight chunks for this specific question — the
-    /// part that genuinely must be recomputed per message. Citation logic
-    /// (`bookTitles`) is unchanged from `buildContext`: small books cited
-    /// whenever relevant, large books cited only when a ranked highlight
-    /// from them actually made it into this turn's dynamic context.
+    /// Book order is deterministic (sorted by `id`) so `ChatView` and
+    /// `VoiceSessionController` can never independently produce
+    /// differently-ordered stable prefixes for the same library — a
+    /// byte-difference there would silently split the cache in two.
     ///
-    /// Only used by the main chat flow (`ChatView`) — the highest-volume,
-    /// most cache-sensitive path ("repeated questions in one study
-    /// session"). Other one-shot templates (Symposium, Decision
+    /// The dynamic piece keeps the EXISTING per-query behavior — relevant
+    /// small books' highlight dumps (now capped per book, see
+    /// `maxHighlightsPerBookInDynamicContext`), large reference books' top-K
+    /// ranked highlight chunks, and now each relevant book's chapter
+    /// summaries too — but the WHOLE section is now bounded by
+    /// `dynamicContextCharBudget`, with content added in priority order
+    /// (ranked/capped highlights, then chapter summaries, book by book in
+    /// deterministic order) and a clean note appended if the budget is hit,
+    /// rather than an unbounded dump. Citation logic (`bookTitles`) is
+    /// unchanged from `buildContext`: small books cited whenever relevant,
+    /// large books cited only when a ranked highlight from them actually
+    /// made it into this turn's dynamic context — and now, specifically,
+    /// only when its content actually fit inside the budget too, preserving
+    /// the "never cite something that isn't actually in the prompt"
+    /// invariant.
+    ///
+    /// Only used by the main chat flow (`ChatView`) and `VoiceSessionController`
+    /// — the highest-volume, most cache-sensitive paths ("repeated questions
+    /// in one study session"). Other one-shot templates (Symposium, Decision
     /// Consultation, Ask Intent) keep using `buildContext` above unchanged.
     static func buildSplitContext(query: String, books: [Book]) -> (stableContext: String, dynamicContext: String, bookTitles: [String]) {
         guard !books.isEmpty else {
             return ("No books in library yet.", "", [])
         }
 
-        var stable = "## User's Book Library — Chapter Map\n\n"
-        for book in books where !book.chapters.isEmpty {
-            stable += "### \"\(book.title)\" by \(book.author) — Chapter Summaries:\n"
+        let sortedBooks = books.sorted { $0.id.uuidString < $1.id.uuidString }
+
+        var stable = "## User's Book Library — Chapter Index\n\n"
+        for book in sortedBooks where !book.chapters.isEmpty {
+            stable += "### \"\(book.title)\" by \(book.author) — Chapters:\n"
             let sortedChapters = book.chapters.sorted { ($0.chapterNumber ?? 0) < ($1.chapterNumber ?? 0) }
             for chapter in sortedChapters {
-                var chapterLine = "- \(chapter.title): \(chapter.summary)"
-                if !chapter.keyLessons.isEmpty {
-                    chapterLine += " | Key lessons: \(chapter.keyLessons.joined(separator: ", "))"
-                }
-                stable += chapterLine + "\n"
+                stable += "- \(chapter.title)\n"
             }
             stable += "\n"
         }
 
         let queryLower = query.lowercased()
 
-        let matchedBooks = books.filter { book in
+        let matchedBooks = sortedBooks.filter { book in
             queryLower.contains(book.title.lowercased()) ||
             queryLower.contains(book.author.lowercased())
         }
 
-        let semanticHits = semanticSearch(query: query, books: books, topK: 12)
+        let semanticHits = semanticSearch(query: query, books: sortedBooks, topK: 12)
         let semanticBooks = semanticHits.compactMap(\.book)
         var unionBooks = matchedBooks
         for book in semanticBooks where !unionBooks.contains(where: { $0.id == book.id }) {
@@ -264,8 +300,8 @@ struct SearchService {
         // was going completely invisible to chat whenever semantic matching
         // failed for it (missing embeddings, or clinical terminology not
         // scoring well against the on-device model).
-        if Set(semanticBooks.map(\.id)).count < books.count {
-            for book in books where !unionBooks.contains(where: { $0.id == book.id }) {
+        if Set(semanticBooks.map(\.id)).count < sortedBooks.count {
+            for book in sortedBooks where !unionBooks.contains(where: { $0.id == book.id }) {
                 let hasKeywordHit = book.highlights.contains { highlight in
                     highlight.text.lowercased().contains(queryLower) ||
                     highlight.tags.contains { $0.lowercased().contains(queryLower) }
@@ -276,7 +312,13 @@ struct SearchService {
             }
         }
 
-        let relevantBooks = unionBooks.isEmpty ? books : unionBooks
+        // When nothing matched (vague/unmatched query, or embeddings still
+        // backfilling), fall back to the whole library so the model has SOME
+        // context — `dynamicContextCharBudget` below, not this fallback
+        // itself, is what now keeps that safe; it used to mean an unbounded
+        // full-highlight dump across every book on exactly this path.
+        let relevantBooks = (unionBooks.isEmpty ? sortedBooks : unionBooks)
+            .sorted { $0.id.uuidString < $1.id.uuidString }
 
         let largeRelevantBooks = relevantBooks.filter { requiresRetrievalGating($0) }
         var chunkedHighlightIDs: Set<UUID> = []
@@ -302,15 +344,21 @@ struct SearchService {
 
         var dynamic = "## Most Relevant Content for This Question\n\n"
         var referencedBookIDs = Set<UUID>()
+        var budgetExhausted = false
 
         for book in relevantBooks {
+            guard !budgetExhausted else { break }
+
             let isLargeBook = requiresRetrievalGating(book)
-            let highlightsToShow = isLargeBook
+            let highlightsToShow: [Highlight] = isLargeBook
                 ? book.highlights.filter { chunkedHighlightIDs.contains($0.id) }
-                : book.highlights
+                : Array(book.highlights.prefix(maxHighlightsPerBookInDynamicContext))
+
+            var bookBlock = ""
+            var contributedHighlights = false
 
             if !highlightsToShow.isEmpty {
-                dynamic += "## Book: \"\(book.title)\" by \(book.author)\n\n### Highlights:\n"
+                bookBlock += "## Book: \"\(book.title)\" by \(book.author)\n\n### Highlights:\n"
                 for highlight in highlightsToShow {
                     var locationParts: [String] = []
                     if let chapter = highlight.chapter {
@@ -321,36 +369,66 @@ struct SearchService {
                     }
                     let locationString = locationParts.isEmpty ? "" : " (\(locationParts.joined(separator: ", ")))"
 
-                    dynamic += "- \"\(highlight.text)\"\(locationString)\n"
+                    bookBlock += "- \"\(highlight.text)\"\(locationString)\n"
 
                     if let note = highlight.personalNote, !note.isEmpty {
-                        dynamic += "  Personal note: \(note)\n"
+                        bookBlock += "  Personal note: \(note)\n"
                     }
                     if !highlight.tags.isEmpty {
-                        dynamic += "  Tags: \(highlight.tags.joined(separator: ", "))\n"
+                        bookBlock += "  Tags: \(highlight.tags.joined(separator: ", "))\n"
                     }
                 }
-                dynamic += "\n"
-
-                // Matches `buildContext`'s citation rule exactly: a large book
-                // is cited only when it actually contributed a ranked
-                // highlight; a small book is always cited below regardless
-                // (this branch only skips the "Highlights:" section header
-                // when a small book happens to have zero highlights).
-                if isLargeBook {
-                    referencedBookIDs.insert(book.id)
-                }
+                bookBlock += "\n"
+                contributedHighlights = true
             }
 
-            // Small books are cited whenever relevant, same as `buildContext`
-            // — independent of whether they had any highlights to show.
+            // Chapter summaries now live here — dynamic, relevance-gated —
+            // instead of unconditionally in the stable prefix.
+            if !book.chapters.isEmpty {
+                bookBlock += "### \"\(book.title)\" — Chapter Summaries:\n"
+                let sortedChapters = book.chapters.sorted { ($0.chapterNumber ?? 0) < ($1.chapterNumber ?? 0) }
+                for chapter in sortedChapters {
+                    var chapterLine = "- \(chapter.title): \(chapter.summary)"
+                    if !chapter.keyLessons.isEmpty {
+                        chapterLine += " | Key lessons: \(chapter.keyLessons.joined(separator: ", "))"
+                    }
+                    bookBlock += chapterLine + "\n"
+                }
+                bookBlock += "\n"
+            }
+
+            guard !bookBlock.isEmpty else {
+                // Nothing to show for this book, but small books are still
+                // cited as "relevant" even with zero content — matches
+                // `buildContext`'s exact rule.
+                if !isLargeBook {
+                    referencedBookIDs.insert(book.id)
+                }
+                continue
+            }
+
+            if dynamic.count + bookBlock.count > dynamicContextCharBudget {
+                budgetExhausted = true
+                dynamic += "(Additional library content omitted to stay within this turn's context budget.)\n\n"
+                break
+            }
+
+            dynamic += bookBlock
+
+            // Matches `buildContext`'s citation rule exactly: a large book is
+            // cited only when it actually contributed a ranked highlight
+            // that made it into the prompt; a small book is cited whenever
+            // relevant, regardless of whether it had highlights to show.
+            if contributedHighlights && isLargeBook {
+                referencedBookIDs.insert(book.id)
+            }
             if !isLargeBook {
                 referencedBookIDs.insert(book.id)
             }
         }
 
-        if !relevantBooks.isEmpty && relevantBooks.count < books.count {
-            let otherBooks = books.filter { book in
+        if !budgetExhausted && !relevantBooks.isEmpty && relevantBooks.count < sortedBooks.count {
+            let otherBooks = sortedBooks.filter { book in
                 !relevantBooks.contains(where: { $0.id == book.id })
             }
             if !otherBooks.isEmpty {
@@ -380,15 +458,11 @@ struct SearchService {
     /// there's nothing to disambiguate — callers shouldn't show a
     /// "referenced books" chip for this thread at all.
     static func buildSplitContextForBook(query: String, book: Book) -> (stableContext: String, dynamicContext: String) {
-        var stable = "## Chapter Map — \"\(book.title)\" by \(book.author)\n\n"
+        var stable = "## Chapter Index — \"\(book.title)\" by \(book.author)\n\n"
         if !book.chapters.isEmpty {
             let sortedChapters = book.chapters.sorted { ($0.chapterNumber ?? 0) < ($1.chapterNumber ?? 0) }
             for chapter in sortedChapters {
-                var chapterLine = "- \(chapter.title): \(chapter.summary)"
-                if !chapter.keyLessons.isEmpty {
-                    chapterLine += " | Key lessons: \(chapter.keyLessons.joined(separator: ", "))"
-                }
-                stable += chapterLine + "\n"
+                stable += "- \(chapter.title)\n"
             }
             stable += "\n"
         }
@@ -406,7 +480,7 @@ struct SearchService {
                 }.prefix(chunkTopK))
             }
         } else {
-            highlightsToShow = book.highlights
+            highlightsToShow = Array(book.highlights.prefix(maxHighlightsPerBookInDynamicContext))
         }
 
         var dynamic = "## Most Relevant Content for This Question\n\n"
@@ -432,6 +506,26 @@ struct SearchService {
                 }
             }
             dynamic += "\n"
+        }
+
+        // Chapter summaries live here now — dynamic, not the stable prefix —
+        // matching `buildSplitContext`'s change above.
+        if !book.chapters.isEmpty {
+            dynamic += "### Chapter Summaries:\n"
+            let sortedChapters = book.chapters.sorted { ($0.chapterNumber ?? 0) < ($1.chapterNumber ?? 0) }
+            for chapter in sortedChapters {
+                var chapterLine = "- \(chapter.title): \(chapter.summary)"
+                if !chapter.keyLessons.isEmpty {
+                    chapterLine += " | Key lessons: \(chapter.keyLessons.joined(separator: ", "))"
+                }
+                dynamic += chapterLine + "\n"
+            }
+            dynamic += "\n"
+        }
+
+        if dynamic.count > dynamicContextCharBudget {
+            dynamic = String(dynamic.prefix(dynamicContextCharBudget))
+                + "\n\n(Additional content omitted to stay within this turn's context budget.)\n"
         }
 
         return (stable, dynamic)

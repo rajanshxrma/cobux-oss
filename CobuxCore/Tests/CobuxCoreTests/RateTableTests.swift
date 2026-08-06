@@ -36,9 +36,14 @@ final class RateTableTests: XCTestCase {
     func testHaikuBatchedBothTextbooksIsUnderFiftyCents() {
         // Ground-truth measured estimate from the architecture pass: ~227k input / ~127k
         // output tokens for both textbooks' full question banks, Haiku + Batch API (-50%).
-        let full = RateTable.estimatedCost(model: .haiku45, inputTokens: 227_000, outputTokens: 127_000)
-        let batched = full * 0.5
+        let batched = RateTable.estimatedCost(model: .haiku45, inputTokens: 227_000, outputTokens: 127_000, batch: true)
         XCTAssertLessThan(batched, 0.50, "bulk generation for both entire textbooks must stay a fraction of the $5 monthly cap")
+    }
+
+    func testBatchDiscountAppliesToInputOutputAndCache() {
+        let live = RateTable.estimatedCost(model: .haiku45, inputTokens: 1_000_000, outputTokens: 1_000_000, cacheCreationTokens: 1_000_000, cacheReadTokens: 1_000_000)
+        let batched = RateTable.estimatedCost(model: .haiku45, inputTokens: 1_000_000, outputTokens: 1_000_000, cacheCreationTokens: 1_000_000, cacheReadTokens: 1_000_000, batch: true)
+        XCTAssertEqual(batched, live * 0.5, accuracy: 0.0001, "the batch discount must apply uniformly, not just to the base input/output rate")
     }
 
     /// Self-failing staleness guard. An entry being long *in effect* is not staleness —

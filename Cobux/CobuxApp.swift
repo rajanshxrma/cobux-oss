@@ -68,13 +68,19 @@ struct CobuxApp: App {
             await MainActor.run { SeedingStatus.shared.isSeeding = true }
         }
 
-        // The two large medical reference books stay as hand-written Swift in the private/
-        // production build — every other book is authored as JSON under Resources/SeedBooks/
-        // and loaded generically. `seedMicrobiology`/`seedRobbins` are stubbed as no-ops here
-        // (see `SeedDataMicrobiology.swift`'s doc comment) since this is the open-source repo.
+        // The two large medical reference books stay as hand-written Swift —
+        // they already work and are the exact files a JSON-based approach
+        // exists to avoid repeating at that density. Every other book is
+        // authored as JSON under Resources/SeedBooks/ and loaded generically
+        // (this superseded the old `seed12Rules`/`seedBeyondOrder`/
+        // `seedAttached`/`seedValueOfOthers` Swift functions, left in
+        // `SeedData.swift`/`SeedDataAttached.swift`/`SeedDataValueOfOthers.swift`
+        // as unused dead code pending a cleanup pass, rather than risk
+        // touching them further tonight).
         SeedData.seedMicrobiology(modelContext: context)
         SeedData.seedRobbins(modelContext: context)
         SeedLoader.seedAllBundledBooks(modelContext: context)
+        FigureSeedLoader.seedBundledFigures(modelContext: context)
 
         // Safety net: each seed function above already guards against duplicates
         // by title, but if the underlying store ever changes out from under us
@@ -205,7 +211,9 @@ struct CobuxApp: App {
         }
     }
 
-    private static func repairDuplicateIDs(context: ModelContext) {
+    /// `internal` (not `private`) so `CobuxAppMigrationTests` can call it directly --
+    /// same testability pattern as `ClaudeService.buildRequest`/`SystemContent`.
+    static func repairDuplicateIDs(context: ModelContext) {
         var seenBookIDs = Set<UUID>()
         for book in (try? context.fetch(FetchDescriptor<Book>())) ?? [] {
             if seenBookIDs.contains(book.id) {
@@ -228,6 +236,57 @@ struct CobuxApp: App {
                 theme.id = UUID()
             }
             seenThemeIDs.insert(theme.id)
+        }
+
+        // `Chapter.id` had the identical bug but was missed when the fix above
+        // landed -- its initializer never assigned `self.id` explicitly, so
+        // every chapter ever created (not just a migration artifact) shared
+        // one schema-level default UUID. This is exactly what collapsed
+        // `BookDetailView`'s chapter list down to showing only one chapter per
+        // book: SwiftUI's `ForEach`/`Identifiable` diffing treats same-`id`
+        // rows as the same item. `QuizQuestion`/`HighlightMemory`/
+        // `QuizAttempt`/`QuizAnswerRecord` already had the init-time fix, but
+        // never got this backfill pass for rows created before that fix
+        // landed -- covering all five here so this can't recur piecemeal
+        // again.
+        var seenChapterIDs = Set<UUID>()
+        for chapter in (try? context.fetch(FetchDescriptor<Chapter>())) ?? [] {
+            if seenChapterIDs.contains(chapter.id) {
+                chapter.id = UUID()
+            }
+            seenChapterIDs.insert(chapter.id)
+        }
+
+        var seenQuizQuestionIDs = Set<UUID>()
+        for question in (try? context.fetch(FetchDescriptor<QuizQuestion>())) ?? [] {
+            if seenQuizQuestionIDs.contains(question.id) {
+                question.id = UUID()
+            }
+            seenQuizQuestionIDs.insert(question.id)
+        }
+
+        var seenHighlightMemoryIDs = Set<UUID>()
+        for memory in (try? context.fetch(FetchDescriptor<HighlightMemory>())) ?? [] {
+            if seenHighlightMemoryIDs.contains(memory.id) {
+                memory.id = UUID()
+            }
+            seenHighlightMemoryIDs.insert(memory.id)
+        }
+
+        var seenQuizAttemptIDs = Set<UUID>()
+        for attempt in (try? context.fetch(FetchDescriptor<QuizAttempt>())) ?? [] {
+            if seenQuizAttemptIDs.contains(attempt.id) {
+                attempt.id = UUID()
+            }
+            seenQuizAttemptIDs.insert(attempt.id)
+        }
+
+        var seenQuizAnswerRecordIDs = Set<UUID>()
+        for record in (try? context.fetch(FetchDescriptor<QuizAnswerRecord>())) ?? [] {
+            if seenQuizAnswerRecordIDs.contains(record.id) {
+                record.id = UUID()
+            }
+            seenQuizAnswerRecordIDs.insert(record.id)
         }
     }
 }

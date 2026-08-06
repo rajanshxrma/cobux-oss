@@ -127,12 +127,23 @@ final class Book {
     /// yet. `persistentModelID` comparison, not `===`, so this works correctly across
     /// ModelContext instances (e.g. a chapter fetched by a `@Query` in one view
     /// compared against a highlight loaded via a different context).
+    /// Sorted by `dateAdded` -- SwiftData to-many relationship arrays have no
+    /// guaranteed order, but this result's index is exactly what
+    /// `QuizGenerationService` sends Claude as `sourceHighlightIndexes` (both
+    /// when building the generation prompt and, potentially much later for a
+    /// backgrounded batch, when applying the result). Without a stable sort
+    /// here, the same call could return highlights in a different order
+    /// between those two points and silently attach a generated question to
+    /// the wrong highlight -- a real correctness bug, not just a flaky test
+    /// (caught by `QuizGenerationServiceTests` returning a different highlight
+    /// than expected once the underlying relationship's storage order shifted
+    /// for an unrelated reason).
     func highlights(in chapter: Chapter) -> [Highlight] {
         highlights.filter { highlight in
             if let chapterRef = highlight.chapterRef {
                 return chapterRef.persistentModelID == chapter.persistentModelID
             }
             return highlight.chapter == chapter.title
-        }
+        }.sorted { $0.dateAdded < $1.dateAdded }
     }
 }

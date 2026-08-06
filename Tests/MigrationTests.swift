@@ -208,6 +208,9 @@ final class MigrationTests: XCTestCase {
 
         let book = Book(title: "Attached", author: "Amir Levine", coverColorHex: "#7C6BA6")
         context.insert(book)
+        let chapter = Chapter(title: "Chapter 1", summary: "s")
+        chapter.book = book
+        book.chapters.append(chapter)
         let highlight = Highlight(text: "Anxious attachment.", chapter: "Chapter 1")
         highlight.book = book
         book.highlights.append(highlight)
@@ -215,9 +218,14 @@ final class MigrationTests: XCTestCase {
         memory.box = 3
         context.insert(memory)
 
-        let question = QuizQuestion(book: book, chapter: nil, questionType: .recallMCQ, prompt: "What is anxious attachment?", explanation: "x")
+        // DailyReviewService.dueQuestions reaches questions via books.flatMap(\.chapters)
+        // .flatMap(\.quizQuestions) -- a question only linked via .book/.sourceHighlights
+        // (as every real question created by QuizGenerationService/ClozeService never is,
+        // both always set a real chapter) would be invisible to it regardless of dueDate.
+        let question = QuizQuestion(book: book, chapter: chapter, questionType: .recallMCQ, prompt: "What is anxious attachment?", explanation: "x")
         question.sourceHighlights = [highlight]
         context.insert(question)
+        chapter.quizQuestions.append(question)
 
         CobuxApp.migrateLeitnerProgressToFSRS(context: context)
 

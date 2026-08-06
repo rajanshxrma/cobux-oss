@@ -14,7 +14,7 @@ settings:
     SWIFT_VERSION: "5.9"
     TARGETED_DEVICE_FAMILY: "1"
     MARKETING_VERSION: "2.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    CURRENT_PROJECT_VERSION: "4"
     DEVELOPMENT_TEAM: "58Q76NHADF"
     CODE_SIGN_STYLE: "Automatic"
 
@@ -206,6 +206,11 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.rajansharma.Cobux.watchkitapp
         TARGETED_DEVICE_FAMILY: "4"
         CODE_SIGN_ENTITLEMENTS: CobuxWatch/CobuxWatch.entitlements
+        # Missing entirely until now -- caught only at App Store Connect upload validation,
+        # not by any local xcodebuild build/archive: "Missing Info.plist value... CFBundleIconName"
+        # + "Missing Icons... CFBundleIconFiles". Reuses the main app's icon (light/dark, no
+        # tinted variant -- watchOS doesn't have a tinted-icon system the way iOS 18 does).
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - target: CobuxWatchWidgets
         embed: true

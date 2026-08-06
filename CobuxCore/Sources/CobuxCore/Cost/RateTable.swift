@@ -65,19 +65,29 @@ public enum RateTable {
             ?? ModelRates(inputPerMillion: 0, outputPerMillion: 0)
     }
 
+    /// Anthropic's Batch API discount — half price on both input and output, applied
+    /// uniformly since Anthropic doesn't publish a separate cache-write/cache-read batch
+    /// rate. Previously unmodeled entirely: every batch call was priced as if it ran at
+    /// full live-call rates, overstating real batched spend by 2x on its own, compounding
+    /// with the wrong-model bug (batch results recorded at Sonnet rates regardless of which
+    /// model actually ran) to roughly 4x the real cost of batched Haiku generation.
+    public static let batchDiscountMultiplier: Double = 0.5
+
     public static func estimatedCost(
         model: CobuxModel,
         inputTokens: Int,
         outputTokens: Int,
         cacheCreationTokens: Int = 0,
         cacheReadTokens: Int = 0,
+        batch: Bool = false,
         on date: Date = .now
     ) -> Double {
         let r = currentRates(for: model, on: date)
-        let input = Double(inputTokens) / 1_000_000 * r.inputPerMillion
-        let output = Double(outputTokens) / 1_000_000 * r.outputPerMillion
-        let cacheWrite = Double(cacheCreationTokens) / 1_000_000 * r.inputPerMillion * r.cacheWriteMultiplier
-        let cacheRead = Double(cacheReadTokens) / 1_000_000 * r.inputPerMillion * r.cacheReadMultiplier
+        let discount = batch ? batchDiscountMultiplier : 1.0
+        let input = Double(inputTokens) / 1_000_000 * r.inputPerMillion * discount
+        let output = Double(outputTokens) / 1_000_000 * r.outputPerMillion * discount
+        let cacheWrite = Double(cacheCreationTokens) / 1_000_000 * r.inputPerMillion * r.cacheWriteMultiplier * discount
+        let cacheRead = Double(cacheReadTokens) / 1_000_000 * r.inputPerMillion * r.cacheReadMultiplier * discount
         return input + output + cacheWrite + cacheRead
     }
 
