@@ -48,6 +48,14 @@ struct QuizSessionView: View {
 
     private var isExamMode: Bool { attempt.mode == .examSimulation }
 
+    /// The book's own living color for a single-book session, falling back to the
+    /// app-wide accent for Daily Review (`attempt.book == nil`, spans every book) --
+    /// same promise as chat threads, never reached quiz sessions either.
+    private var sessionAccent: Color {
+        guard let hex = attempt.book?.coverColorHex else { return .cobuxAccent }
+        return Color(hex: hex)
+    }
+
     /// `.application` questions have no objective grading — confidence IS the
     /// correctness signal (`recordCurrentAnswer`) — so the self-rating must be
     /// collected even in exam mode, which otherwise intentionally suppresses
@@ -68,7 +76,8 @@ struct QuizSessionView: View {
                         selectedChoice: $selectedChoice,
                         applicationAnswerText: $applicationAnswerText,
                         hasSubmitted: hasSubmitted,
-                        showFeedback: hasSubmitted && !isExamMode
+                        showFeedback: hasSubmitted && !isExamMode,
+                        accentColor: sessionAccent
                     )
                     .padding()
                 }
@@ -137,6 +146,7 @@ struct QuizSessionView: View {
                 }
             }
             ProgressView(value: Double(currentIndex), total: Double(max(questions.count, 1)))
+                .tint(sessionAccent)
         }
         .padding()
     }
@@ -159,9 +169,9 @@ struct QuizSessionView: View {
                     .fontWeight(.semibold)
                     .frame(maxWidth: .infinity)
                     .padding()
-                    .background(canSubmit ? Color.cobuxAccent : Color.secondary.opacity(0.3))
+                    .background(canSubmit ? sessionAccent : Color.secondary.opacity(0.3))
                     .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.card))
             }
             .disabled(!canSubmit)
         }
@@ -204,7 +214,7 @@ struct QuizSessionView: View {
                 .font(.caption)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(confidence == value ? Color.cobuxAccent : Color.secondary.opacity(0.12))
+                .background(confidence == value ? sessionAccent : Color.secondary.opacity(0.12))
                 .foregroundStyle(confidence == value ? .white : .primary)
                 .clipShape(Capsule())
         }
@@ -250,10 +260,12 @@ struct QuizSessionView: View {
         let isCorrect: Bool
         switch question.questionType {
         case .application:
-            // Self-graded: confidence IS the correctness signal here — only
-            // "Nailed it" (confidence 3) counts as correct, matching the
-            // design's self-grading model for open-ended answers.
-            isCorrect = confidence == 3
+            // Embedding-graded against question.explanation ("what a strong answer would
+            // touch on", per the generation prompt -- or "Answer: X" for free-recall cloze
+            // cards, see ClozeService). Replaces the old confidence == 3 self-rating, where
+            // the user's own guess about whether they were right WAS the correctness signal
+            // -- real grading now, confidence stays collected as its own separate signal.
+            isCorrect = gradeApplicationAnswer(applicationAnswerText, against: question.explanation)
         default:
             isCorrect = selectedChoice != nil && selectedChoice == question.correctAnswerIndex
         }
@@ -277,12 +289,17 @@ struct QuizSessionView: View {
         updateMemory(for: question, isCorrect: isCorrect)
 
         // FSRS runs alongside the existing HighlightMemory/Leitner update,
-        // not replacing it yet -- current due-count displays (QuizHomeView,
-        // Diagnostics) still read HighlightMemory unchanged, while real FSRS
-        // state accumulates on the question itself for Daily Review mode to
-        // use once it exists. Both being live simultaneously is intentional,
-        // not a leftover -- HighlightMemory stays in the schema regardless.
-        if let examDate = attempt.book?.examDate {
+        // not replacing it -- HighlightMemory stays in the schema and still
+        // drives the per-book due counts on QuizHomeView, while FSRS state
+        // on the question itself drives Daily Review. Both being live
+        // simultaneously is intentional, not a leftover.
+        //
+        // Reads question.book, not attempt.book -- Daily Review attempts are
+        // created with book: nil (they span the whole library), so keying
+        // off attempt.book silently dropped the exam cap for every card
+        // reviewed through Daily Review instead of its own book's quiz flow,
+        // even when that exact card's book had a real exam date set.
+        if let examDate = question.book?.examDate {
             // Exam Countdown: nothing scheduled past exam day, and the
             // retention target rises as it approaches -- both computed fresh
             // per review since "days left" changes every day the app is used.
@@ -297,6 +314,20 @@ struct QuizSessionView: View {
         } else {
             FSRSService.recordReview(for: question, isCorrect: isCorrect, confidence: confidence)
         }
+    }
+
+    /// On-device, free, no network call -- `EmbeddingService` is the exact same primitive
+    /// already used for search retrieval (`SearchService.semanticSearch`), reused here to
+    /// score a typed/spoken answer against the reference explanation. Falls back to marking
+    /// the answer wrong (not a crash, not silently "correct") if either side can't be
+    /// embedded -- e.g. an empty answer, or a language the on-device model doesn't support.
+    private func gradeApplicationAnswer(_ answer: String, against reference: String) -> Bool {
+        guard let answerVector = EmbeddingService.embed(answer),
+              let referenceVector = EmbeddingService.embed(reference) else {
+            return false
+        }
+        let similarity = EmbeddingService.cosineSimilarity(answerVector, referenceVector)
+        return FreeRecallGrader.isCorrect(similarity: similarity)
     }
 
     private func updateMemory(for question: QuizQuestion, isCorrect: Bool) {
@@ -381,6 +412,7 @@ private struct QuestionCardView: View {
     @Binding var applicationAnswerText: String
     let hasSubmitted: Bool
     let showFeedback: Bool
+    var accentColor: Color = .cobuxAccent
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -392,8 +424,7 @@ private struct QuestionCardView: View {
                 TextEditor(text: $applicationAnswerText)
                     .frame(minHeight: 100)
                     .padding(8)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .cobuxCard()
                     .disabled(hasSubmitted)
 
                 if hasSubmitted {
@@ -401,8 +432,8 @@ private struct QuestionCardView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .padding()
-                        .background(Color.cobuxAccent.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .background(accentColor.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.card))
                 }
             } else {
                 ForEach(choiceOrder, id: \.self) { index in
@@ -438,10 +469,10 @@ private struct QuestionCardView: View {
             }
             .padding()
             .background(rowBackground(isSelected: isSelected, isCorrectChoice: isCorrectChoice))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.structural))
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(isSelected ? Color.cobuxAccent : Color.secondary.opacity(0.15), lineWidth: isSelected ? 2 : 1)
+                RoundedRectangle(cornerRadius: CobuxRadius.structural)
+                    .stroke(isSelected ? accentColor : Color.secondary.opacity(0.15), lineWidth: isSelected ? 2 : 1)
             )
         }
         .buttonStyle(.plain)
@@ -453,6 +484,6 @@ private struct QuestionCardView: View {
             if isCorrectChoice { return .green.opacity(0.12) }
             if isSelected { return .red.opacity(0.12) }
         }
-        return isSelected ? Color.cobuxAccent.opacity(0.08) : Color.secondary.opacity(0.06)
+        return isSelected ? accentColor.opacity(0.08) : Color.secondary.opacity(0.06)
     }
 }

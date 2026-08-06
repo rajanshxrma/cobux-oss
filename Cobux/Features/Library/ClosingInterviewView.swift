@@ -127,12 +127,7 @@ struct ClosingInterviewView: View {
                     .textSelection(.enabled)
                     .padding()
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
-                    )
+                    .cobuxCard()
 
                 Button(action: saveReflection) {
                     Text("Save to Book")
@@ -141,7 +136,7 @@ struct ClosingInterviewView: View {
                         .padding()
                         .background(Color.cobuxAccent)
                         .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.card))
                 }
             }
             .padding()

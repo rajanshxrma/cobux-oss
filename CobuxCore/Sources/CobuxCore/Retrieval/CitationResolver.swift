@@ -60,6 +60,18 @@ public enum CitationResolver {
     /// since a missing chip is a much smaller failure than a wrong or nonexistent one.
     public static func resolve(declaredTitles: [String], libraryTitles: [String]) -> [String] {
         let libraryLower = Dictionary(uniqueKeysWithValues: libraryTitles.map { ($0.lowercased(), $0) })
-        return declaredTitles.compactMap { libraryLower[$0.lowercased()] }
+        let resolved = declaredTitles.compactMap { libraryLower[$0.lowercased()] }
+        // The runtime invariant Phase 0 promised: citedTitles ⊆ booksThatContributedToThisPrompt.
+        // `libraryTitles` IS that contributing set -- callers are responsible for scoping it
+        // correctly (the whole library for general/Symposium chat, one book for a scoped
+        // thread) -- so this should be true by construction. Asserting it here (debug-only,
+        // no-op in release) turns a future regression in this function, or a caller passing
+        // the wrong candidate set, into an immediate crash in a debug build instead of a
+        // silently wrong citation chip reaching a real user.
+        assert(
+            Set(resolved).isSubset(of: Set(libraryTitles)),
+            "CitationResolver.resolve returned a title absent from its own libraryTitles input"
+        )
+        return resolved
     }
 }

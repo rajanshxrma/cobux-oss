@@ -4,12 +4,13 @@ excluded:
   - Generated
   - CobuxTests
   - .git
-  # In the private/production build, these hold authored data payloads (book highlights/
-  # chapters), not logic -- line-length and complexity rules don't mean anything applied
-  # to seeded content. Kept excluded here too even though this repo's copies are stubs,
-  # so the two versions of the file don't need different lint configs.
+  # Authored data payloads (book highlights/chapters), not logic — line-length and
+  # complexity rules don't mean anything applied to seeded content.
+  - Cobux/Services/SeedData.swift
+  - Cobux/Services/SeedDataAttached.swift
   - Cobux/Services/SeedDataMicrobiology.swift
   - Cobux/Services/SeedDataRobbins.swift
+  - Cobux/Services/SeedDataValueOfOthers.swift
 
 # Cobux 2.0.0 exists partly to make style drift structurally impossible instead of
 # something Rajan has to catch by hand. Every rule below fires on drift already
@@ -55,6 +56,16 @@ custom_rules:
     excluded: ".*/DesignSystem/.*|CobuxWidgets/.*"
     regex: "cornerRadius:\\s*\\d"
     message: "Use a DesignSystem radius token (.radius.card / .radius.chip / etc), not a magic number — 6 different literal radii (7/12/14/16/18/20) drifted in across the app before 2.0.0."
+    severity: error
+
+  no_inline_material_card:
+    included: ".*\\.swift"
+    # CobuxWidgets isn't in Phase 2's design-system scope yet, same carve-out as
+    # no_magic_corner_radius. DesignSystem itself is where .cobuxCard()/.cobuxStructuralCell()
+    # are defined, so it's naturally exempt too.
+    excluded: ".*/DesignSystem/.*|CobuxWidgets/.*"
+    regex: "\\.background\\(\\.(ultraThinMaterial|thinMaterial|regularMaterial|thickMaterial|ultraThickMaterial)\\)"
+    message: "Use .cobuxCard() or .cobuxStructuralCell(), not a raw blur material — the picked hybrid design direction explicitly cut Aurora's blur-glass in favor of flat hairline-bordered cards. This rule didn't exist when that decision was made, which is exactly how it survived in Library/BookDetail/QuizHome/etc. until a live device test caught it."
     severity: error
 
   no_nested_navigation_stack:

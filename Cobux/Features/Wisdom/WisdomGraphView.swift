@@ -217,12 +217,7 @@ private struct ThemeCard: View {
         .padding(14)
         .frame(height: 120, alignment: .topLeading)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.secondary.opacity(0.12), lineWidth: 1)
-        )
+        .cobuxCard()
     }
 }
 
@@ -299,8 +294,7 @@ private struct HighlightCitationCard: View {
             }
         }
         .padding()
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .cobuxCard()
     }
 }
 

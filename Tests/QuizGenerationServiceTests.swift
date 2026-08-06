@@ -53,6 +53,29 @@ final class QuizGenerationServiceTests: XCTestCase {
         XCTAssertEqual(chapter.quizGenerationHash, QuizGenerationService.contentHash(for: chapter, in: book), "applying a response must mark the chapter as generated for its current content hash")
     }
 
+    /// Regression test for a real, shipped bug: `applyGeneratedQuestions` inserted every
+    /// question with `dueDate == nil`, so `DailyReviewService.dueQuestions` (which filters
+    /// on a non-nil dueDate) never surfaced a single freshly generated question -- Daily
+    /// Review was permanently blind to all new content. Deliberately does NOT hand-set
+    /// dueDate the way `DailyReviewServiceTests`' helper does, so this only passes if the
+    /// production code path itself sets it.
+    func testApplyGeneratedQuestionsSetsDueDateSoDailyReviewCanSeeNewCards() throws {
+        let context = ModelContext(try makeContainer())
+        let (book, chapter) = seedChapterWithHighlights(in: context)
+
+        let responseJSON = """
+        {"questions": [
+            {"questionType": "recallMCQ", "prompt": "What is fact one?", "choices": ["A", "B"], "correctAnswerIndex": 0, "explanation": "Because.", "difficulty": 1, "topicTags": ["tag"], "sourceHighlightIndexes": [0]}
+        ]}
+        """
+        try QuizGenerationService.applyGeneratedQuestions(from: responseJSON, to: chapter, in: book, modelContext: context)
+
+        let question = try XCTUnwrap(chapter.quizQuestions.first)
+        XCTAssertNotNil(question.dueDate, "a freshly generated question must have a dueDate or Daily Review can never surface it")
+        XCTAssertEqual(question.fsrsReps, 0, "a freshly generated question is a new card, not yet reviewed")
+        XCTAssertTrue(DailyReviewService.dueQuestions(in: [book]).contains { $0.id == question.id }, "freshly generated questions must actually appear in Daily Review's due set")
+    }
+
     func testApplyGeneratedQuestionsWipesPreviousBankOnRegeneration() throws {
         let context = ModelContext(try makeContainer())
         let (book, chapter) = seedChapterWithHighlights(in: context)

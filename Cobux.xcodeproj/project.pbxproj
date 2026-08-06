@@ -11,6 +11,7 @@
 		0121D8E39A57CAF259D8F9E3 /* QuizAnswerRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53DB090E85EC483A62CCF353 /* QuizAnswerRecord.swift */; };
 		02AC88BF359A397D361FA40A /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B537A20B2ABC1C7D58D8A698 /* Theme.swift */; };
 		031A207527479EF895C4CE37 /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8736ED3FDDC2271DFE4B9CE /* Color+Hex.swift */; };
+		067ABA5EEF0D77A61C204C09 /* FigureImageLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D1BC90D98AC8DBA611B4D44 /* FigureImageLoader.swift */; };
 		06BBB81ACEBD2E53AAAE9C3C /* AddBookView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED6A19C36F25E92810E4D45D /* AddBookView.swift */; };
 		07D646D782416CB4662311A6 /* HighlightMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8E136E477B457AC5FDD8601 /* HighlightMemory.swift */; };
 		08F77AF9AE330EBBD247474B /* BuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 559B7BC3CC2277BACCAE446A /* BuildInfo.swift */; };
@@ -21,19 +22,25 @@
 		0F19F879E792E3062E8BEF38 /* VoiceModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 007AFE2E790C13E1DB4D0B31 /* VoiceModeView.swift */; };
 		0FA76D83A935417E5362FCC1 /* StreakTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36DC7F24B3F6CB1B9ECF99B6 /* StreakTracker.swift */; };
 		0FCAC1A9923722D37E2C66F1 /* SearchService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 055397C70D6967380D136E08 /* SearchService.swift */; };
+		1007FED832CD2DE67518AA15 /* CobuxWatchProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C096B645F38B1B0D717C6FC /* CobuxWatchProvider.swift */; };
 		11B09FBCDA944D93C527C23B /* QuizAnswerRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53DB090E85EC483A62CCF353 /* QuizAnswerRecord.swift */; };
 		128362365D627523FD335C17 /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C9BBDA62B9B0556D67004C3 /* ChatMessage.swift */; };
 		1460883EE0255602037D4568 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B537A20B2ABC1C7D58D8A698 /* Theme.swift */; };
+		14C0B2D6C1587E97ADF630B9 /* CobuxColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6ACED4AACD9517B5DCBA9727 /* CobuxColor.swift */; };
 		19CDB5DCE10211771F371547 /* SpotlightIndexer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27E9EA21218A7D6C801841E7 /* SpotlightIndexer.swift */; };
 		1CF06AF0F8D20DA1A0F39D83 /* View+ZoomTransition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8232666A5168C200248E4553 /* View+ZoomTransition.swift */; };
+		1F56CEB458B53D5929F0FD06 /* CobuxWatchWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 400BF5F21CC321B85043E692 /* CobuxWatchWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		203498CA6CCAD90CBD95AAC7 /* Book.swift in Sources */ = {isa = PBXBuildFile; fileRef = 425F423CE426B32CDFAD4D2D /* Book.swift */; };
 		203D6D121465790AF0F3514E /* ClosingInterviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C69FBF56D1E87F47C48C7826 /* ClosingInterviewView.swift */; };
 		20C8ACC11B69415898F8150F /* Highlight.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56672B938DE72507C9B3B7EB /* Highlight.swift */; };
 		21063F3B64160510253FA4C0 /* ClaudeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52D3E18A37983D55BABAD137 /* ClaudeService.swift */; };
+		21AE75D1359B114BED350545 /* BookThreadPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79538B804A9BD5DA916C1C6B /* BookThreadPickerView.swift */; };
 		2521D6DB720A8EDC930F6F0C /* Book.swift in Sources */ = {isa = PBXBuildFile; fileRef = 425F423CE426B32CDFAD4D2D /* Book.swift */; };
 		29E082CDB4CA7F935ADC8C12 /* DecisionConsultationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E05E947D4F9BDA319D4475C2 /* DecisionConsultationView.swift */; };
 		2AA29B788AB32CCF45968873 /* CobuxQuizLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 611605354AF06480E2DC6120 /* CobuxQuizLiveActivity.swift */; };
+		2AD9EE20FE5438F6827C1FCB /* WatchSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB66D30DAA983C009612B210 /* WatchSyncService.swift */; };
 		2ADF703518F9BAB39970B120 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98E1A084BE339CBB1EAC4F51 /* ShareViewController.swift */; };
+		2DDE8B398B079DEF9F829B88 /* CobuxWatchGlanceEntryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6127178DA8D8A36607165AA /* CobuxWatchGlanceEntryView.swift */; };
 		2E59FEAAC13AD9AE70A02C1B /* QuizAnalyticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E3CBA4FDAE89FCBF4B1487 /* QuizAnalyticsView.swift */; };
 		2F38E05F922D38B403FCF01E /* QuizResultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C18789A377DB02908191552A /* QuizResultsView.swift */; };
 		2FF42C64DEC373673316A0E5 /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8736ED3FDDC2271DFE4B9CE /* Color+Hex.swift */; };
@@ -52,6 +59,10 @@
 		497AD86CEF4383FC55BCBD45 /* CobuxWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B0E7CBFFB94AE01AD7970AA /* CobuxWidgetBundle.swift */; };
 		4D15C1D171130C206208A604 /* HighlightMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8E136E477B457AC5FDD8601 /* HighlightMemory.swift */; };
 		4F79D24D9E3AACDB18617DBD /* Figure.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6368232EE1E8FE9CBFDFFFC /* Figure.swift */; };
+		5107C8D2E3C3576BE634CEBC /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8736ED3FDDC2271DFE4B9CE /* Color+Hex.swift */; };
+		53B56F07F0E7D1FF83B08F86 /* ChapterCramPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3081584FF8F749B7DC14A941 /* ChapterCramPickerView.swift */; };
+		54410696B577C773BFA1DD6A /* FigureIDView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8D8A0345BBC934ABE8CA806 /* FigureIDView.swift */; };
+		545C5439E2B7FBFE41FAA882 /* CobuxWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FA71B2684D2C7416F69C194 /* CobuxWatchApp.swift */; };
 		557BFD4F6DDA03DD18ABAC21 /* CrossProcessSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBADC779C25B7AC840A718F0 /* CrossProcessSync.swift */; };
 		55AFBEFC05253709F1FCE124 /* EmbeddingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D918FC576393F7E9EFD37AEB /* EmbeddingService.swift */; };
 		55BE94735C8C2E770FC66131 /* ChatPromptBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAE42D656F407CEB8ECF1003 /* ChatPromptBuilderTests.swift */; };
@@ -59,6 +70,8 @@
 		56793EBD71C060CD1C395242 /* QuizAttempt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D54F15452B939FD1B677228 /* QuizAttempt.swift */; };
 		5BE9F446F161DEE882A72794 /* CobuxColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6ACED4AACD9517B5DCBA9727 /* CobuxColor.swift */; };
 		5D28E4993B816C456955D39E /* KeychainManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9561C55CEEFD5B7EFC30741C /* KeychainManager.swift */; };
+		5E9972179B31F20668BEF82B /* WatchPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C990C7A44F7DE916CB6E1EB /* WatchPayload.swift */; };
+		63710BE1EA4887559C35DF85 /* ClozeServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C5C38EE11D75F9F3DBD1E3C /* ClozeServiceTests.swift */; };
 		63888D9E33FC956863C623CC /* Figure.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6368232EE1E8FE9CBFDFFFC /* Figure.swift */; };
 		64027F3096ABB77046D04512 /* BookCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE6C84B49BB2EC27AB5DEB2D /* BookCard.swift */; };
 		66873F12F83ED464B05C5760 /* QuizScopeBuilderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C243B00D7EDA55572B2B9292 /* QuizScopeBuilderView.swift */; };
@@ -85,8 +98,10 @@
 		90F30A73896874E0A5C26544 /* CobuxTypography.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A725E244C1971A1E8F4BDB /* CobuxTypography.swift */; };
 		91AAAF45D6CA7068BF0C0B1C /* Chapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBB4E3F90056D53AF363BDFE /* Chapter.swift */; };
 		93D98C001EF1ABDBD80AA0E0 /* Chapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBB4E3F90056D53AF363BDFE /* Chapter.swift */; };
+		963BA1EB5DCBC05A0A773B65 /* WatchConnectivityReceiver.swift in Sources */ = {isa = PBXBuildFile; fileRef = E83965C589C881C2E733A6C7 /* WatchConnectivityReceiver.swift */; };
 		9895DF6ED06EF1E07FD83E8A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07E1CF234FE88FA0273FDC31 /* ContentView.swift */; };
 		99367BA64732246843C42803 /* HighlightMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8E136E477B457AC5FDD8601 /* HighlightMemory.swift */; };
+		9AB387A4CF9603D284744F53 /* SnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7F15D451D9449A32B00C76F /* SnapshotTests.swift */; };
 		9B2E8764D6CF1173F4B647B7 /* WisdomGraphView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D0AFD19FB0C004F0D21D6D7 /* WisdomGraphView.swift */; };
 		9B5DF080BDA67E7C6ABF9B11 /* SpotlightIndexer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27E9EA21218A7D6C801841E7 /* SpotlightIndexer.swift */; };
 		9B69597D5CAE93CBBD499080 /* BookTitleText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E453EC7428ECD20AD0CC961 /* BookTitleText.swift */; };
@@ -96,8 +111,13 @@
 		9EF75BE33B4B4C9310EB1FCF /* SeedingStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CD5415A34E98C98446826DC /* SeedingStatus.swift */; };
 		9FC0F727DEA5383C7C5CABDB /* QuizAttempt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D54F15452B939FD1B677228 /* QuizAttempt.swift */; };
 		A5471300EA74669536E9ABC9 /* GoodreadsBook.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4F8B76944E9F145DEA74FCD /* GoodreadsBook.swift */; };
+		A573B2A7A3AE0B72DB7701B7 /* SpokenQuizController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E486BE23B1253015E941403B /* SpokenQuizController.swift */; };
 		A582B4B72821701388D6E998 /* FSRSService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 576A455D879739EDE1996C5C /* FSRSService.swift */; };
+		A68390409DCDB91B8C17D4C9 /* CobuxWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = E7E5B628C8A75665A829D90B /* CobuxWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		A74858E02ABB0C0A5371CA55 /* CobuxWatchContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5BFF79C6ECEE577B7FC18F8 /* CobuxWatchContentView.swift */; };
 		AA8BCE378EF19D53A75583E4 /* SeedLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC8B6A7E103DDBA42959D79A /* SeedLoader.swift */; };
+		AAF210307B7E2179758EF20F /* SnapshotTesting in Frameworks */ = {isa = PBXBuildFile; productRef = 1CC7A8D28703E3E0099DC4E8 /* SnapshotTesting */; };
+		AC673C6163E85464B47BC926 /* WatchPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C990C7A44F7DE916CB6E1EB /* WatchPayload.swift */; };
 		AD1C4A8636D9863E4D6262B3 /* CobuxQuizActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F9ECBD5997CC340FDE1CCF3 /* CobuxQuizActivityAttributes.swift */; };
 		ADD6BF83AC41E1FEC0287CFA /* Book.swift in Sources */ = {isa = PBXBuildFile; fileRef = 425F423CE426B32CDFAD4D2D /* Book.swift */; };
 		ADF79539F3112F7F81666A6D /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A468194AF622439E628D5C1D /* DiagnosticsView.swift */; };
@@ -116,15 +136,20 @@
 		C886D5FFB63E0606761C20DB /* SeedBooks in Resources */ = {isa = PBXBuildFile; fileRef = A64255B17CC9583B60E20F95 /* SeedBooks */; };
 		CC2DF5F92F43C28BF64BD1C5 /* GoodreadsBook.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4F8B76944E9F145DEA74FCD /* GoodreadsBook.swift */; };
 		CE9ECC4BF4CFD364A43413E7 /* PromptTemplates.swift in Sources */ = {isa = PBXBuildFile; fileRef = A055376A47B09ED21C4EB2E6 /* PromptTemplates.swift */; };
+		CF69B50DBBB85C1508B671FE /* QuizModeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B11365158367AB9202D81492 /* QuizModeService.swift */; };
 		CFD4FD07B3496E78CBB66E17 /* ClozeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A7E9A45CF0F7E1F845C7ACC /* ClozeService.swift */; };
 		D004C4626DF5C64AA9FBBF94 /* ChatBubbleShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8414D0628E5AE2AA92CD4D1D /* ChatBubbleShape.swift */; };
+		D0A74D5BA291EC3C9DEB1A50 /* BackupServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3068900EC788911B8D6D7336 /* BackupServiceTests.swift */; };
 		D4BDBE92B7B09726938543BB /* GoodreadsSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C26076A984380378B1C68697 /* GoodreadsSyncService.swift */; };
 		D742292252BB465FC7D9E907 /* QuizAttempt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D54F15452B939FD1B677228 /* QuizAttempt.swift */; };
+		D93B6F35582CE9B35758F66E /* PostUpgradeExportPromptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7203A7B54DBAC5751EDF576 /* PostUpgradeExportPromptView.swift */; };
 		DB01BCE0E916AB416CC543D2 /* BookEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E4F715D31054686F99D409D /* BookEntity.swift */; };
 		DC44E280377B41168EFE07B0 /* AIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22FA4CDEA37884EAEA03D341 /* AIService.swift */; };
+		DD9EB4DAEBEBE4FEA80AED75 /* SpokenQuizView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A761882FB0C7F9DEECC88D71 /* SpokenQuizView.swift */; };
 		E0E79B873C7385FC3218EF1F /* CoverGradientView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5DA5E67B4C577339639DF6 /* CoverGradientView.swift */; };
 		E12166154FC15F1D80B8A536 /* Highlight.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56672B938DE72507C9B3B7EB /* Highlight.swift */; };
 		E243E7AEC555B1D4B94E6367 /* HighlightProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAA48DAAB8CF6E14A33B78EE /* HighlightProvider.swift */; };
+		E2D66FAA649459C371F35286 /* StreakTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36DC7F24B3F6CB1B9ECF99B6 /* StreakTracker.swift */; };
 		E2F7777FE49C649EFDF0E3C0 /* CobuxShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3166B0170E1E772068CBCA3 /* CobuxShortcuts.swift */; };
 		E35439BD93AFEDA7D9F40C1A /* ChatPromptBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FBAF6E2DFD356A4FAB92F2D /* ChatPromptBuilder.swift */; };
 		E423BAD70444E64B24B9BA5D /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 951A7F48AB3B7A0991E5302F /* OnboardingView.swift */; };
@@ -134,10 +159,13 @@
 		E573C7E706B960AE6F53DA52 /* DailyReviewServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D2ED13E606388B5178CDE4E /* DailyReviewServiceTests.swift */; };
 		E57EEA33063D263D644042C0 /* UsageTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBE1484B1C852ACBE6D588C1 /* UsageTracker.swift */; };
 		E84F062486478FE385A0DC18 /* CobuxColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6ACED4AACD9517B5DCBA9727 /* CobuxColor.swift */; };
+		EB6A35D15F3FE0AE90EABA62 /* Figures in Resources */ = {isa = PBXBuildFile; fileRef = 5D73AF9F182439AFCE0136FF /* Figures */; };
+		EBE847ADFD1F8266999F526E /* WatchPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C990C7A44F7DE916CB6E1EB /* WatchPayload.swift */; };
 		ED67E35C12E686BF746B4CD0 /* CobuxApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60A3A767984A58F7CE8D7965 /* CobuxApp.swift */; };
 		EE1F70F823177B2BA6A9AC69 /* WisdomGraphService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E74232E2081510486E25A6B4 /* WisdomGraphService.swift */; };
 		EF44A488615EC6B355383E03 /* SearchServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C4A6CB3784F8B6679A44F43 /* SearchServiceTests.swift */; };
 		EF53FF473B14A2BC7EF99398 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ED2E2B6D3DCECE743FC43BB /* LibraryView.swift */; };
+		F6B23894F50AEED57F712124 /* CobuxWatchWidgetsBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7FACE6A9C2F8163C9249C53 /* CobuxWatchWidgetsBundle.swift */; };
 		F6F9D15EC7EFE8AA84692D94 /* CobuxCore in Frameworks */ = {isa = PBXBuildFile; productRef = E51199499287B9919ED787DE /* CobuxCore */; };
 		F89942B8D5B3B32AD5B7B089 /* CaptureQuoteIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = E64B62BD1DBAA648E2D13B3C /* CaptureQuoteIntent.swift */; };
 		F92AE1173F82F4E38878BDCF /* CobuxRadius.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D1514F604065BE8ED9CBF4B /* CobuxRadius.swift */; };
@@ -149,6 +177,20 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		170F5176046AE18CE8AD2769 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A086D592FF2F1D10B39A301E /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7366936652C7B6FDEB503FF8;
+			remoteInfo = CobuxWatch;
+		};
+		1FC664C0EE4E360E3ED1439D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A086D592FF2F1D10B39A301E /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 3999DC9B863A24CF9C2FBA7F;
+			remoteInfo = CobuxWatchWidgets;
+		};
 		6E349054E988BFDED63A3088 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = A086D592FF2F1D10B39A301E /* Project object */;
@@ -185,14 +227,39 @@
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		4DE6ED5840288ECE3DDC8A75 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				1F56CEB458B53D5929F0FD06 /* CobuxWatchWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7FE06C53EBDC5B5E5DDE5628 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				A68390409DCDB91B8C17D4C9 /* CobuxWatch.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		007AFE2E790C13E1DB4D0B31 /* VoiceModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceModeView.swift; sourceTree = "<group>"; };
 		055397C70D6967380D136E08 /* SearchService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchService.swift; sourceTree = "<group>"; };
 		07E1CF234FE88FA0273FDC31 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		0C096B645F38B1B0D717C6FC /* CobuxWatchProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxWatchProvider.swift; sourceTree = "<group>"; };
 		0C1F5125A2BDB81641482C6C /* LocalAIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAIService.swift; sourceTree = "<group>"; };
+		0C5C38EE11D75F9F3DBD1E3C /* ClozeServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClozeServiceTests.swift; sourceTree = "<group>"; };
 		0D1514F604065BE8ED9CBF4B /* CobuxRadius.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxRadius.swift; sourceTree = "<group>"; };
+		0FA71B2684D2C7416F69C194 /* CobuxWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxWatchApp.swift; sourceTree = "<group>"; };
 		131047F53835D6832E39275E /* RandomHighlightIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RandomHighlightIntent.swift; sourceTree = "<group>"; };
 		15805C9AA5D579D43178E27F /* View+CobuxCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "View+CobuxCard.swift"; sourceTree = "<group>"; };
 		1A5CA0E238A3563E87738705 /* CobuxTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CobuxTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -202,14 +269,19 @@
 		1F9ECBD5997CC340FDE1CCF3 /* CobuxQuizActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxQuizActivityAttributes.swift; sourceTree = "<group>"; };
 		2138BA6E85DDF8A15F842534 /* GoodreadsShelfView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoodreadsShelfView.swift; sourceTree = "<group>"; };
 		22FA4CDEA37884EAEA03D341 /* AIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIService.swift; sourceTree = "<group>"; };
+		24B22C3636F5EEBBD4675530 /* CobuxWatch.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CobuxWatch.entitlements; sourceTree = "<group>"; };
 		24DDE4120522BC30329C9CC1 /* UnsortedHighlightsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnsortedHighlightsView.swift; sourceTree = "<group>"; };
 		27E9EA21218A7D6C801841E7 /* SpotlightIndexer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpotlightIndexer.swift; sourceTree = "<group>"; };
 		27FE27105244ABA8A569231F /* BatchGenerationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatchGenerationService.swift; sourceTree = "<group>"; };
 		2B945F399EC4CB2A594F6063 /* ShareQuoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareQuoteView.swift; sourceTree = "<group>"; };
+		2D1BC90D98AC8DBA611B4D44 /* FigureImageLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FigureImageLoader.swift; sourceTree = "<group>"; };
 		2E4F715D31054686F99D409D /* BookEntity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookEntity.swift; sourceTree = "<group>"; };
 		2E596AAA84F6911E713FD747 /* QuizQuestion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizQuestion.swift; sourceTree = "<group>"; };
+		3068900EC788911B8D6D7336 /* BackupServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupServiceTests.swift; sourceTree = "<group>"; };
+		3081584FF8F749B7DC14A941 /* ChapterCramPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChapterCramPickerView.swift; sourceTree = "<group>"; };
 		36DC7F24B3F6CB1B9ECF99B6 /* StreakTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreakTracker.swift; sourceTree = "<group>"; };
 		3E87E503E43376C71B8BF8E7 /* QuizGenerationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizGenerationServiceTests.swift; sourceTree = "<group>"; };
+		400BF5F21CC321B85043E692 /* CobuxWatchWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = CobuxWatchWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		401BC4C6F24BD9EE345447B8 /* ShareExtensionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareExtensionStore.swift; sourceTree = "<group>"; };
 		425F423CE426B32CDFAD4D2D /* Book.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Book.swift; sourceTree = "<group>"; };
 		4B0E7CBFFB94AE01AD7970AA /* CobuxWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxWidgetBundle.swift; sourceTree = "<group>"; };
@@ -227,13 +299,16 @@
 		5A6EB189EFC296D19D12BAC4 /* TagBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagBadge.swift; sourceTree = "<group>"; };
 		5B9D4AA9ADC79117B1E4AF37 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		5D0AFD19FB0C004F0D21D6D7 /* WisdomGraphView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WisdomGraphView.swift; sourceTree = "<group>"; };
+		5D73AF9F182439AFCE0136FF /* Figures */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Figures; path = Cobux/Resources/Figures; sourceTree = SOURCE_ROOT; };
 		5F5A65C4C5DB1179F348B0A9 /* ClaudeGenerationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeGenerationService.swift; sourceTree = "<group>"; };
 		60A3A767984A58F7CE8D7965 /* CobuxApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxApp.swift; sourceTree = "<group>"; };
 		611605354AF06480E2DC6120 /* CobuxQuizLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxQuizLiveActivity.swift; sourceTree = "<group>"; };
 		6ACED4AACD9517B5DCBA9727 /* CobuxColor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxColor.swift; sourceTree = "<group>"; };
+		6C990C7A44F7DE916CB6E1EB /* WatchPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchPayload.swift; sourceTree = "<group>"; };
 		6D2ED13E606388B5178CDE4E /* DailyReviewServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyReviewServiceTests.swift; sourceTree = "<group>"; };
 		6E708E06493AF20904F429A5 /* ChangelogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangelogView.swift; sourceTree = "<group>"; };
 		7685A41B41D65CC2E666B91A /* MessageBubbleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageBubbleView.swift; sourceTree = "<group>"; };
+		79538B804A9BD5DA916C1C6B /* BookThreadPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookThreadPickerView.swift; sourceTree = "<group>"; };
 		797840ADFB62E515B01B564D /* MoreView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoreView.swift; sourceTree = "<group>"; };
 		7A7E9A45CF0F7E1F845C7ACC /* ClozeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClozeService.swift; sourceTree = "<group>"; };
 		7CD5415A34E98C98446826DC /* SeedingStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeedingStatus.swift; sourceTree = "<group>"; };
@@ -242,6 +317,7 @@
 		85C02EEEE2F7FC4073043C24 /* BookDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookDetailView.swift; sourceTree = "<group>"; };
 		8D54F15452B939FD1B677228 /* QuizAttempt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizAttempt.swift; sourceTree = "<group>"; };
 		8E84EFA3E0306C760DCDFEDA /* CobuxMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxMotion.swift; sourceTree = "<group>"; };
+		90EA57B72C058C72AF7E4336 /* CobuxWatchWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CobuxWatchWidgets.entitlements; sourceTree = "<group>"; };
 		92777EB01D5339FA35DB1628 /* CobuxWidgetEntryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxWidgetEntryView.swift; sourceTree = "<group>"; };
 		951A7F48AB3B7A0991E5302F /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		9561C55CEEFD5B7EFC30741C /* KeychainManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainManager.swift; sourceTree = "<group>"; };
@@ -255,11 +331,14 @@
 		A2E3CBA4FDAE89FCBF4B1487 /* QuizAnalyticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizAnalyticsView.swift; sourceTree = "<group>"; };
 		A468194AF622439E628D5C1D /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 		A47D88D4AA70A01026CB3E2D /* Cobux.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Cobux.entitlements; sourceTree = "<group>"; };
+		A6127178DA8D8A36607165AA /* CobuxWatchGlanceEntryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxWatchGlanceEntryView.swift; sourceTree = "<group>"; };
 		A6368232EE1E8FE9CBFDFFFC /* Figure.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Figure.swift; sourceTree = "<group>"; };
 		A64255B17CC9583B60E20F95 /* SeedBooks */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SeedBooks; path = Cobux/Resources/SeedBooks; sourceTree = SOURCE_ROOT; };
 		A70F310992F6B28E392707A8 /* QuizGenerationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizGenerationService.swift; sourceTree = "<group>"; };
+		A761882FB0C7F9DEECC88D71 /* SpokenQuizView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpokenQuizView.swift; sourceTree = "<group>"; };
 		AE0384148802D0060F2D63A2 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		AEDC124192FB5465AB38F904 /* SeedDataRobbins.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeedDataRobbins.swift; sourceTree = "<group>"; };
+		B11365158367AB9202D81492 /* QuizModeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizModeService.swift; sourceTree = "<group>"; };
 		B537A20B2ABC1C7D58D8A698 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		B53E8F5063F3E728AE49C71C /* CobuxCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CobuxCore; path = CobuxCore; sourceTree = SOURCE_ROOT; };
 		B74699ABC8F24890EA3E157A /* Cobux.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Cobux.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -275,19 +354,29 @@
 		C69FBF56D1E87F47C48C7826 /* ClosingInterviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClosingInterviewView.swift; sourceTree = "<group>"; };
 		CAA48DAAB8CF6E14A33B78EE /* HighlightProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HighlightProvider.swift; sourceTree = "<group>"; };
 		CAE42D656F407CEB8ECF1003 /* ChatPromptBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatPromptBuilderTests.swift; sourceTree = "<group>"; };
+		CB66D30DAA983C009612B210 /* WatchSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchSyncService.swift; sourceTree = "<group>"; };
 		CBADC779C25B7AC840A718F0 /* CrossProcessSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossProcessSync.swift; sourceTree = "<group>"; };
 		CBE1484B1C852ACBE6D588C1 /* UsageTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageTracker.swift; sourceTree = "<group>"; };
 		CD5DA5E67B4C577339639DF6 /* CoverGradientView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoverGradientView.swift; sourceTree = "<group>"; };
 		D3166B0170E1E772068CBCA3 /* CobuxShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxShortcuts.swift; sourceTree = "<group>"; };
+		D5BFF79C6ECEE577B7FC18F8 /* CobuxWatchContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxWatchContentView.swift; sourceTree = "<group>"; };
+		D7203A7B54DBAC5751EDF576 /* PostUpgradeExportPromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostUpgradeExportPromptView.swift; sourceTree = "<group>"; };
+		D7F15D451D9449A32B00C76F /* SnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotTests.swift; sourceTree = "<group>"; };
+		D8D8A0345BBC934ABE8CA806 /* FigureIDView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FigureIDView.swift; sourceTree = "<group>"; };
 		D918FC576393F7E9EFD37AEB /* EmbeddingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbeddingService.swift; sourceTree = "<group>"; };
 		DBB4E3F90056D53AF363BDFE /* Chapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chapter.swift; sourceTree = "<group>"; };
 		DEADC31B57813A498F6EC982 /* QuizSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuizSessionView.swift; sourceTree = "<group>"; };
 		E05E947D4F9BDA319D4475C2 /* DecisionConsultationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DecisionConsultationView.swift; sourceTree = "<group>"; };
+		E10C25CD465F81D43AEA50E7 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		E230CE027D8FBD1D8900189B /* ClaudeServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeServiceTests.swift; sourceTree = "<group>"; };
+		E486BE23B1253015E941403B /* SpokenQuizController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpokenQuizController.swift; sourceTree = "<group>"; };
 		E51419E648F8F88A81CA3A0D /* CobuxEmptyStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxEmptyStateView.swift; sourceTree = "<group>"; };
 		E5E1373826961B633993C943 /* VoiceSessionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceSessionController.swift; sourceTree = "<group>"; };
 		E64B62BD1DBAA648E2D13B3C /* CaptureQuoteIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureQuoteIntent.swift; sourceTree = "<group>"; };
 		E74232E2081510486E25A6B4 /* WisdomGraphService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WisdomGraphService.swift; sourceTree = "<group>"; };
+		E7E5B628C8A75665A829D90B /* CobuxWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CobuxWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E7FACE6A9C2F8163C9249C53 /* CobuxWatchWidgetsBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CobuxWatchWidgetsBundle.swift; sourceTree = "<group>"; };
+		E83965C589C881C2E733A6C7 /* WatchConnectivityReceiver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchConnectivityReceiver.swift; sourceTree = "<group>"; };
 		E8E136E477B457AC5FDD8601 /* HighlightMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HighlightMemory.swift; sourceTree = "<group>"; };
 		EB3A044B5C7107B930A1A864 /* AskCobuxIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskCobuxIntent.swift; sourceTree = "<group>"; };
 		EC8B6A7E103DDBA42959D79A /* SeedLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeedLoader.swift; sourceTree = "<group>"; };
@@ -314,6 +403,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				68631E31D4C2C0AE89937930 /* CobuxCore in Frameworks */,
+				AAF210307B7E2179758EF20F /* SnapshotTesting in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -325,6 +415,8 @@
 			children = (
 				432092A7E1AAA852EA140507 /* Cobux */,
 				20F73B63042A8D362EC423BD /* CobuxShareExtension */,
+				DF78DD3E3B955C3E6BA9614F /* CobuxWatch */,
+				EDCEBBE1553575F9D1167A91 /* CobuxWatchWidgets */,
 				E7E609067A7062A3EFFA8CAD /* CobuxWidgets */,
 				399354D950400C2B3D1D4BFD /* Packages */,
 				B2A8DBC161D64FC6F01110CC /* Tests */,
@@ -332,9 +424,18 @@
 			);
 			sourceTree = "<group>";
 		};
+		05A99F3E2490497C24CA6297 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				6C990C7A44F7DE916CB6E1EB /* WatchPayload.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
 		0E7F048E6C8CBD08EF7D9F0D /* Voice */ = {
 			isa = PBXGroup;
 			children = (
+				E486BE23B1253015E941403B /* SpokenQuizController.swift */,
 				E5E1373826961B633993C943 /* VoiceSessionController.swift */,
 			);
 			path = Voice;
@@ -343,8 +444,10 @@
 		11A1187DDCEF76F8EA53617B /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				2F4C60064521B40D68E58877 /* Figures */,
 				8DF6B687CB2537B6C681BA5B /* SeedBooks */,
 				5B9D4AA9ADC79117B1E4AF37 /* Assets.xcassets */,
+				5D73AF9F182439AFCE0136FF /* Figures */,
 				A64255B17CC9583B60E20F95 /* SeedBooks */,
 			);
 			path = Resources;
@@ -369,6 +472,14 @@
 			path = CobuxShareExtension;
 			sourceTree = "<group>";
 		};
+		2F4C60064521B40D68E58877 /* Figures */ = {
+			isa = PBXGroup;
+			children = (
+				E10C25CD465F81D43AEA50E7 /* .gitkeep */,
+			);
+			path = Figures;
+			sourceTree = "<group>";
+		};
 		399354D950400C2B3D1D4BFD /* Packages */ = {
 			isa = PBXGroup;
 			children = (
@@ -388,6 +499,7 @@
 				98A5CFA164DC24B2D62ED178 /* Models */,
 				11A1187DDCEF76F8EA53617B /* Resources */,
 				7C43ECAF4B6EEC809591B89B /* Services */,
+				05A99F3E2490497C24CA6297 /* Shared */,
 				559B7BC3CC2277BACCAE446A /* BuildInfo.swift */,
 				A47D88D4AA70A01026CB3E2D /* Cobux.entitlements */,
 				60A3A767984A58F7CE8D7965 /* CobuxApp.swift */,
@@ -434,6 +546,7 @@
 				CBADC779C25B7AC840A718F0 /* CrossProcessSync.swift */,
 				EFCFCE764ABF84A13FD81CAF /* DailyReviewService.swift */,
 				D918FC576393F7E9EFD37AEB /* EmbeddingService.swift */,
+				2D1BC90D98AC8DBA611B4D44 /* FigureImageLoader.swift */,
 				576A455D879739EDE1996C5C /* FSRSService.swift */,
 				C26076A984380378B1C68697 /* GoodreadsSyncService.swift */,
 				9561C55CEEFD5B7EFC30741C /* KeychainManager.swift */,
@@ -441,6 +554,7 @@
 				BF654FDA4316B0F83EE86EEE /* NotificationManager.swift */,
 				A055376A47B09ED21C4EB2E6 /* PromptTemplates.swift */,
 				A70F310992F6B28E392707A8 /* QuizGenerationService.swift */,
+				B11365158367AB9202D81492 /* QuizModeService.swift */,
 				055397C70D6967380D136E08 /* SearchService.swift */,
 				9C248F418D292CA148F403A6 /* SeedDataMicrobiology.swift */,
 				AEDC124192FB5465AB38F904 /* SeedDataRobbins.swift */,
@@ -449,6 +563,7 @@
 				27E9EA21218A7D6C801841E7 /* SpotlightIndexer.swift */,
 				36DC7F24B3F6CB1B9ECF99B6 /* StreakTracker.swift */,
 				CBE1484B1C852ACBE6D588C1 /* UsageTracker.swift */,
+				CB66D30DAA983C009612B210 /* WatchSyncService.swift */,
 				E74232E2081510486E25A6B4 /* WisdomGraphService.swift */,
 			);
 			path = Services;
@@ -507,6 +622,8 @@
 				B74699ABC8F24890EA3E157A /* Cobux.app */,
 				FEDF62954DEB378B06A629BA /* CobuxShareExtension.appex */,
 				1A5CA0E238A3563E87738705 /* CobuxTests.xctest */,
+				E7E5B628C8A75665A829D90B /* CobuxWatch.app */,
+				400BF5F21CC321B85043E692 /* CobuxWatchWidgets.appex */,
 				53C5F19CB059922BA2C9FE92 /* CobuxWidgets.appex */,
 			);
 			name = Products;
@@ -515,11 +632,14 @@
 		AB71A6786DC166FA97300D9A /* Quiz */ = {
 			isa = PBXGroup;
 			children = (
+				3081584FF8F749B7DC14A941 /* ChapterCramPickerView.swift */,
+				D8D8A0345BBC934ABE8CA806 /* FigureIDView.swift */,
 				A2E3CBA4FDAE89FCBF4B1487 /* QuizAnalyticsView.swift */,
 				BDDC7F9D10967997BAEDD753 /* QuizHomeView.swift */,
 				C18789A377DB02908191552A /* QuizResultsView.swift */,
 				C243B00D7EDA55572B2B9292 /* QuizScopeBuilderView.swift */,
 				DEADC31B57813A498F6EC982 /* QuizSessionView.swift */,
+				A761882FB0C7F9DEECC88D71 /* SpokenQuizView.swift */,
 			);
 			path = Quiz;
 			sourceTree = "<group>";
@@ -535,13 +655,16 @@
 		B2A8DBC161D64FC6F01110CC /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				3068900EC788911B8D6D7336 /* BackupServiceTests.swift */,
 				FD6EED76CF67AE929E6B9259 /* BuildInfoTests.swift */,
 				CAE42D656F407CEB8ECF1003 /* ChatPromptBuilderTests.swift */,
 				E230CE027D8FBD1D8900189B /* ClaudeServiceTests.swift */,
+				0C5C38EE11D75F9F3DBD1E3C /* ClozeServiceTests.swift */,
 				6D2ED13E606388B5178CDE4E /* DailyReviewServiceTests.swift */,
 				BFF690C1C6703FC808300C38 /* MigrationTests.swift */,
 				3E87E503E43376C71B8BF8E7 /* QuizGenerationServiceTests.swift */,
 				9C4A6CB3784F8B6679A44F43 /* SearchServiceTests.swift */,
+				D7F15D451D9449A32B00C76F /* SnapshotTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -574,13 +697,26 @@
 			isa = PBXGroup;
 			children = (
 				951A7F48AB3B7A0991E5302F /* OnboardingView.swift */,
+				D7203A7B54DBAC5751EDF576 /* PostUpgradeExportPromptView.swift */,
 			);
 			path = Onboarding;
+			sourceTree = "<group>";
+		};
+		DF78DD3E3B955C3E6BA9614F /* CobuxWatch */ = {
+			isa = PBXGroup;
+			children = (
+				24B22C3636F5EEBBD4675530 /* CobuxWatch.entitlements */,
+				0FA71B2684D2C7416F69C194 /* CobuxWatchApp.swift */,
+				D5BFF79C6ECEE577B7FC18F8 /* CobuxWatchContentView.swift */,
+				E83965C589C881C2E733A6C7 /* WatchConnectivityReceiver.swift */,
+			);
+			path = CobuxWatch;
 			sourceTree = "<group>";
 		};
 		DFF8D10681B3205EC5D0C6A3 /* Chat */ = {
 			isa = PBXGroup;
 			children = (
+				79538B804A9BD5DA916C1C6B /* BookThreadPickerView.swift */,
 				AE0384148802D0060F2D63A2 /* ChatView.swift */,
 				E05E947D4F9BDA319D4475C2 /* DecisionConsultationView.swift */,
 				7685A41B41D65CC2E666B91A /* MessageBubbleView.swift */,
@@ -614,6 +750,17 @@
 			path = DesignSystem;
 			sourceTree = "<group>";
 		};
+		EDCEBBE1553575F9D1167A91 /* CobuxWatchWidgets */ = {
+			isa = PBXGroup;
+			children = (
+				A6127178DA8D8A36607165AA /* CobuxWatchGlanceEntryView.swift */,
+				0C096B645F38B1B0D717C6FC /* CobuxWatchProvider.swift */,
+				90EA57B72C058C72AF7E4336 /* CobuxWatchWidgets.entitlements */,
+				E7FACE6A9C2F8163C9249C53 /* CobuxWatchWidgetsBundle.swift */,
+			);
+			path = CobuxWatchWidgets;
+			sourceTree = "<group>";
+		};
 		F66F6D10C8A09D4A9322E0B1 /* Extensions */ = {
 			isa = PBXGroup;
 			children = (
@@ -639,6 +786,23 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		3999DC9B863A24CF9C2FBA7F /* CobuxWatchWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 40323570F80187AF020FB9CE /* Build configuration list for PBXNativeTarget "CobuxWatchWidgets" */;
+			buildPhases = (
+				617F87707A70D24739BB6026 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CobuxWatchWidgets;
+			packageProductDependencies = (
+			);
+			productName = CobuxWatchWidgets;
+			productReference = 400BF5F21CC321B85043E692 /* CobuxWatchWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		6BB17C04AB27FF75D42C931E /* CobuxTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = EF81577F9A824555199C7578 /* Build configuration list for PBXNativeTarget "CobuxTests" */;
@@ -654,6 +818,7 @@
 			name = CobuxTests;
 			packageProductDependencies = (
 				68F9903D8D28A3ADDE02B397 /* CobuxCore */,
+				1CC7A8D28703E3E0099DC4E8 /* SnapshotTesting */,
 			);
 			productName = CobuxTests;
 			productReference = 1A5CA0E238A3563E87738705 /* CobuxTests.xctest */;
@@ -676,6 +841,25 @@
 			productReference = 53C5F19CB059922BA2C9FE92 /* CobuxWidgets.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		7366936652C7B6FDEB503FF8 /* CobuxWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 354542A57BA1B66A4FD716D8 /* Build configuration list for PBXNativeTarget "CobuxWatch" */;
+			buildPhases = (
+				1727D5577F4D7B4E606D7195 /* Sources */,
+				4DE6ED5840288ECE3DDC8A75 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				1EAD2C59856F36EAA0230BD5 /* PBXTargetDependency */,
+			);
+			name = CobuxWatch;
+			packageProductDependencies = (
+			);
+			productName = CobuxWatch;
+			productReference = E7E5B628C8A75665A829D90B /* CobuxWatch.app */;
+			productType = "com.apple.product-type.application";
+		};
 		7A28EA3E3C02954AFE0CB2DF /* Cobux */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 2E86AC499FDCE9254C243D3A /* Build configuration list for PBXNativeTarget "Cobux" */;
@@ -684,12 +868,14 @@
 				0A9BDBA23E5D77AC73F04CB6 /* Resources */,
 				5182BD682B6451AD40F0ECFB /* Frameworks */,
 				2303712A8B814408D6634BE5 /* Embed Foundation Extensions */,
+				7FE06C53EBDC5B5E5DDE5628 /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				51F25A108241350C2B244971 /* PBXTargetDependency */,
 				27D5A2BF353D085895213562 /* PBXTargetDependency */,
+				AB2DF6BA9B8321CDCA5D9D17 /* PBXTargetDependency */,
 			);
 			name = Cobux;
 			packageProductDependencies = (
@@ -725,11 +911,19 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 2700;
 				TargetAttributes = {
+					3999DC9B863A24CF9C2FBA7F = {
+						DevelopmentTeam = 58Q76NHADF;
+						ProvisioningStyle = Automatic;
+					};
 					6BB17C04AB27FF75D42C931E = {
 						DevelopmentTeam = 58Q76NHADF;
 						ProvisioningStyle = Automatic;
 					};
 					6EB68D684077888BFA13D0C8 = {
+						DevelopmentTeam = 58Q76NHADF;
+						ProvisioningStyle = Automatic;
+					};
+					7366936652C7B6FDEB503FF8 = {
 						DevelopmentTeam = 58Q76NHADF;
 						ProvisioningStyle = Automatic;
 					};
@@ -753,6 +947,7 @@
 			mainGroup = 01054F13E741D98D6E82A8EF;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				ECD41678951E57354961599C /* XCRemoteSwiftPackageReference "swift-snapshot-testing" */,
 				7606DCDD811C1804F430D21A /* XCLocalSwiftPackageReference "CobuxCore" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -763,6 +958,8 @@
 				7A28EA3E3C02954AFE0CB2DF /* Cobux */,
 				E87AC85C3769BA64DFBF0D99 /* CobuxShareExtension */,
 				6BB17C04AB27FF75D42C931E /* CobuxTests */,
+				7366936652C7B6FDEB503FF8 /* CobuxWatch */,
+				3999DC9B863A24CF9C2FBA7F /* CobuxWatchWidgets */,
 				6EB68D684077888BFA13D0C8 /* CobuxWidgets */,
 			);
 		};
@@ -774,6 +971,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B490A8DA5EF5B12AE5990A0A /* Assets.xcassets in Resources */,
+				EB6A35D15F3FE0AE90EABA62 /* Figures in Resources */,
 				C886D5FFB63E0606761C20DB /* SeedBooks in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -781,6 +979,20 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		1727D5577F4D7B4E606D7195 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				14C0B2D6C1587E97ADF630B9 /* CobuxColor.swift in Sources */,
+				545C5439E2B7FBFE41FAA882 /* CobuxWatchApp.swift in Sources */,
+				A74858E02ABB0C0A5371CA55 /* CobuxWatchContentView.swift in Sources */,
+				5107C8D2E3C3576BE634CEBC /* Color+Hex.swift in Sources */,
+				E2D66FAA649459C371F35286 /* StreakTracker.swift in Sources */,
+				963BA1EB5DCBC05A0A773B65 /* WatchConnectivityReceiver.swift in Sources */,
+				5E9972179B31F20668BEF82B /* WatchPayload.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		1C9469B55FD5CE011150F769 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -823,11 +1035,13 @@
 				64027F3096ABB77046D04512 /* BookCard.swift in Sources */,
 				9DC52B600B7AA08D4CD2649D /* BookDetailView.swift in Sources */,
 				DB01BCE0E916AB416CC543D2 /* BookEntity.swift in Sources */,
+				21AE75D1359B114BED350545 /* BookThreadPickerView.swift in Sources */,
 				9B69597D5CAE93CBBD499080 /* BookTitleText.swift in Sources */,
 				08F77AF9AE330EBBD247474B /* BuildInfo.swift in Sources */,
 				F89942B8D5B3B32AD5B7B089 /* CaptureQuoteIntent.swift in Sources */,
 				8F881A6856D7FA3470C4C52E /* ChangelogView.swift in Sources */,
 				0ABBE93406EFEDA5708292B3 /* Chapter.swift in Sources */,
+				53B56F07F0E7D1FF83B08F86 /* ChapterCramPickerView.swift in Sources */,
 				D004C4626DF5C64AA9FBBF94 /* ChatBubbleShape.swift in Sources */,
 				76793C5A38F09DE232079E46 /* ChatMessage.swift in Sources */,
 				E35439BD93AFEDA7D9F40C1A /* ChatPromptBuilder.swift in Sources */,
@@ -854,6 +1068,8 @@
 				55AFBEFC05253709F1FCE124 /* EmbeddingService.swift in Sources */,
 				A582B4B72821701388D6E998 /* FSRSService.swift in Sources */,
 				3E6FB3BC0C8CA02E8B661BC2 /* Figure.swift in Sources */,
+				54410696B577C773BFA1DD6A /* FigureIDView.swift in Sources */,
+				067ABA5EEF0D77A61C204C09 /* FigureImageLoader.swift in Sources */,
 				FDF0E3BD45EE4982E0BAFD34 /* GoodreadsBook.swift in Sources */,
 				47508892EADF6ECB71107C80 /* GoodreadsShelfView.swift in Sources */,
 				D4BDBE92B7B09726938543BB /* GoodreadsSyncService.swift in Sources */,
@@ -866,12 +1082,14 @@
 				35AB2FE8A7AEE2A34D901081 /* MoreView.swift in Sources */,
 				BE07BE9D5100F4C8CD93D497 /* NotificationManager.swift in Sources */,
 				E423BAD70444E64B24B9BA5D /* OnboardingView.swift in Sources */,
+				D93B6F35582CE9B35758F66E /* PostUpgradeExportPromptView.swift in Sources */,
 				CE9ECC4BF4CFD364A43413E7 /* PromptTemplates.swift in Sources */,
 				2E59FEAAC13AD9AE70A02C1B /* QuizAnalyticsView.swift in Sources */,
 				0121D8E39A57CAF259D8F9E3 /* QuizAnswerRecord.swift in Sources */,
 				56793EBD71C060CD1C395242 /* QuizAttempt.swift in Sources */,
 				8A21C0A2BCD077EC100B63E8 /* QuizGenerationService.swift in Sources */,
 				8D6E85CB8CF9B1588C22DF07 /* QuizHomeView.swift in Sources */,
+				CF69B50DBBB85C1508B671FE /* QuizModeService.swift in Sources */,
 				39393DEA7BF4677F4E59C288 /* QuizQuestion.swift in Sources */,
 				2F38E05F922D38B403FCF01E /* QuizResultsView.swift in Sources */,
 				66873F12F83ED464B05C5760 /* QuizScopeBuilderView.swift in Sources */,
@@ -884,6 +1102,8 @@
 				AA8BCE378EF19D53A75583E4 /* SeedLoader.swift in Sources */,
 				9EF75BE33B4B4C9310EB1FCF /* SeedingStatus.swift in Sources */,
 				739C5D415E2462F9E3503C6E /* SettingsView.swift in Sources */,
+				A573B2A7A3AE0B72DB7701B7 /* SpokenQuizController.swift in Sources */,
+				DD9EB4DAEBEBE4FEA80AED75 /* SpokenQuizView.swift in Sources */,
 				9B5DF080BDA67E7C6ABF9B11 /* SpotlightIndexer.swift in Sources */,
 				001363B33CB2089E1142B2F8 /* StreakTracker.swift in Sources */,
 				FF5A905599D4835E03FAB6D0 /* TagBadge.swift in Sources */,
@@ -896,8 +1116,21 @@
 				1CF06AF0F8D20DA1A0F39D83 /* View+ZoomTransition.swift in Sources */,
 				0F19F879E792E3062E8BEF38 /* VoiceModeView.swift in Sources */,
 				8CDF9AD329A8D5CEF777E991 /* VoiceSessionController.swift in Sources */,
+				EBE847ADFD1F8266999F526E /* WatchPayload.swift in Sources */,
+				2AD9EE20FE5438F6827C1FCB /* WatchSyncService.swift in Sources */,
 				EE1F70F823177B2BA6A9AC69 /* WisdomGraphService.swift in Sources */,
 				9B2E8764D6CF1173F4B647B7 /* WisdomGraphView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		617F87707A70D24739BB6026 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2DDE8B398B079DEF9F829B88 /* CobuxWatchGlanceEntryView.swift in Sources */,
+				1007FED832CD2DE67518AA15 /* CobuxWatchProvider.swift in Sources */,
+				F6B23894F50AEED57F712124 /* CobuxWatchWidgetsBundle.swift in Sources */,
+				AC673C6163E85464B47BC926 /* WatchPayload.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -905,13 +1138,16 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D0A74D5BA291EC3C9DEB1A50 /* BackupServiceTests.swift in Sources */,
 				34476CE436F2D43A9C72A8CC /* BuildInfoTests.swift in Sources */,
 				55BE94735C8C2E770FC66131 /* ChatPromptBuilderTests.swift in Sources */,
 				3BE1948B94FE30A203010625 /* ClaudeServiceTests.swift in Sources */,
+				63710BE1EA4887559C35DF85 /* ClozeServiceTests.swift in Sources */,
 				E573C7E706B960AE6F53DA52 /* DailyReviewServiceTests.swift in Sources */,
 				099E189E42EC6CE3C56DC2CA /* MigrationTests.swift in Sources */,
 				E5092F470959C294ACD65C18 /* QuizGenerationServiceTests.swift in Sources */,
 				EF44A488615EC6B355383E03 /* SearchServiceTests.swift in Sources */,
+				9AB387A4CF9603D284744F53 /* SnapshotTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -945,6 +1181,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		1EAD2C59856F36EAA0230BD5 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 3999DC9B863A24CF9C2FBA7F /* CobuxWatchWidgets */;
+			targetProxy = 1FC664C0EE4E360E3ED1439D /* PBXContainerItemProxy */;
+		};
 		27D5A2BF353D085895213562 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = E87AC85C3769BA64DFBF0D99 /* CobuxShareExtension */;
@@ -959,6 +1200,11 @@
 			isa = PBXTargetDependency;
 			target = 6EB68D684077888BFA13D0C8 /* CobuxWidgets */;
 			targetProxy = 768A788A3B426A6B4A52D3B7 /* PBXContainerItemProxy */;
+		};
+		AB2DF6BA9B8321CDCA5D9D17 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7366936652C7B6FDEB503FF8 /* CobuxWatch */;
+			targetProxy = 170F5176046AE18CE8AD2769 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -995,6 +1241,34 @@
 				SKIP_INSTALL = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		2CBAD9344A9F4289FAD455CF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = CobuxWatch/CobuxWatch.entitlements;
+				INFOPLIST_FILE = "Generated/CobuxWatch-Info.plist";
+				PRODUCT_BUNDLE_IDENTIFIER = com.rajansharma.Cobux.watchkitapp;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = 4;
+			};
+			name = Release;
+		};
+		2E516B61FCA2871F9EBF5435 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = CobuxWatch/CobuxWatch.entitlements;
+				INFOPLIST_FILE = "Generated/CobuxWatch-Info.plist";
+				PRODUCT_BUNDLE_IDENTIFIER = com.rajansharma.Cobux.watchkitapp;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = 4;
 			};
 			name = Debug;
 		};
@@ -1052,6 +1326,42 @@
 			};
 			name = Release;
 		};
+		A5FD97606FC34B5116517C44 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = CobuxWatchWidgets/CobuxWatchWidgets.entitlements;
+				INFOPLIST_FILE = "Generated/CobuxWatchWidgets-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.rajansharma.Cobux.watchkitapp.CobuxWatchWidgets;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = 4;
+			};
+			name = Release;
+		};
+		AF177F7DF72697F588A00884 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = CobuxWatchWidgets/CobuxWatchWidgets.entitlements;
+				INFOPLIST_FILE = "Generated/CobuxWatchWidgets-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.rajansharma.Cobux.watchkitapp.CobuxWatchWidgets;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = 4;
+			};
+			name = Debug;
+		};
 		D09110465BE495AE2FE2EEFE /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1105,7 +1415,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 58Q76NHADF;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -1125,16 +1435,16 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 2.0.1;
+				MARKETING_VERSION = 2.1.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = 1;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
 			};
 			name = Debug;
 		};
@@ -1210,7 +1520,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 58Q76NHADF;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -1224,15 +1534,15 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 2.0.1;
+				MARKETING_VERSION = 2.1.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = 1;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
 			};
 			name = Release;
 		};
@@ -1253,6 +1563,24 @@
 			buildConfigurations = (
 				3D7EAC396973DA1EFF73D1F3 /* Debug */,
 				E67A44A151D48280CA450724 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		354542A57BA1B66A4FD716D8 /* Build configuration list for PBXNativeTarget "CobuxWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2E516B61FCA2871F9EBF5435 /* Debug */,
+				2CBAD9344A9F4289FAD455CF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		40323570F80187AF020FB9CE /* Build configuration list for PBXNativeTarget "CobuxWatchWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AF177F7DF72697F588A00884 /* Debug */,
+				A5FD97606FC34B5116517C44 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
@@ -1293,7 +1621,23 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		ECD41678951E57354961599C /* XCRemoteSwiftPackageReference "swift-snapshot-testing" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/pointfreeco/swift-snapshot-testing";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.17.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
+		1CC7A8D28703E3E0099DC4E8 /* SnapshotTesting */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = ECD41678951E57354961599C /* XCRemoteSwiftPackageReference "swift-snapshot-testing" */;
+			productName = SnapshotTesting;
+		};
 		68F9903D8D28A3ADDE02B397 /* CobuxCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = CobuxCore;

@@ -68,15 +68,10 @@ struct CobuxApp: App {
             await MainActor.run { SeedingStatus.shared.isSeeding = true }
         }
 
-        // The two large medical reference books stay as hand-written Swift —
-        // they already work and are the exact files a JSON-based approach
-        // exists to avoid repeating at that density. Every other book is
-        // authored as JSON under Resources/SeedBooks/ and loaded generically
-        // (this superseded the old `seed12Rules`/`seedBeyondOrder`/
-        // `seedAttached`/`seedValueOfOthers` Swift functions, left in
-        // `SeedData.swift`/`SeedDataAttached.swift`/`SeedDataValueOfOthers.swift`
-        // as unused dead code pending a cleanup pass, rather than risk
-        // touching them further tonight).
+        // The two large medical reference books stay as hand-written Swift in the private/
+        // production build — every other book is authored as JSON under Resources/SeedBooks/
+        // and loaded generically. `seedMicrobiology`/`seedRobbins` are stubbed as no-ops here
+        // (see `SeedDataMicrobiology.swift`'s doc comment) since this is the open-source repo.
         SeedData.seedMicrobiology(modelContext: context)
         SeedData.seedRobbins(modelContext: context)
         SeedLoader.seedAllBundledBooks(modelContext: context)

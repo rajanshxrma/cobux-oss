@@ -135,7 +135,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Data")
                 } footer: {
-                    Text("There's no automatic sync between devices — export creates a JSON file of your books, chapters, highlights, chat history, and quiz review progress you can save anywhere (Files, iCloud Drive, AirDrop) and restore later if this phone is lost or reset. Quiz questions themselves aren't included since they're regenerated cheaply from your highlights, not hand-authored.")
+                    Text("There's no automatic sync between devices — export creates a JSON file of your books, chapters, highlights, chat history, and quiz questions (including your earned review progress) you can save anywhere (Files, iCloud Drive, AirDrop) and restore later if this phone is lost or reset.")
                 }
 
                 Section {
@@ -179,13 +179,14 @@ struct SettingsView: View {
         do {
             let data = try Data(contentsOf: url)
             let result = try BackupService.importData(data, existingBooks: books, existingChatMessages: chatMessages, modelContext: modelContext)
-            if result.booksImported == 0 && result.chatMessagesImported == 0 && result.highlightMemoriesImported == 0 {
+            if result.booksImported == 0 && result.chatMessagesImported == 0 && result.highlightMemoriesImported == 0 && result.quizQuestionsImported == 0 {
                 backupMessage = "Nothing new to import — everything in that backup already exists here."
             } else {
                 var parts: [String] = []
                 if result.booksImported > 0 { parts.append("\(result.booksImported) book(s)") }
                 if result.chatMessagesImported > 0 { parts.append("\(result.chatMessagesImported) chat message(s)") }
                 if result.highlightMemoriesImported > 0 { parts.append("\(result.highlightMemoriesImported) review record(s)") }
+                if result.quizQuestionsImported > 0 { parts.append("\(result.quizQuestionsImported) quiz question(s)") }
                 backupMessage = "Imported " + parts.joined(separator: ", ") + "."
             }
         } catch {

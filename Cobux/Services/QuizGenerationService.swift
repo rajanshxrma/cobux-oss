@@ -175,6 +175,13 @@ enum QuizGenerationService {
                 topicTags: dto.topicTags
             )
             question.sourceHighlights = sources
+            // New cards are immediately due (reps == 0 keeps them in
+            // DailyReviewService's "new" budget lane, not "review") --
+            // matches FSRSService.migrateIfNeeded's exact convention.
+            // Without this, dueQuestions() filters every freshly generated
+            // question out of Daily Review forever, since it only surfaces
+            // cards with a non-nil dueDate.
+            question.dueDate = .now
             modelContext.insert(question)
             inserted += 1
         }

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Same App Group name as the iOS app/CobuxWidgets/CobuxShareExtension -- but this is a
+  WATCH-LOCAL container, not a shared one. App Groups do NOT span devices: the iPhone app
+  and its widget/extension share this group because both run on the phone; this watch app
+  runs on separate hardware with its own empty container of the same name. Never open the
+  iOS ModelContainer schema from here -- see WatchPayload.swift/WatchSyncService.swift for
+  the actual (WCSession-based) transport this app relies on instead.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.rajansharma.Cobux</string>
+	</array>
+</dict>
+</plist>

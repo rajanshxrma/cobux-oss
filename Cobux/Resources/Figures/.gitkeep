@@ -1,0 +1,4 @@
+Bundled figure images go here once image extraction runs (triage_and_caption.py, blocked on
+Rajan's own Anthropic API key -- see the plan file). Figure.fileName looks up images in this
+directory by exact filename. Empty for now; the Figure ID quiz mode stays hidden until this
+directory actually has content and Figure rows exist to match it.

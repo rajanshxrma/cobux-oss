@@ -6,35 +6,45 @@ import SwiftUI
 /// Manual JSON export/import of the whole library -- the actual gap when
 /// there's no CloudKit/cross-device sync at all: a lost or wiped phone loses
 /// every authored highlight/chapter permanently. Covers the real content
-/// (books, chapters, highlights), chat history, and spaced-repetition
-/// scheduling state (`HighlightMemory`) -- all genuinely irreplaceable.
-/// `QuizQuestion`/`Figure` are still omitted: they're regeneratable from the
-/// source textbooks/API, unlike a user's own chat history or earned review
-/// progress, which restoring a backup used to silently wipe.
+/// (books, chapters, highlights), chat history, legacy spaced-repetition
+/// state (`HighlightMemory`), and FSRS quiz progress (`QuizQuestion`) --
+/// all genuinely irreplaceable. `QuizQuestion` was originally left out on
+/// the theory that questions are "regeneratable from the source textbooks/
+/// API" -- true of the question CONTENT, but false of the earned FSRS
+/// scheduling state once Phase 3 moved it onto `QuizQuestion` itself
+/// (stability/difficulty/reps/lapses/dueDate). Regenerating a chapter's
+/// questions (which `QuizGenerationService`/`ClozeService` do automatically
+/// whenever a highlight changes) deletes and recreates every question in
+/// it, silently discarding that progress -- this is the one place it can
+/// be recovered from. `Figure` remains genuinely regeneratable (no earned
+/// state attached to it) and stays omitted.
 enum BackupService {
     struct BackupDocument: Codable {
         var exportDate: Date
         var books: [BookDTO]
         var chatMessages: [ChatMessageDTO]
         var highlightMemories: [HighlightMemoryDTO]
+        var quizQuestions: [QuizQuestionDTO]
 
-        init(exportDate: Date, books: [BookDTO], chatMessages: [ChatMessageDTO], highlightMemories: [HighlightMemoryDTO]) {
+        init(exportDate: Date, books: [BookDTO], chatMessages: [ChatMessageDTO], highlightMemories: [HighlightMemoryDTO], quizQuestions: [QuizQuestionDTO]) {
             self.exportDate = exportDate
             self.books = books
             self.chatMessages = chatMessages
             self.highlightMemories = highlightMemories
+            self.quizQuestions = quizQuestions
         }
 
-        /// Custom decode so a pre-2.0.0 backup file (no `chatMessages`/
-        /// `highlightMemories` keys at all) still imports cleanly instead of
-        /// throwing -- old backups simply restore books/chapters/highlights
-        /// as before, with empty chat/memory sections.
+        /// Custom decode so an older backup file (missing any of these keys
+        /// entirely) still imports cleanly instead of throwing -- older
+        /// backups simply restore whatever sections they have, with the
+        /// rest empty.
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             exportDate = try container.decode(Date.self, forKey: .exportDate)
             books = try container.decode([BookDTO].self, forKey: .books)
             chatMessages = try container.decodeIfPresent([ChatMessageDTO].self, forKey: .chatMessages) ?? []
             highlightMemories = try container.decodeIfPresent([HighlightMemoryDTO].self, forKey: .highlightMemories) ?? []
+            quizQuestions = try container.decodeIfPresent([QuizQuestionDTO].self, forKey: .quizQuestions) ?? []
         }
     }
 
@@ -95,6 +105,33 @@ enum BackupService {
         var dateAdded: Date
     }
 
+    /// Keyed by (book title, chapter title, prompt) on restore, same
+    /// no-stored-UUID convention as the other DTOs -- `QuizQuestion.id`
+    /// doesn't survive a restore either. Carries both the question's own
+    /// content (so a restore doesn't depend on regeneration ever running)
+    /// and its FSRS scheduling state, which is the actual irreplaceable
+    /// part this type exists to protect.
+    struct QuizQuestionDTO: Codable {
+        var bookTitle: String
+        var chapterTitle: String?
+        var questionTypeRaw: String
+        var prompt: String
+        var choices: [String]
+        var correctAnswerIndex: Int?
+        var explanation: String
+        var difficulty: Int
+        var topicTags: [String]
+        var generationSourceRaw: String
+        var sourceHighlightTexts: [String]
+        var fsrsStability: Double
+        var fsrsDifficulty: Double
+        var fsrsReps: Int
+        var fsrsLapses: Int
+        var lastReviewedAt: Date?
+        var dueDate: Date?
+        var isSuspended: Bool
+    }
+
     private static func chapterDTO(from chapter: Chapter) -> ChapterDTO {
         ChapterDTO(title: chapter.title, summary: chapter.summary, keyLessons: chapter.keyLessons, chapterNumber: chapter.chapterNumber, isCompleted: chapter.isCompleted)
     }
@@ -145,12 +182,40 @@ enum BackupService {
         }
     }
 
+    private static func quizQuestionDTOs(from book: Book) -> [QuizQuestionDTO] {
+        book.chapters.flatMap { chapter in
+            chapter.quizQuestions.map { question in
+                QuizQuestionDTO(
+                    bookTitle: book.title,
+                    chapterTitle: chapter.title,
+                    questionTypeRaw: question.questionTypeRaw,
+                    prompt: question.prompt,
+                    choices: question.choices,
+                    correctAnswerIndex: question.correctAnswerIndex,
+                    explanation: question.explanation,
+                    difficulty: question.difficulty,
+                    topicTags: question.topicTags,
+                    generationSourceRaw: question.generationSourceRaw,
+                    sourceHighlightTexts: question.sourceHighlights.map(\.text),
+                    fsrsStability: question.fsrsStability,
+                    fsrsDifficulty: question.fsrsDifficulty,
+                    fsrsReps: question.fsrsReps,
+                    fsrsLapses: question.fsrsLapses,
+                    lastReviewedAt: question.lastReviewedAt,
+                    dueDate: question.dueDate,
+                    isSuspended: question.isSuspended
+                )
+            }
+        }
+    }
+
     static func exportData(books: [Book], chatMessages: [ChatMessage] = []) throws -> Data {
         let bookDTOs: [BookDTO] = books.map(bookDTO(from:))
         let bookTitlesByID = Dictionary(uniqueKeysWithValues: books.map { ($0.id, $0.title) })
         let chatDTOs = chatMessages.map { chatMessageDTO(from: $0, bookTitlesByID: bookTitlesByID) }
         let memoryDTOs = books.flatMap(highlightMemoryDTOs(from:))
-        let document = BackupDocument(exportDate: .now, books: bookDTOs, chatMessages: chatDTOs, highlightMemories: memoryDTOs)
+        let questionDTOs = books.flatMap(quizQuestionDTOs(from:))
+        let document = BackupDocument(exportDate: .now, books: bookDTOs, chatMessages: chatDTOs, highlightMemories: memoryDTOs, quizQuestions: questionDTOs)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -161,6 +226,7 @@ enum BackupService {
         var booksImported: Int
         var chatMessagesImported: Int
         var highlightMemoriesImported: Int
+        var quizQuestionsImported: Int
     }
 
     /// Skips any book whose title already exists in the store, so importing
@@ -187,6 +253,9 @@ enum BackupService {
         // highlights are eligible -- a book that already existed was skipped above
         // and keeps whatever local scheduling state it already has, untouched.
         var newHighlightsByKey: [String: Highlight] = [:]
+        // (book title lowercased, chapter title) -> the newly-created Chapter, so
+        // QuizQuestion can be reattached to the right chapter after the loop.
+        var newChaptersByKey: [String: Chapter] = [:]
         var newBookTitlesByLowercased: [String: String] = [:]
 
         for bookDTO in document.books {
@@ -207,6 +276,7 @@ enum BackupService {
             for chapterDTO in bookDTO.chapters {
                 let chapter = Chapter(title: chapterDTO.title, summary: chapterDTO.summary, keyLessons: chapterDTO.keyLessons, chapterNumber: chapterDTO.chapterNumber, isCompleted: chapterDTO.isCompleted)
                 book.chapters.append(chapter)
+                newChaptersByKey["\(lowerTitle)|||\(chapterDTO.title)"] = chapter
             }
 
             for highlightDTO in bookDTO.highlights {
@@ -216,6 +286,42 @@ enum BackupService {
             }
 
             booksImported += 1
+        }
+
+        // Restore quiz questions (content + FSRS state) onto the book/chapter/highlights
+        // just recreated above. Only eligible for newly-imported books -- an already-existing
+        // book keeps whatever local questions/progress it has, untouched, same rule as
+        // HighlightMemory above.
+        var quizQuestionsImported = 0
+        for questionDTO in document.quizQuestions {
+            let lowerTitle = questionDTO.bookTitle.lowercased()
+            guard newBookTitlesByLowercased[lowerTitle] != nil else { continue }
+            let chapter = questionDTO.chapterTitle.flatMap { newChaptersByKey["\(lowerTitle)|||\($0)"] }
+            let sources = questionDTO.sourceHighlightTexts.compactMap { newHighlightsByKey["\(lowerTitle)|||\($0)"] }
+
+            let question = QuizQuestion(
+                book: chapter?.book,
+                chapter: chapter,
+                questionType: QuizQuestionType(rawValue: questionDTO.questionTypeRaw) ?? .recallMCQ,
+                prompt: questionDTO.prompt,
+                choices: questionDTO.choices,
+                correctAnswerIndex: questionDTO.correctAnswerIndex,
+                explanation: questionDTO.explanation,
+                difficulty: questionDTO.difficulty,
+                topicTags: questionDTO.topicTags
+            )
+            question.generationSourceRaw = questionDTO.generationSourceRaw
+            question.sourceHighlights = sources
+            question.fsrsStability = questionDTO.fsrsStability
+            question.fsrsDifficulty = questionDTO.fsrsDifficulty
+            question.fsrsReps = questionDTO.fsrsReps
+            question.fsrsLapses = questionDTO.fsrsLapses
+            question.lastReviewedAt = questionDTO.lastReviewedAt
+            question.dueDate = questionDTO.dueDate
+            question.isSuspended = questionDTO.isSuspended
+            modelContext.insert(question)
+            chapter?.quizQuestions.append(question)
+            quizQuestionsImported += 1
         }
 
         // Restore scheduling state onto the highlights that were just recreated.
@@ -267,7 +373,8 @@ enum BackupService {
         return ImportResult(
             booksImported: booksImported,
             chatMessagesImported: chatMessagesImported,
-            highlightMemoriesImported: highlightMemoriesImported
+            highlightMemoriesImported: highlightMemoriesImported,
+            quizQuestionsImported: quizQuestionsImported
         )
     }
 }

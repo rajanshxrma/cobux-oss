@@ -34,6 +34,7 @@ struct ChatView: View {
     /// persistent, scoped thread (see `ChatMessage.bookID`).
     @State private var selectedBookID: UUID?
     @State private var showSymposiumExplanation = false
+    @State private var showingBookThreadPicker = false
     @AppStorage("hasSeenSymposiumExplanation") private var hasSeenSymposiumExplanation = false
 
     /// Soft warning threshold — Rajan's brother's key is capped around $5/mo;
@@ -66,7 +67,8 @@ struct ChatView: View {
                                         timestamp: msg.timestamp,
                                         referencedBooks: msg.referencedBooks,
                                         isError: msg.isError,
-                                        isStreaming: msg.isStreaming
+                                        isStreaming: msg.isStreaming,
+                                        accentColor: currentThreadAccent
                                     )
                                     .id(msg.id)
                                 }
@@ -92,27 +94,13 @@ struct ChatView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    Menu {
-                        Button {
-                            selectedBookID = nil
-                        } label: {
-                            if selectedBookID == nil {
-                                Label("General", systemImage: "checkmark")
-                            } else {
-                                Text("General")
-                            }
-                        }
-                        ForEach(books.sorted(by: { $0.title < $1.title })) { book in
-                            Button {
-                                selectedBookID = book.id
-                            } label: {
-                                if selectedBookID == book.id {
-                                    Label(book.title, systemImage: "checkmark")
-                                } else {
-                                    Text(book.title)
-                                }
-                            }
-                        }
+                    // A sheet-presented `List`, not a `Menu` -- a flat `Menu`
+                    // with 15+ books (the real current library size) doesn't
+                    // scroll reliably on device (confirmed live: "the scroll
+                    // of this dropdown is cooked"). A `List` uses the same
+                    // scrolling machinery as every other list in the app.
+                    Button {
+                        showingBookThreadPicker = true
                     } label: {
                         // The wordmark itself is the identity; the thread
                         // picker is a clearly subordinate row beneath it --
@@ -214,6 +202,9 @@ struct ChatView: View {
             .sheet(isPresented: $showingDecisionConsultation) {
                 DecisionConsultationView(claudeService: claudeService)
             }
+            .sheet(isPresented: $showingBookThreadPicker) {
+                BookThreadPickerView(books: books, selectedBookID: $selectedBookID)
+            }
             .fullScreenCover(isPresented: $showingVoiceMode, onDismiss: loadChatHistory) {
                 VoiceModeView(
                     claudeService: claudeService,
@@ -263,51 +254,34 @@ struct ChatView: View {
             TextField("Ask about your books...", text: $inputText, axis: .vertical)
                 .focused($isInputFocused)
                 .padding(12)
-                .background(.regularMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 20))
+                .cobuxCard()
                 .lineLimit(1...5)
 
             if isStreaming {
                 Button(action: stopStreaming) {
                     Image(systemName: "stop.circle.fill")
                         .font(.system(size: 32))
-                        .foregroundStyle(Color.cobuxAccent)
+                        .foregroundStyle(currentThreadAccent)
                 }
             } else {
                 Button(action: sendMessage) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 32))
-                        .foregroundStyle(inputText.isEmpty ? Color.secondary : Color.cobuxAccent)
+                        .foregroundStyle(inputText.isEmpty ? Color.secondary : currentThreadAccent)
                 }
                 .disabled(inputText.isEmpty)
             }
         }
         .padding()
-        .background(.ultraThinMaterial)
+        .cobuxStructuralCell()
     }
 
     private var emptyStateView: some View {
-        VStack(spacing: 20) {
-            Circle()
-                .fill(Color.cobuxAccent.opacity(0.12))
-                .frame(width: 76, height: 76)
-                .overlay(
-                    Image(systemName: "book.pages")
-                        .font(.system(size: 28, weight: .medium))
-                        .foregroundStyle(Color.cobuxAccent.opacity(0.75))
-                )
-                .padding(.top, 60)
-
-            VStack(spacing: 6) {
-                Text("How can I help?")
-                    .font(.title3)
-                    .fontWeight(.medium)
-
-                Text("Ask about the wisdom in your library")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
+        CobuxEmptyStateView(
+            icon: "book.pages",
+            title: "How can I help?",
+            message: "Ask about the wisdom in your library"
+        ) {
             VStack(spacing: 10) {
                 let chips = suggestedPrompts()
                 ForEach(chips, id: \.self) { chip in
@@ -319,19 +293,13 @@ struct ChatView: View {
                             .font(.subheadline)
                             .padding()
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(.ultraThinMaterial)
-                            .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.card))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: CobuxRadius.card)
-                                    .stroke(Color.secondary.opacity(0.12), lineWidth: 1)
-                            )
+                            .cobuxCard()
                     }
                     .buttonStyle(PlainButtonStyle())
                 }
             }
             .padding(.horizontal, 20)
         }
-        .transition(.opacity.animation(.easeOut(duration: 0.3)))
     }
 
     /// A book chosen deterministically (not `.randomElement()`, which
@@ -401,6 +369,17 @@ struct ChatView: View {
             return "General"
         }
         return book.title
+    }
+
+    /// The book's own living color for a scoped thread, falling back to the app-wide
+    /// accent for the general thread -- Phase 2 promised `coverColorHex` as "the dynamic
+    /// accent for that book's detail, chat thread, quiz session, and mastery ring," but
+    /// it only ever reached Library/BookDetail.
+    private var currentThreadAccent: Color {
+        guard let selectedBookID, let book = books.first(where: { $0.id == selectedBookID }) else {
+            return .cobuxAccent
+        }
+        return Color(hex: book.coverColorHex)
     }
 
     private var chatWordmarkFont: Font {

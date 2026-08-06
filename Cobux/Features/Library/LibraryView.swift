@@ -65,6 +65,7 @@ struct LibraryView: View {
                     highlightsSection
                 }
             }
+            .background(Color.cobuxBackground)
             .navigationTitle("Library")
             .searchable(text: $searchText, prompt: "Search books or authors")
             .toolbar {
@@ -100,8 +101,7 @@ struct LibraryView: View {
                     .foregroundStyle(.secondary)
             }
             .padding(16)
-            .background(.regularMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.card))
+            .cobuxCard()
             .padding(.horizontal)
             .padding(.top, 8)
         }
@@ -161,7 +161,6 @@ private struct HighlightSearchCard: View {
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.card))
+        .cobuxCard()
     }
 }

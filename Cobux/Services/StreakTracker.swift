@@ -10,8 +10,12 @@ enum StreakTracker {
     /// a separate sandboxed process -- can read the same streak the main
     /// app writes, for the Lock Screen circular widget.
     private static let defaults = UserDefaults(suiteName: "group.com.rajansharma.Cobux") ?? .standard
-    private static let lastActiveDateKey = "cobux.streak.lastActiveDate"
-    private static let currentStreakKey = "cobux.streak.currentStreak"
+    /// `internal`, not `private` — `CobuxWatch`'s `WCSession` receiver writes into these exact
+    /// keys (in its own, watch-local copy of this same App Group suite) so this type's own
+    /// `currentStreak`/`recordActivityToday` — compiled unmodified into `CobuxWatch` too — see
+    /// the synced value without needing a second, duplicated set of key strings.
+    static let lastActiveDateKey = "cobux.streak.lastActiveDate"
+    static let currentStreakKey = "cobux.streak.currentStreak"
 
     /// Call this from any place that represents real daily engagement
     /// (saving a highlight, finishing a quiz with at least one answer).

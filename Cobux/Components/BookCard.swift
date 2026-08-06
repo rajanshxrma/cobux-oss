@@ -48,7 +48,7 @@ struct BookCard: View {
             }
         }
         .aspectRatio(3/4, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.card))
         .shadow(color: .black.opacity(0.2), radius: 5, x: 0, y: 3)
     }
 

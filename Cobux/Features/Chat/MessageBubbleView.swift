@@ -7,6 +7,12 @@ struct MessageBubbleView: View {
     let referencedBooks: [String]
     var isError: Bool = false
     var isStreaming: Bool = false
+    /// The book this thread is scoped to, per `Book.coverColorHex` -- falls back to the
+    /// app-wide accent for the general thread. Threading a book's own living color into
+    /// its chat thread was promised in Phase 2 ("the dynamic accent for that book's
+    /// detail, chat thread, quiz session, and mastery ring") but only ever reached
+    /// Library/BookDetail.
+    var accentColor: Color = .cobuxAccent
 
     private struct ContentBlock: Identifiable {
         let id: Int
@@ -98,7 +104,7 @@ struct MessageBubbleView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .background(isUser ? AnyShapeStyle(LinearGradient(colors: [Color.cobuxAccent, Color.cobuxAccent.opacity(0.75)], startPoint: .topLeading, endPoint: .bottomTrailing)) : AnyShapeStyle(.ultraThinMaterial))
+                .background(isUser ? AnyShapeStyle(accentColor) : AnyShapeStyle(Color.cobuxSurface))
                 .clipShape(ChatBubbleShape(direction: isUser ? .right : .left))
                 .overlay(
                     ChatBubbleShape(direction: isUser ? .right : .left)
@@ -125,7 +131,7 @@ struct MessageBubbleView: View {
     private func quoteBlock(_ text: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Capsule()
-                .fill(isUser ? Color.white.opacity(0.55) : Color.cobuxAccent.opacity(0.55))
+                .fill(isUser ? Color.white.opacity(0.55) : accentColor.opacity(0.55))
                 .frame(width: 3)
             Text(inlineAttributed(text, color: isUser ? .white.opacity(0.85) : .primary.opacity(0.75)))
                 .italic()
@@ -144,7 +150,7 @@ struct MessageBubbleView: View {
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .background(Color.secondary.opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.pill, style: .continuous))
     }
 }
 

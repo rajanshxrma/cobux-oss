@@ -169,12 +169,7 @@ struct DecisionConsultationView: View {
                 Text(attributedResult(text))
                     .textSelection(.enabled)
                     .padding(18)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 20))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 20)
-                            .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
-                    )
+                    .cobuxCard()
 
                 Button {
                     discussInChat(text)

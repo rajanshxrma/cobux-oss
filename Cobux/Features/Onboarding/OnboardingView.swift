@@ -33,8 +33,7 @@ struct OnboardingView: View {
                     FeatureRow(icon: "bell.fill", title: "Get Reminded", desc: "Daily push notifications with quotes to keep you focused.")
                 }
                 .padding()
-                .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 20))
+                .cobuxCard()
             }
             .padding()
             .tag(1)
@@ -51,8 +50,7 @@ struct OnboardingView: View {
 
                 SecureField("Anthropic API Key (sk-...)", text: $apiKey)
                     .padding()
-                    .background(.regularMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .cobuxCard()
 
                 Button(action: {
                     if !apiKey.isEmpty {
@@ -66,7 +64,7 @@ struct OnboardingView: View {
                         .frame(maxWidth: .infinity)
                         .background(apiKey.isEmpty ? Color.secondary.opacity(0.3) : Color.cobuxAccent)
                         .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.card))
                 }
             }
             .padding()
@@ -75,7 +73,12 @@ struct OnboardingView: View {
         .tabViewStyle(.page)
         .indexViewStyle(.page(backgroundDisplayMode: .always))
         .background(
-            LinearGradient(colors: [.black, Color(hex: "#1e1b4b")], startPoint: .top, endPoint: .bottom)
+            // Same dark backdrop family as VoiceModeView's -- both are always-dark,
+            // full-screen, no-system-chrome moments regardless of the system color
+            // scheme, so they share one gradient token instead of two near-identical
+            // hardcoded hex values (this one was #1e1b4b -- CobuxColor.voiceGradient's
+            // own first stop, byte-identical, just spelled out a second time).
+            LinearGradient(colors: CobuxColor.voiceGradient, startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
         )
     }

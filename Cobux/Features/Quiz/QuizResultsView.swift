@@ -4,6 +4,7 @@ import SwiftData
 struct QuizResultsView: View {
     let attempt: QuizAttempt
     let onDone: () -> Void
+    @Query private var books: [Book]
 
     private var scorePercent: Int {
         Int((attempt.scorePercent ?? 0) * 100)
@@ -32,11 +33,16 @@ struct QuizResultsView: View {
                     needsReviewSection
                 }
             }
-            .padding()
+            .padding(16)
         }
         .navigationTitle("Results")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
+        .onAppear {
+            // "End of any quiz/review session" per Fable's Watch companion ruling — the
+            // results screen appearing is the natural signal a session just finished.
+            WatchSyncService.sync(books: books)
+        }
         .toolbar {
             // This screen used to be a dead end -- back button hidden, no
             // replacement, the only way off was switching tabs entirely.
@@ -98,9 +104,8 @@ struct QuizResultsView: View {
                 .font(.subheadline)
             }
         }
-        .padding()
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .padding(16)
+        .cobuxCard()
     }
 
     private var needsReviewSection: some View {
@@ -118,10 +123,9 @@ struct QuizResultsView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
-                    .padding()
+                    .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .cobuxCard()
                 }
             }
         }

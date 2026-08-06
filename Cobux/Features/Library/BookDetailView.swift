@@ -97,13 +97,7 @@ struct BookDetailView: View {
                     }
                 }
                 .padding()
-                .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 18))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18)
-                        .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(0.1), radius: 8, y: 4)
+                .cobuxCard()
                 .padding(.horizontal)
                 .padding(.top, -24)
                 .zIndex(1)
@@ -124,6 +118,7 @@ struct BookDetailView: View {
                 }
             }
         }
+        .background(Color.cobuxBackground)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -240,12 +235,7 @@ struct BookDetailView: View {
                         }
                         .padding()
                     }
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
-                    )
+                    .cobuxCard()
                     .padding(.horizontal)
                     .contextMenu {
                         Button(role: .destructive) {
@@ -309,12 +299,7 @@ struct BookDetailView: View {
                         }
                     }
                     .padding()
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
-                    )
+                    .cobuxCard()
                     .padding(.horizontal)
                     .contextMenu {
                         Button(role: .destructive) {

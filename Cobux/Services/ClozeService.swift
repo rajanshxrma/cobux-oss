@@ -65,6 +65,10 @@ enum ClozeService {
                 )
                 question.generationSourceRaw = "cloze"
                 question.sourceHighlights = [highlight]
+                // See the matching comment in QuizGenerationService.applyGeneratedQuestions --
+                // without this, DailyReviewService.dueQuestions never surfaces a freshly
+                // generated card, since it filters on a non-nil dueDate.
+                question.dueDate = .now
                 modelContext.insert(question)
                 chapter.quizQuestions.append(question)
             }

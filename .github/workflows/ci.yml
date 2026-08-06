@@ -51,14 +51,21 @@ jobs:
       - name: Install SwiftLint
         run: brew install swiftlint
 
-      # NOT --strict yet: the drift-detection custom rules correctly flag real
-      # pre-existing violations (Color.indigo, magic corner radii, bare padding)
-      # across files Phase 2 hasn't migrated to the design system yet. Escalate
-      # this to --strict once that migration lands — until then this step is
-      # informational, not blocking, so Phase 0/1 work isn't held hostage to a
-      # Phase 2 deliverable.
-      - name: SwiftLint (informational until Phase 2 design-system migration)
-        run: swiftlint lint || true
+      # Escalated from informational to blocking, but NOT --strict yet -- two
+      # different things. Every error-severity rule (raw system color, hardcoded
+      # hex, magic corner radius, inline material card, nested nav stack) is
+      # verified clean across the whole tree (manual grep for each rule's exact
+      # pattern, since this session's local SwiftLint install crashes on
+      # sourcekitd loading on this machine's beta macOS -- a real, separate
+      # environment issue, not evidence either way about violations). Plain
+      # `swiftlint lint` only fails on those. The two warning-severity rules
+      # (no_bare_padding, no_negative_offset_bleed_hack) still have real,
+      # uninventoried violations across ~10 files (BookDetailView alone has 7+
+      # bare .padding() calls) -- --strict would promote those to failures and
+      # turn this red immediately. That cleanup is real, separate follow-up
+      # work, not something to rush through unreviewed here.
+      - name: SwiftLint (blocking on errors; --strict pending a bare-padding/negative-offset pass)
+        run: swiftlint lint
 
       # CODE_SIGNING_ALLOWED=NO because CI has no Apple Developer credentials
       # (and shouldn't -- that's a real credential, not something to hand a
@@ -72,7 +79,31 @@ jobs:
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO build
 
+      # The iOS-destination build above already builds CobuxWatch/CobuxWatchWidgets as an
+      # embedded dependency of the Cobux target (confirmed: "Embed Watch Content" copy phase),
+      # but that's implicit coverage a future scheme/dependency edit could silently drop.
+      # Explicit per Fable's Watch companion ruling, so CI keeps catching it either way.
+      - name: Build Watch app + complications (Debug, generic watchOS device)
+        run: |
+          xcodebuild -project Cobux.xcodeproj -scheme CobuxWatch \
+            -destination 'generic/platform=watchOS' \
+            CODE_SIGNING_ALLOWED=NO build
+
       - name: Run app test target (headless simulator runtime — never opens Simulator.app)
         run: |
           xcodebuild -project Cobux.xcodeproj -scheme Cobux \
-            -destination 'platform=iOS Simulator,name=iPhone 16' test
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -skip-testing:CobuxTests/SnapshotTests test
+
+      # SnapshotTests has never been run anywhere -- no local Mac in this project has a
+      # simulator runtime installed, so no reference images exist yet under
+      # Tests/__Snapshots__/. Split out from the blocking run above (which would fail on
+      # every push otherwise) so it can record baselines without turning CI red first.
+      # Once this step's artifact images are reviewed and committed to
+      # Tests/__Snapshots__/, remove -skip-testing above and delete this separate step --
+      # SnapshotTests belongs in the normal blocking run from then on.
+      - name: Record/verify snapshot tests (informational until baselines are committed)
+        run: |
+          xcodebuild -project Cobux.xcodeproj -scheme Cobux \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -only-testing:CobuxTests/SnapshotTests test || true

@@ -49,8 +49,15 @@ struct QuizScopeBuilderView: View {
         Array(Set(book.highlights.flatMap(\.tags))).sorted()
     }
 
+    /// FSRS-based, not the legacy per-highlight `HighlightMemory` -- must match
+    /// `DailyReviewService.dueQuestions`'s exact filter, or this screen and
+    /// Daily Review show two different due counts for the same book.
     private var dueReviewCount: Int {
-        book.highlights.compactMap(\.memory).filter { $0.nextReviewDate <= .now }.count
+        dueQuestions().count
+    }
+
+    private func dueQuestions() -> [QuizQuestion] {
+        book.chapters.flatMap(\.quizQuestions).filter { !$0.isSuspended && ($0.dueDate.map { $0 <= .now } ?? false) }
     }
 
     // MARK: - Exam Countdown
@@ -451,24 +458,12 @@ struct QuizScopeBuilderView: View {
         case .topic:
             pool = chaptersInScope.flatMap(\.quizQuestions).filter { !Set($0.topicTags).isDisjoint(with: selectedTags) }
         case .reviewQueue:
-            let dueHighlightIDs = Set(book.highlights.compactMap { h -> UUID? in
-                guard let memory = h.memory, memory.nextReviewDate <= .now else { return nil }
-                return h.id
-            })
-            pool = book.chapters.flatMap(\.quizQuestions).filter { question in
-                !question.sourceHighlights.filter { dueHighlightIDs.contains($0.id) }.isEmpty
-            }
+            pool = dueQuestions()
         }
 
         if mixInDueReviews, scope != .reviewQueue {
-            let dueHighlightIDs = Set(book.highlights.compactMap { h -> UUID? in
-                guard let memory = h.memory, memory.nextReviewDate <= .now else { return nil }
-                return h.id
-            })
-            let dueQuestions = book.chapters.flatMap(\.quizQuestions).filter { question in
-                !question.sourceHighlights.filter { dueHighlightIDs.contains($0.id) }.isEmpty
-            }
-            pool.append(contentsOf: dueQuestions.filter { q in !pool.contains(where: { $0.id == q.id }) })
+            let due = dueQuestions()
+            pool.append(contentsOf: due.filter { q in !pool.contains(where: { $0.id == q.id }) })
         }
 
         guard !pool.isEmpty else {

@@ -3,6 +3,7 @@ options:
   bundleIdPrefix: com.rajansharma
   deploymentTarget:
     iOS: "17.0"
+    watchOS: "10.0"
   xcodeVersion: "27.0"
   generateEmptyDirectories: true
   groupSortPosition: top
@@ -12,14 +13,21 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     TARGETED_DEVICE_FAMILY: "1"
-    MARKETING_VERSION: "2.0.1"
-    CURRENT_PROJECT_VERSION: "2"
+    MARKETING_VERSION: "2.1.0"
+    CURRENT_PROJECT_VERSION: "1"
     DEVELOPMENT_TEAM: "58Q76NHADF"
     CODE_SIGN_STYLE: "Automatic"
 
 packages:
   CobuxCore:
     path: CobuxCore
+  # Phase 0 promised a snapshot matrix "the mechanism that catches the next
+  # Robbins-class bug automatically" -- never actually added. CobuxTests-only
+  # (SwiftUI view rendering has no place in CobuxCore, which stays UIKit/
+  # SwiftUI-free by design).
+  SnapshotTesting:
+    url: https://github.com/pointfreeco/swift-snapshot-testing
+    from: 1.17.0
 
 schemes:
   Cobux:
@@ -28,12 +36,26 @@ schemes:
         Cobux: all
         CobuxWidgets: all
         CobuxShareExtension: all
+        CobuxWatch: all
+        CobuxWatchWidgets: all
         CobuxTests: [test]
     run:
       config: Debug
     test:
       targets:
         - CobuxTests
+
+  # Separate from the "Cobux" scheme because xcodebuild resolves valid destinations from a
+  # scheme's own run-target platform (Cobux/iOS) -- a watchOS destination is rejected for the
+  # "Cobux" scheme even though CobuxWatch is embedded in it. Confirmed locally: this is the
+  # fallback Fable's Watch companion ruling named as the likely-needed path, not a hypothetical.
+  CobuxWatch:
+    build:
+      targets:
+        CobuxWatch: all
+        CobuxWatchWidgets: all
+    run:
+      config: Debug
 
 targets:
   Cobux:
@@ -54,6 +76,13 @@ targets:
       # silently failed to seed on real devices.
       - path: Cobux/Resources/SeedBooks
         type: folder
+      # Same folder-reference treatment as SeedBooks, for the same reason -- a plain group
+      # would flatten this to the bundle root instead of preserving the Figures/ subdirectory
+      # FigureImageLoader looks up by name. Empty right now (image extraction is blocked on
+      # Rajan's own Anthropic API key); ready to bundle real images the moment that unblocks,
+      # with zero further project.yml changes needed.
+      - path: Cobux/Resources/Figures
+        type: folder
     info:
       path: Generated/Cobux-Info.plist
       properties:
@@ -67,8 +96,8 @@ targets:
         CFBundleDisplayName: "Cobux"
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
-        NSMicrophoneUsageDescription: "Cobux uses your microphone in Voice Mode so you can talk to your book wisdom hands-free."
-        NSSpeechRecognitionUsageDescription: "Cobux uses speech recognition in Voice Mode to turn what you say into a question for Cobux AI."
+        NSMicrophoneUsageDescription: "Cobux uses your microphone in Voice Mode and Spoken Quiz so you can talk to your book wisdom, and quiz yourself, hands-free."
+        NSSpeechRecognitionUsageDescription: "Cobux uses speech recognition in Voice Mode and Spoken Quiz to turn what you say into a question for Cobux AI, or a graded quiz answer."
         # Cobux only ever makes standard HTTPS calls (to the Anthropic API) —
         # exempt from export compliance. Declaring this here skips the
         # compliance question on every future TestFlight/App Store upload.
@@ -89,6 +118,8 @@ targets:
       - target: CobuxWidgets
         embed: true
       - target: CobuxShareExtension
+        embed: true
+      - target: CobuxWatch
         embed: true
       - package: CobuxCore
 
@@ -149,6 +180,60 @@ targets:
         CODE_SIGN_ENTITLEMENTS: CobuxShareExtension/CobuxShareExtension.entitlements
         SKIP_INSTALL: YES
 
+  CobuxWatch:
+    type: application
+    platform: watchOS
+    sources:
+      - path: CobuxWatch
+        excludes:
+          - "**/.DS_Store"
+      - path: Cobux/Shared/WatchPayload.swift
+      - path: Cobux/Services/StreakTracker.swift
+      - path: Cobux/DesignSystem/CobuxColor.swift
+      - path: Cobux/Extensions/Color+Hex.swift
+    info:
+      path: Generated/CobuxWatch-Info.plist
+      properties:
+        WKApplication: true
+        WKCompanionAppBundleIdentifier: com.rajansharma.Cobux
+        WKRunsIndependentlyOfCompanionApp: false
+        CFBundleDisplayName: "Cobux"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+    settings:
+      base:
+        SWIFT_EMIT_LOC_STRINGS: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.rajansharma.Cobux.watchkitapp
+        TARGETED_DEVICE_FAMILY: "4"
+        CODE_SIGN_ENTITLEMENTS: CobuxWatch/CobuxWatch.entitlements
+    dependencies:
+      - target: CobuxWatchWidgets
+        embed: true
+
+  CobuxWatchWidgets:
+    type: app-extension
+    platform: watchOS
+    sources:
+      - path: CobuxWatchWidgets
+        excludes:
+          - "**/.DS_Store"
+      - path: Cobux/Shared/WatchPayload.swift
+    info:
+      path: Generated/CobuxWatchWidgets-Info.plist
+      properties:
+        CFBundleDisplayName: "Cobux Widgets"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        SWIFT_EMIT_LOC_STRINGS: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.rajansharma.Cobux.watchkitapp.CobuxWatchWidgets
+        TARGETED_DEVICE_FAMILY: "4"
+        SKIP_INSTALL: YES
+        CODE_SIGN_ENTITLEMENTS: CobuxWatchWidgets/CobuxWatchWidgets.entitlements
+
   CobuxTests:
     type: bundle.unit-test
     platform: iOS
@@ -160,3 +245,4 @@ targets:
     dependencies:
       - target: Cobux
       - package: CobuxCore
+      - package: SnapshotTesting

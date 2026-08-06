@@ -102,7 +102,7 @@ private struct GoodreadsBookCard: View {
                 }
             }
             .aspectRatio(3/4, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.card))
             .shadow(color: .black.opacity(0.15), radius: 4, x: 0, y: 2)
 
             BookTitleText(title: book.title, font: .subheadline, weight: .semibold, lineLimit: 2)

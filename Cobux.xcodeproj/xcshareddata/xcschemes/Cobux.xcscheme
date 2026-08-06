@@ -57,6 +57,34 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "7366936652C7B6FDEB503FF8"
+               BuildableName = "CobuxWatch.app"
+               BlueprintName = "CobuxWatch"
+               ReferencedContainer = "container:Cobux.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "3999DC9B863A24CF9C2FBA7F"
+               BuildableName = "CobuxWatchWidgets.appex"
+               BlueprintName = "CobuxWatchWidgets"
+               ReferencedContainer = "container:Cobux.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "6EB68D684077888BFA13D0C8"
                BuildableName = "CobuxWidgets.appex"
                BlueprintName = "CobuxWidgets"

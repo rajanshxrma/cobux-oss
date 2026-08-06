@@ -15,7 +15,7 @@ enum BuildInfo {
         var components = DateComponents()
         components.year = 2026
         components.month = 8
-        components.day = 5
+        components.day = 6
         return Calendar.current.date(from: components) ?? .now
     }()
 
@@ -30,6 +30,17 @@ enum BuildInfo {
     /// `uploadDate`: add one entry here as part of shipping each new build,
     /// so testers can actually see what changed instead of guessing.
     static let changelog: [ChangelogEntry] = [
+        ChangelogEntry(
+            version: "2.1.0",
+            build: "1",
+            date: "Aug 6, 2026",
+            changes: [
+                "Added Voice Mode — tap the mic in any chat thread to talk hands-free. Cobux listens, transcribes, and speaks its answer back as it streams in, sentence by sentence, instead of waiting for the whole reply. Text chat is still there too — voice is additive, not a replacement",
+                "Added an Apple Watch companion — your streak, due-review count, and a featured quote as watch face complications, plus a small glanceable app. Read-only: nothing to review or grade on the watch, just a nudge to open your phone",
+                "Added a Share Extension — capture a quote from Kindle, Books, Safari, or anywhere else that shares text, straight into Cobux. Files it to a book, or leaves it in a new \"Unsorted\" list until you do",
+                "Updated the app icon to match the design refreshed in 2.0.0"
+            ]
+        ),
         ChangelogEntry(
             version: "2.0.1",
             build: "2",

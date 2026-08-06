@@ -36,9 +36,9 @@
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Cobux uses your microphone in Voice Mode so you can talk to your book wisdom hands-free.</string>
+	<string>Cobux uses your microphone in Voice Mode and Spoken Quiz so you can talk to your book wisdom, and quiz yourself, hands-free.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Cobux uses speech recognition in Voice Mode to turn what you say into a question for Cobux AI.</string>
+	<string>Cobux uses speech recognition in Voice Mode and Spoken Quiz to turn what you say into a question for Cobux AI, or a graded quiz answer.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

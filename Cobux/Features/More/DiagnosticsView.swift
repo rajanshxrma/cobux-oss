@@ -58,6 +58,29 @@ struct DiagnosticsView: View {
     private var generalThreadCount: Int { chatMessages.filter { $0.bookID == nil }.count }
     private var bookScopedThreadCount: Int { chatMessages.filter { $0.bookID != nil }.count }
 
+    /// Never introduced into review at all -- would have caught the real shipped bug where
+    /// every freshly generated question (paid and free cloze alike) had `dueDate == nil` and
+    /// was therefore permanently invisible to Daily Review. Should trend to 0 shortly after
+    /// any chapter is quizzed; a number that stays high and grows is exactly that bug back.
+    private var notIntroducedCount: Int { quizQuestions.filter { $0.dueDate == nil }.count }
+    private var dueNowCount: Int { quizQuestions.filter { !$0.isSuspended && ($0.dueDate.map { $0 <= .now } ?? false) }.count }
+    private var scheduledFutureCount: Int { quizQuestions.filter { !$0.isSuspended && ($0.dueDate.map { $0 > .now } ?? false) }.count }
+    private var newCardCount: Int { quizQuestions.filter { $0.fsrsReps == 0 && $0.dueDate != nil }.count }
+    private var suspendedCount: Int { quizQuestions.filter(\.isSuspended).count }
+
+    /// Mean days from now to each scheduled question's next review -- the "next-interval
+    /// predictions" the FSRS risk table promised Diagnostics would expose, so a scheduler
+    /// gone subtly wrong (way too short/long intervals) is a number visible here, not
+    /// something that only shows up as "the app feels off" weeks later.
+    private var averageDaysUntilNextReview: Double? {
+        let futureDueDates = quizQuestions.compactMap { question -> Double? in
+            guard !question.isSuspended, let due = question.dueDate, due > .now else { return nil }
+            return due.timeIntervalSince(.now) / 86400
+        }
+        guard !futureDueDates.isEmpty else { return nil }
+        return futureDueDates.reduce(0, +) / Double(futureDueDates.count)
+    }
+
     var body: some View {
         List {
             Section("Embeddings") {
@@ -98,6 +121,17 @@ struct DiagnosticsView: View {
                 diagnosticRow("Questions generated", "\(quizQuestions.count)", isHealthy: true)
                 diagnosticRow("Highlights with review state", "\(highlightMemories.count) / \(highlights.count)", isHealthy: true)
                 diagnosticRow("Figures", "\(figures.count)", isHealthy: true)
+            }
+
+            Section("FSRS Scheduling") {
+                diagnosticRow("Never introduced (dueDate nil)", "\(notIntroducedCount)", isHealthy: notIntroducedCount == 0)
+                diagnosticRow("New cards", "\(newCardCount)", isHealthy: true)
+                diagnosticRow("Due now", "\(dueNowCount)", isHealthy: true)
+                diagnosticRow("Scheduled ahead", "\(scheduledFutureCount)", isHealthy: true)
+                diagnosticRow("Suspended", "\(suspendedCount)", isHealthy: true)
+                if let averageDaysUntilNextReview {
+                    diagnosticRow("Avg. days to next review", String(format: "%.1f", averageDaysUntilNextReview), isHealthy: true)
+                }
             }
 
             Section("Spend") {

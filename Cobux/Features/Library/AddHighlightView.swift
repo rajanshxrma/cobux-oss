@@ -5,6 +5,7 @@ struct AddHighlightView: View {
     @Bindable var book: Book
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Query private var books: [Book]
 
     @State private var text = ""
     @State private var chapter = ""
@@ -74,6 +75,7 @@ struct AddHighlightView: View {
         SpotlightIndexer.index(highlight)
         WidgetCenter.shared.reloadAllTimelines()
         StreakTracker.recordActivityToday()
+        WatchSyncService.sync(books: books)
         didSave = true
         dismiss()
     }
