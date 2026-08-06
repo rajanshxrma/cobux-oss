@@ -1,0 +1,77 @@
+excluded:
+  - CobuxCore/.build
+  - build
+  - Generated
+  - CobuxTests
+  - .git
+  # In the private/production build, these hold authored data payloads (book highlights/
+  # chapters), not logic -- line-length and complexity rules don't mean anything applied
+  # to seeded content. Kept excluded here too even though this repo's copies are stubs,
+  # so the two versions of the file don't need different lint configs.
+  - Cobux/Services/SeedDataMicrobiology.swift
+  - Cobux/Services/SeedDataRobbins.swift
+
+# Cobux 2.0.0 exists partly to make style drift structurally impossible instead of
+# something Rajan has to catch by hand. Every rule below fires on drift already
+# inventoried in the codebase (36 Color.indigo sites, 31 corner-radius literals across
+# 6 distinct values, 3 nested NavigationStacks, negative-padding bleed hacks) — the
+# point is a red build, not a suggestion.
+#
+# Deliberately `only_rules`, not the full default set: this codebase predates any
+# linting and a first strict pass surfaces ~330 pre-existing default-rule violations
+# (complexity, file length, identifier naming, etc.) that have nothing to do with the
+# specific drift classes 2.0.0 is targeting. Rewriting all of that is a large,
+# unrelated, risk-bearing refactor Rajan didn't ask for — scope this to the actual
+# problem. Broaden `only_rules` deliberately later if there's a reason to.
+only_rules:
+  - custom_rules
+  - trailing_whitespace
+
+custom_rules:
+  no_raw_system_color:
+    included: ".*\\.swift"
+    excluded: ".*/DesignSystem/.*"
+    # Matches both `Color.indigo` and the bare shorthand form (`.tint(.indigo)`,
+    # `.foregroundStyle(.indigo)`) -- the shorthand form used to slip through
+    # since the old regex required a literal `Color.` prefix, which is exactly
+    # how ContentView.swift's `.tint(.indigo)` sat unnoticed through 2.0.0.
+    regex: "\\.(indigo|blue|purple|teal|pink|orange|yellow|mint|cyan|brown|gray)\\b"
+    match_kinds: identifier
+    message: "Use a DesignSystem semantic color token, not a raw system Color — this is exactly the two-indigo-accent bug (AccentColor #6366F1 vs system .indigo ≈#5856D6) that made chat bubbles a visibly different color from the tab bar."
+    severity: error
+
+  no_hardcoded_hex_color:
+    included: ".*\\.swift"
+    excluded: ".*/DesignSystem/.*|.*/Models/.*|.*SeedData.*"
+    regex: "Color\\(hex:\\s*\"#"
+    message: "Hardcoded hex colors belong in DesignSystem tokens, not scattered across features."
+    severity: error
+
+  no_magic_corner_radius:
+    included: ".*\\.swift"
+    # CobuxWidgets isn't in 2.0.0's Phase 2 design-system scope yet — bringing the
+    # widget/Live Activity surface onto shared tokens is real future work, not
+    # something to silently fold into this pass.
+    excluded: ".*/DesignSystem/.*|CobuxWidgets/.*"
+    regex: "cornerRadius:\\s*\\d"
+    message: "Use a DesignSystem radius token (.radius.card / .radius.chip / etc), not a magic number — 6 different literal radii (7/12/14/16/18/20) drifted in across the app before 2.0.0."
+    severity: error
+
+  no_nested_navigation_stack:
+    included: "Cobux/Features/.*\\.swift"
+    excluded: "Cobux/Features/(Library|Wisdom|Chat|Quiz|More)/(LibraryView|WisdomGraphView|ChatView|QuizHomeView|MoreView)\\.swift"
+    regex: "NavigationStack\\s*\\("
+    message: "Only the 5 tab-root views may declare a NavigationStack. A pushed destination (Settings/Reminders/Goodreads) declaring its own produces a doubled nav bar — this is the exact bug commit c7501de introduced by re-parenting former tab roots without removing their stacks."
+    severity: error
+
+  no_negative_offset_bleed_hack:
+    included: ".*\\.swift"
+    regex: "\\.(padding|offset)\\(\\s*-\\d"
+    message: "No negative-margin/negative-offset bleed math anywhere in SwiftUI layout — full-bleed content uses .ignoresSafeArea() only, overlays are ZStack siblings with normal non-negative padding. This class of bug (an unstated relationship between two numbers in two places) is what broke the Phase 0b mockup's hero-text inset twice."
+    severity: warning
+
+  no_bare_padding:
+    included: "Cobux/Features/.*\\.swift"
+    regex: "\\.padding\\(\\)(?!\\s*\\.)"
+    message: "Prefer an explicit DesignSystem spacing token over bare .padding() so spacing stays on the type scale instead of drifting per call site."
+    severity: warning

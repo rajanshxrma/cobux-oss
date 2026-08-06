@@ -1,0 +1,162 @@
+name: Cobux
+options:
+  bundleIdPrefix: com.rajansharma
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "27.0"
+  generateEmptyDirectories: true
+  groupSortPosition: top
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    TARGETED_DEVICE_FAMILY: "1"
+    MARKETING_VERSION: "2.0.1"
+    CURRENT_PROJECT_VERSION: "2"
+    DEVELOPMENT_TEAM: "58Q76NHADF"
+    CODE_SIGN_STYLE: "Automatic"
+
+packages:
+  CobuxCore:
+    path: CobuxCore
+
+schemes:
+  Cobux:
+    build:
+      targets:
+        Cobux: all
+        CobuxWidgets: all
+        CobuxShareExtension: all
+        CobuxTests: [test]
+    run:
+      config: Debug
+    test:
+      targets:
+        - CobuxTests
+
+targets:
+  Cobux:
+    type: application
+    platform: iOS
+    sources:
+      - path: Cobux
+        excludes:
+          - "**/.DS_Store"
+          - "Resources/SeedBooks/**"
+      # A real folder reference (blue folder), not a group -- this is what makes Xcode's
+      # "Copy Bundle Resources" step preserve the SeedBooks/ subdirectory in the built app
+      # instead of flattening its contents to the bundle root. Without `type: folder`, every
+      # .json file lands loose at Bundle.main's top level and SeedLoader's
+      # `subdirectory: "SeedBooks"` lookup finds nothing -- confirmed 2026-08-05 by inspecting
+      # a real built .app: all 15 seed JSONs were sitting at the bundle root with no SeedBooks
+      # directory at all, so every JSON-authored book (including all 8 added post-1.2.0)
+      # silently failed to seed on real devices.
+      - path: Cobux/Resources/SeedBooks
+        type: folder
+    info:
+      path: Generated/Cobux-Info.plist
+      properties:
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UILaunchScreen: {}
+        UIApplicationSupportsIndirectInputEvents: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIRequiresFullScreen: true
+        CFBundleDisplayName: "Cobux"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSMicrophoneUsageDescription: "Cobux uses your microphone in Voice Mode so you can talk to your book wisdom hands-free."
+        NSSpeechRecognitionUsageDescription: "Cobux uses speech recognition in Voice Mode to turn what you say into a question for Cobux AI."
+        # Cobux only ever makes standard HTTPS calls (to the Anthropic API) —
+        # exempt from export compliance. Declaring this here skips the
+        # compliance question on every future TestFlight/App Store upload.
+        ITSAppUsesNonExemptEncryption: false
+        CFBundleURLTypes:
+          - CFBundleTypeRole: Editor
+            CFBundleURLName: com.rajansharma.Cobux
+            CFBundleURLSchemes:
+              - cobux
+        NSSupportsLiveActivities: true
+    settings:
+      base:
+        SWIFT_EMIT_LOC_STRINGS: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        CODE_SIGN_ENTITLEMENTS: Cobux/Cobux.entitlements
+    dependencies:
+      - target: CobuxWidgets
+        embed: true
+      - target: CobuxShareExtension
+        embed: true
+      - package: CobuxCore
+
+  CobuxWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: CobuxWidgets
+        excludes:
+          - "**/.DS_Store"
+      - path: Cobux/Models
+      - path: Cobux/Extensions/Color+Hex.swift
+      - path: Cobux/Services/StreakTracker.swift
+      - path: Cobux/DesignSystem/CobuxColor.swift
+    info:
+      path: Generated/CobuxWidgets-Info.plist
+      properties:
+        CFBundleDisplayName: "Cobux Widgets"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        SWIFT_EMIT_LOC_STRINGS: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.rajansharma.Cobux.CobuxWidgets
+        CODE_SIGN_ENTITLEMENTS: CobuxWidgets/CobuxWidgets.entitlements
+        SKIP_INSTALL: YES
+
+  CobuxShareExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: CobuxShareExtension
+        excludes:
+          - "**/.DS_Store"
+      - path: Cobux/Models
+      - path: Cobux/Services/SpotlightIndexer.swift
+      - path: Cobux/Services/CrossProcessSync.swift
+      - path: Cobux/DesignSystem/CobuxColor.swift
+      - path: Cobux/Extensions/Color+Hex.swift
+    info:
+      path: Generated/CobuxShareExtension-Info.plist
+      properties:
+        CFBundleDisplayName: "Save to Cobux"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).ShareViewController"
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsText: true
+    settings:
+      base:
+        SWIFT_EMIT_LOC_STRINGS: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.rajansharma.Cobux.ShareExtension
+        CODE_SIGN_ENTITLEMENTS: CobuxShareExtension/CobuxShareExtension.entitlements
+        SKIP_INSTALL: YES
+
+  CobuxTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: Cobux
+      - package: CobuxCore

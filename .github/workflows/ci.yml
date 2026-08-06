@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'feature/**']
+  pull_request:
+    branches: [main]
+
+# macOS-hosted runners bill at a 10x multiplier vs. Linux — a rapid string of
+# pushes to the same branch (a real pattern during active AFK work) used to
+# let every superseded run keep burning minutes to completion instead of
+# being superseded. This cancels any in-progress run for the same ref the
+# moment a newer push arrives, since only the latest push's result matters.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned rather than `brew install xcodegen` -- an unpinned install
+      # floats to whatever Homebrew's formula currently points at, which
+      # silently drifted past the version used to generate the committed
+      # Cobux.xcodeproj and made the drift check below fail on every push
+      # regardless of the actual change (confirmed: XcodeGen's own project-
+      # generation logic, not just its version string, changed target
+      # ordering between versions). Bump this deliberately -- alongside
+      # regenerating and committing Cobux.xcodeproj with the SAME version
+      # locally -- not as a side effect of Homebrew updating.
+      - name: Install XcodeGen (pinned to 2.45.4)
+        run: |
+          curl -sL -o xcodegen.zip https://github.com/yonaskolb/XcodeGen/releases/download/2.45.4/xcodegen.zip
+          unzip -q xcodegen.zip
+          echo "$PWD/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: Regenerate Xcode project
+        run: xcodegen generate
+
+      # Cobux.xcodeproj is committed alongside project.yml — if xcodegen output
+      # differs from what's checked in, project.yml and the .xcodeproj have silently
+      # drifted apart. Fail loudly rather than let that compound.
+      - name: Verify project.yml and Cobux.xcodeproj haven't drifted
+        run: git diff --exit-code Cobux.xcodeproj
+
+      - name: Run CobuxCore tests (pure logic, host-only, no simulator)
+        run: swift test --package-path CobuxCore
+
+      - name: Install SwiftLint
+        run: brew install swiftlint
+
+      # NOT --strict yet: the drift-detection custom rules correctly flag real
+      # pre-existing violations (Color.indigo, magic corner radii, bare padding)
+      # across files Phase 2 hasn't migrated to the design system yet. Escalate
+      # this to --strict once that migration lands — until then this step is
+      # informational, not blocking, so Phase 0/1 work isn't held hostage to a
+      # Phase 2 deliverable.
+      - name: SwiftLint (informational until Phase 2 design-system migration)
+        run: swiftlint lint || true
+
+      # CODE_SIGNING_ALLOWED=NO because CI has no Apple Developer credentials
+      # (and shouldn't -- that's a real credential, not something to hand a
+      # CI runner) and doesn't need any: this step exists to catch compile
+      # errors, not to produce an installable binary. Rajan's own local
+      # archive/upload (Phase 6, still gated on his release Xcode install)
+      # is the actual signed build and is untouched by this.
+      - name: Build app + widget (Debug, generic iOS device — no simulator)
+        run: |
+          xcodebuild -project Cobux.xcodeproj -scheme Cobux \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO build
+
+      - name: Run app test target (headless simulator runtime — never opens Simulator.app)
+        run: |
+          xcodebuild -project Cobux.xcodeproj -scheme Cobux \
+            -destination 'platform=iOS Simulator,name=iPhone 16' test

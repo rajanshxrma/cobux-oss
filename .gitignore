@@ -1,0 +1,40 @@
+# Xcode
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+xcuserdata/
+*.xccheckout
+*.moved-aside
+DerivedData/
+build/
+
+# Swift Package Manager
+.build/
+Packages/
+Package.pins
+Package.resolved
+
+# CocoaPods
+Pods/
+
+# macOS
+.DS_Store
+*.swp
+*~.nib
+
+# Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# Misc
+*.ipa
+*.dSYM.zip
+*.dSYM
+*.hmap
+*.pch
+*.pyc
+__pycache__/
+
+# Archive/export artifacts (large build output, not source)
+*.xcarchive
+ExportedApp/
