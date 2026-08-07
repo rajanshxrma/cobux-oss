@@ -32,6 +32,14 @@ enum BuildInfo {
     static let changelog: [ChangelogEntry] = [
         ChangelogEntry(
             version: "2.1.0",
+            build: "5",
+            date: "Aug 6, 2026",
+            changes: [
+                "Added Figure ID, a new quiz mode that shows a real diagram or clinical photo from the medical textbooks and asks you to identify it — 1,597 real figures across Robbins and Microbiology, each captioned and mapped to its real chapter"
+            ]
+        ),
+        ChangelogEntry(
+            version: "2.1.0",
             build: "4",
             date: "Aug 6, 2026",
             changes: [
