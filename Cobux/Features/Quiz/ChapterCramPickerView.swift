@@ -39,34 +39,21 @@ struct ChapterCramPickerView: View {
 
     var body: some View {
         NavigationStack {
-            List(filteredRows) { row in
-                Button {
-                    onSelect(row.chapter)
-                } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(row.chapter.title)
-                            .font(.subheadline)
-                            .foregroundStyle(.primary)
-                        Text("\(row.bookTitle) · \(row.chapter.quizQuestions.count) question\(row.chapter.quizQuestions.count == 1 ? "" : "s")")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .listRowBackground(Color.cobuxSurface2)
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .background(Color.cobuxBackground)
-            .overlay {
-                if allRows.isEmpty {
-                    CobuxEmptyStateView(
-                        icon: "text.book.closed",
-                        title: "No chapters ready yet",
-                        message: "Quiz a chapter at least once from its book to make it available here."
-                    )
+            Group {
+                if SeedingStatus.shared.isSeeding {
+                    // Same seed-merge guard as `BookCard`/`BookDetailView`/`QuizHomeView` --
+                    // `allRows` faults every book's `chapters` and each chapter's
+                    // `quizQuestions` relationship synchronously in `body`. Landing
+                    // that fault mid seed/upgrade merge is the confirmed Build-5
+                    // crash class. Reached only through `QuizHomeView`'s own gated
+                    // list today, but that's a fragile guarantee to lean on from
+                    // here -- a local guard costs nothing.
+                    ProgressView("Syncing your library…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    pickerList
                 }
             }
-            .searchable(text: $searchText, prompt: "Find a chapter")
             .navigationTitle("Chapter Cram")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -75,5 +62,36 @@ struct ChapterCramPickerView: View {
                 }
             }
         }
+    }
+
+    private var pickerList: some View {
+        List(filteredRows) { row in
+            Button {
+                onSelect(row.chapter)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.chapter.title)
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                    Text("\(row.bookTitle) · \(row.chapter.quizQuestions.count) question\(row.chapter.quizQuestions.count == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .listRowBackground(Color.cobuxSurface2)
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Color.cobuxBackground)
+        .overlay {
+            if allRows.isEmpty {
+                CobuxEmptyStateView(
+                    icon: "text.book.closed",
+                    title: "No chapters ready yet",
+                    message: "Quiz a chapter at least once from its book to make it available here."
+                )
+            }
+        }
+        .searchable(text: $searchText, prompt: "Find a chapter")
     }
 }

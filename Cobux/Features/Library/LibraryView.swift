@@ -24,7 +24,18 @@ struct LibraryView: View {
     }
 
     var semanticHighlights: [Highlight] {
-        guard !searchText.isEmpty else { return [] }
+        // Same seed-merge guard as `BookDetailView`/`BookCard` (see BookCard's
+        // doc comment for the confirmed Build-5 crash class): `semanticSearch`
+        // does `books.flatMap(\.highlights)`, faulting every book's
+        // `highlights` relationship synchronously. Unlike the grid (which
+        // defers its own relationship read to `BookCard`'s `.task`), this
+        // runs straight from `body` the moment `searchText` is non-empty --
+        // and typing into Search is entirely possible while a first-run or
+        // content-upgrade seed merge is still in flight in the background.
+        // Reading `SeedingStatus.shared.isSeeding` here (an `@Observable`
+        // property) makes this view re-render and retry the instant seeding
+        // finishes, same as `BookDetailView.body` reading it directly.
+        guard !searchText.isEmpty, !SeedingStatus.shared.isSeeding else { return [] }
         return SearchService.semanticSearch(query: searchText, books: books, topK: 10)
     }
 

@@ -41,8 +41,13 @@ final class Highlight {
     var embedding: [Float]? {
         get {
             guard let embeddingData else { return nil }
+            // `loadUnaligned`, not `bindMemory` -- `bindMemory` requires the
+            // buffer to already be 4-byte aligned for `Float`, which a `Data`
+            // slice handed back from SwiftData's own storage isn't
+            // guaranteed to be. `loadUnaligned` makes no such assumption.
             return embeddingData.withUnsafeBytes { rawBuffer in
-                Array(rawBuffer.bindMemory(to: Float.self))
+                let count = rawBuffer.count / MemoryLayout<Float>.size
+                return (0..<count).map { rawBuffer.loadUnaligned(fromByteOffset: $0 * MemoryLayout<Float>.size, as: Float.self) }
             }
         }
         set {

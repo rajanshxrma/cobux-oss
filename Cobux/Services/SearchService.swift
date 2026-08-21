@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 import CobuxCore
 
 struct SearchService {
@@ -20,6 +21,69 @@ struct SearchService {
     /// detail, lower if replies feel unfocused.
     static let chunkTopK = 24
 
+    /// Tokens too short or too common to be evidence that a query is talking
+    /// about a particular book. Middle initials ("B."), honorifics, and
+    /// articles all land here — they're exactly the parts of a stored
+    /// title/author string that a person never types.
+    private static let matchStopwords: Set<String> = [
+        "the", "and", "for", "with", "from", "that", "this", "you", "your",
+        "his", "her", "its", "was", "are", "how", "what", "why", "who", "does",
+        "did", "can", "would", "should", "could", "about", "into", "out",
+        "dr", "mr", "mrs", "ms", "jr", "sr", "phd", "md", "book", "books", "say", "says"
+    ]
+
+    /// Lowercased, punctuation-stripped, stopword-filtered word set. Tokens
+    /// under 3 characters are dropped, which is what makes a stored middle
+    /// initial ("Jordan B. Peterson" → {jordan, peterson}) stop being a
+    /// requirement the user has to type.
+    static func significantTokens(_ text: String) -> Set<String> {
+        Set(
+            text.lowercased()
+                .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .filter { $0.count >= 3 && !matchStopwords.contains($0) }
+        )
+    }
+
+    /// Whether `queryTokens` names `candidate` (a book title or author).
+    ///
+    /// Replaces `queryLower.contains(candidate.lowercased())`, a literal
+    /// substring test that silently failed for any stored name carrying a
+    /// middle initial, suffix, or punctuation the user doesn't type. Both
+    /// seeded Jordan Peterson books store `"Jordan B. Peterson"`, so the
+    /// natural phrasing "what would Jordan Peterson say" did NOT contain
+    /// `"jordan b. peterson"` and matched nothing — the confirmed cause of
+    /// chat claiming it only had chapter titles for those books. Matching on
+    /// significant tokens instead is resilient to capitalization, punctuation,
+    /// possessives ("Peterson's" → {peterson}), and word order.
+    ///
+    /// Every significant token must be present, so "Jordan Peterson" doesn't
+    /// pull in an unrelated book by a different Jordan. A candidate with no
+    /// significant tokens at all (a two-letter title like "It") returns false
+    /// rather than matching everything — the old substring test would have
+    /// matched nearly every query for such a title.
+    static func queryMentions(_ candidate: String, queryTokens: Set<String>) -> Bool {
+        let tokens = significantTokens(candidate)
+        guard !tokens.isEmpty else { return false }
+        return tokens.isSubset(of: queryTokens)
+    }
+
+    /// Whether a highlight carries direct textual evidence for this query.
+    ///
+    /// Same class of fix as `queryMentions`: the old test asked whether a
+    /// highlight contained the ENTIRE query as a substring, which a
+    /// natural-language question essentially never satisfies — so the
+    /// "safety net" that was supposed to catch books with missing embeddings
+    /// almost never fired. Now a highlight qualifies when it shares a
+    /// reasonably distinctive word (4+ characters) with the query.
+    static func highlightMatches(_ highlight: Highlight, queryTokens: Set<String>) -> Bool {
+        let distinctive = queryTokens.filter { $0.count >= 4 }
+        guard !distinctive.isEmpty else { return false }
+        let haystack = significantTokens(highlight.text).union(
+            highlight.tags.flatMap { significantTokens($0) }
+        )
+        return !haystack.isDisjoint(with: distinctive)
+    }
+
     /// Builds the library context for the system prompt and reports which
     /// books were included, so replies can cite their sources.
     static func buildContext(query: String, books: [Book]) -> (context: String, bookTitles: [String]) {
@@ -27,11 +91,11 @@ struct SearchService {
             return ("No books in library yet.", [])
         }
 
-        let queryLower = query.lowercased()
+        let queryTokens = significantTokens(query)
 
         let matchedBooks = books.filter { book in
-            queryLower.contains(book.title.lowercased()) ||
-            queryLower.contains(book.author.lowercased())
+            queryMentions(book.title, queryTokens: queryTokens) ||
+            queryMentions(book.author, queryTokens: queryTokens)
         }
 
         // Fold in books surfaced purely by semantic content match (not just
@@ -66,8 +130,7 @@ struct SearchService {
         if Set(semanticBooks.map(\.id)).count < books.count {
             for book in books where !unionBooks.contains(where: { $0.id == book.id }) {
                 let hasKeywordHit = book.highlights.contains { highlight in
-                    highlight.text.lowercased().contains(queryLower) ||
-                    highlight.tags.contains { $0.lowercased().contains(queryLower) }
+                    highlightMatches(highlight, queryTokens: queryTokens)
                 }
                 if hasKeywordHit {
                     unionBooks.append(book)
@@ -98,8 +161,7 @@ struct SearchService {
                 let hasChunk = book.highlights.contains { chunkedHighlightIDs.contains($0.id) }
                 guard !hasChunk else { continue }
                 let keywordMatches = book.highlights.filter { highlight in
-                    highlight.text.lowercased().contains(queryLower) ||
-                    highlight.tags.contains { $0.lowercased().contains(queryLower) }
+                    highlightMatches(highlight, queryTokens: queryTokens)
                 }
                 for highlight in keywordMatches.prefix(chunkTopK) {
                     chunkedHighlightIDs.insert(highlight.id)
@@ -193,7 +255,23 @@ struct SearchService {
         // `relevantBooks`) also means citations stay empty for a vague query
         // that fell back to the whole library, same as before.
         let citedTitles = unionBooks.filter { referencedBookIDs.contains($0.id) }.map(\.title)
-        return (context, citedTitles)
+
+        // `dynamicContextCharBudget` (declared just below) was introduced
+        // specifically because the `relevantBooks = books` fallback above can
+        // full-dump every small book's highlights on a vague/unmatched query --
+        // but it was only ever wired into `buildSplitContext`/
+        // `buildSplitContextForBook`. This function feeds three real,
+        // uncapped call sites (Symposium mode, Decision Consultation,
+        // `AskCobuxIntent`/Siri), where the SAME fallback was measured at up
+        // to ~850k characters on a real library -- a single Siri "Ask Cobux"
+        // on a vague question could cost $1.70-2.50 in one call at Sonnet
+        // rates, with no ceiling at all. Same truncation pattern already used
+        // in `buildSplitContextForBook` below.
+        let truncatedContext = context.count > dynamicContextCharBudget
+            ? String(context.prefix(dynamicContextCharBudget)) + "\n\n(Additional library content omitted — ask about a specific book for more detail.)"
+            : context
+
+        return (truncatedContext, citedTitles)
     }
 
     /// Hard ceiling, in characters, on the DYNAMIC (uncached) section of a
@@ -264,7 +342,13 @@ struct SearchService {
     /// — the highest-volume, most cache-sensitive paths ("repeated questions
     /// in one study session"). Other one-shot templates (Symposium, Decision
     /// Consultation, Ask Intent) keep using `buildContext` above unchanged.
-    static func buildSplitContext(query: String, books: [Book]) -> (stableContext: String, dynamicContext: String, bookTitles: [String]) {
+    static func buildSplitContext(
+        query: String,
+        books: [Book],
+        personalWritingEntries: [PersonalWritingEntry] = [],
+        includePersonalWriting: Bool = false,
+        useRealNamesInLifeExamples: Bool = false
+    ) -> (stableContext: String, dynamicContext: String, bookTitles: [String]) {
         guard !books.isEmpty else {
             return ("No books in library yet.", "", [])
         }
@@ -281,11 +365,11 @@ struct SearchService {
             stable += "\n"
         }
 
-        let queryLower = query.lowercased()
+        let queryTokens = significantTokens(query)
 
         let matchedBooks = sortedBooks.filter { book in
-            queryLower.contains(book.title.lowercased()) ||
-            queryLower.contains(book.author.lowercased())
+            queryMentions(book.title, queryTokens: queryTokens) ||
+            queryMentions(book.author, queryTokens: queryTokens)
         }
 
         let semanticHits = semanticSearch(query: query, books: sortedBooks, topK: 12)
@@ -303,8 +387,7 @@ struct SearchService {
         if Set(semanticBooks.map(\.id)).count < sortedBooks.count {
             for book in sortedBooks where !unionBooks.contains(where: { $0.id == book.id }) {
                 let hasKeywordHit = book.highlights.contains { highlight in
-                    highlight.text.lowercased().contains(queryLower) ||
-                    highlight.tags.contains { $0.lowercased().contains(queryLower) }
+                    highlightMatches(highlight, queryTokens: queryTokens)
                 }
                 if hasKeywordHit {
                     unionBooks.append(book)
@@ -317,8 +400,19 @@ struct SearchService {
         // context — `dynamicContextCharBudget` below, not this fallback
         // itself, is what now keeps that safe; it used to mean an unbounded
         // full-highlight dump across every book on exactly this path.
-        let relevantBooks = (unionBooks.isEmpty ? sortedBooks : unionBooks)
-            .sorted { $0.id.uuidString < $1.id.uuidString }
+        //
+        // `unionBooks`' own insertion order IS a relevance ranking — books the
+        // query named outright, then semantic hits, then keyword-fallback
+        // hits — and it is deliberately preserved here. Re-sorting this by
+        // `id` (what this line used to do) threw that ranking away and left
+        // the per-book budget loop below consuming books in arbitrary UUID
+        // order, so on a broad query the book the user actually *named* could
+        // be the one truncated out while an incidental keyword match got the
+        // budget. Ordering here is a priority decision, not a caching one:
+        // this is the DYNAMIC section, downstream of the cache breakpoint, so
+        // unlike `stable` above it never has to be byte-stable across turns.
+        // The whole-library fallback keeps its deterministic `id` order.
+        let relevantBooks = unionBooks.isEmpty ? sortedBooks : unionBooks
 
         let largeRelevantBooks = relevantBooks.filter { requiresRetrievalGating($0) }
         var chunkedHighlightIDs: Set<UUID> = []
@@ -333,8 +427,7 @@ struct SearchService {
                 let hasChunk = book.highlights.contains { chunkedHighlightIDs.contains($0.id) }
                 guard !hasChunk else { continue }
                 let keywordMatches = book.highlights.filter { highlight in
-                    highlight.text.lowercased().contains(queryLower) ||
-                    highlight.tags.contains { $0.lowercased().contains(queryLower) }
+                    highlightMatches(highlight, queryTokens: queryTokens)
                 }
                 for highlight in keywordMatches.prefix(chunkTopK) {
                     chunkedHighlightIDs.insert(highlight.id)
@@ -345,6 +438,27 @@ struct SearchService {
         var dynamic = "## Most Relevant Content for This Question\n\n"
         var referencedBookIDs = Set<UUID>()
         var budgetExhausted = false
+
+        // Rajan's own personal writing — an additional, separately-capped,
+        // retrieval-gated pool (see `personalWritingContextBlock`), added
+        // FIRST so it survives on a turn where the library itself is large
+        // enough to exhaust the budget on its own. Never computed at all
+        // when `includePersonalWriting` is false (the caller's privacy
+        // toggle) — no query embedding, no ranking, nothing added to the
+        // prompt. Uses the exact same budget guard shape as the per-book
+        // loop below: an oversized block sets `budgetExhausted` and appends
+        // the same omission notice instead of exceeding the cap.
+        if includePersonalWriting && !personalWritingEntries.isEmpty {
+            let personalBlock = personalWritingContextBlock(query: query, entries: personalWritingEntries, useRealNames: useRealNamesInLifeExamples)
+            if !personalBlock.isEmpty {
+                if dynamic.count + personalBlock.count > dynamicContextCharBudget {
+                    budgetExhausted = true
+                    dynamic += "(Additional library content omitted to stay within this turn's context budget.)\n\n"
+                } else {
+                    dynamic += personalBlock
+                }
+            }
+        }
 
         for book in relevantBooks {
             guard !budgetExhausted else { break }
@@ -453,11 +567,47 @@ struct SearchService {
     /// full highlight set (small books) or its own top-K ranked chunk for
     /// this specific question, with a keyword fallback if ranking comes up
     /// empty — same safety net as `buildSplitContext`, just scoped to one
-    /// book instead of applied across the library. Citation is trivial: a
-    /// book-specific thread's replies are always about that one book, so
-    /// there's nothing to disambiguate — callers shouldn't show a
-    /// "referenced books" chip for this thread at all.
-    static func buildSplitContextForBook(query: String, book: Book) -> (stableContext: String, dynamicContext: String) {
+    /// book instead of applied across the library.
+    ///
+    /// A book-scoped thread is a DEFAULT FRAME, not a capability restriction.
+    /// It used to be the latter, in two reinforcing ways: the prompt template
+    /// told the model to refuse anything off-book and suggest switching
+    /// threads, and this function passed exactly one book, so the model had
+    /// no other book's content available even if it wanted to answer. Asked
+    /// "what would Jordan Peterson say across his two books?" inside one of
+    /// those books' threads, it correctly reported it couldn't — a hard
+    /// content wall, not a soft bias. Per Rajan: every chat surface must be
+    /// able to do everything the general thread can; the only difference
+    /// between thread types should be what each one ASSUMES the question is
+    /// about.
+    ///
+    /// So `libraryBooks` (the whole library) is now accepted and consulted —
+    /// but deliberately only through the DYNAMIC suffix, never the stable
+    /// prefix. That split is what preserves this function's entire reason for
+    /// existing. The cached prefix stays exactly what it always was, this
+    /// book's own chapter index: byte-identical turn over turn, a strict
+    /// subset of the general thread's stable block, and unaffected by library
+    /// size. Prompt caching is a strict prefix match, so widening the prefix
+    /// to the whole library would have reintroduced precisely the unbounded
+    /// cache-cold prefill `buildSplitContext`'s doc comment describes. Instead
+    /// the cross-book material rides in the uncached suffix, admitted only
+    /// when the query gives explicit evidence it reaches outside this book,
+    /// and separately capped by `crossBookContextCharBudget` so a book-scoped
+    /// turn can never grow to a general-thread-sized turn (see
+    /// `crossBookContextBlock`).
+    ///
+    /// Citation is no longer trivially "always this one book": a reply can now
+    /// genuinely draw on a second book, so the caller shows a chip exactly
+    /// when the model declares one other than this thread's own book (see
+    /// `ChatView.completeReveal`).
+    static func buildSplitContextForBook(
+        query: String,
+        book: Book,
+        libraryBooks: [Book] = [],
+        personalWritingEntries: [PersonalWritingEntry] = [],
+        includePersonalWriting: Bool = false,
+        useRealNamesInLifeExamples: Bool = false
+    ) -> (stableContext: String, dynamicContext: String) {
         var stable = "## Chapter Index — \"\(book.title)\" by \(book.author)\n\n"
         if !book.chapters.isEmpty {
             let sortedChapters = book.chapters.sorted { ($0.chapterNumber ?? 0) < ($1.chapterNumber ?? 0) }
@@ -473,10 +623,9 @@ struct SearchService {
             let rankedChunks = semanticSearch(query: query, books: [book], topK: chunkTopK)
             highlightsToShow = rankedChunks
             if highlightsToShow.isEmpty {
-                let queryLower = query.lowercased()
+                let queryTokens = significantTokens(query)
                 highlightsToShow = Array(book.highlights.filter { highlight in
-                    highlight.text.lowercased().contains(queryLower) ||
-                    highlight.tags.contains { $0.lowercased().contains(queryLower) }
+                    highlightMatches(highlight, queryTokens: queryTokens)
                 }.prefix(chunkTopK))
             }
         } else {
@@ -484,6 +633,18 @@ struct SearchService {
         }
 
         var dynamic = "## Most Relevant Content for This Question\n\n"
+
+        // Same additional, separately-capped, retrieval-gated personal-writing
+        // pool as `buildSplitContext` above — never computed when
+        // `includePersonalWriting` is false. The final `dynamicContextCharBudget`
+        // truncation below (this function's existing single-shot guard, unlike
+        // `buildSplitContext`'s per-block loop) still applies to the whole
+        // `dynamic` string including this block, so the budget ceiling holds
+        // either way.
+        if includePersonalWriting && !personalWritingEntries.isEmpty {
+            dynamic += personalWritingContextBlock(query: query, entries: personalWritingEntries, useRealNames: useRealNamesInLifeExamples)
+        }
+
         if !highlightsToShow.isEmpty {
             dynamic += "### Highlights:\n"
             for highlight in highlightsToShow {
@@ -523,12 +684,135 @@ struct SearchService {
             dynamic += "\n"
         }
 
+        // The rest of the library, appended LAST and only when this question
+        // actually reaches outside this book — so the focus book's own
+        // material always has first claim on the budget, and an ordinary
+        // in-book question produces byte-for-byte the same prompt it did
+        // before this capability existed.
+        dynamic += crossBookContextBlock(
+            query: query,
+            otherBooks: libraryBooks.filter { $0.id != book.id }
+        )
+
         if dynamic.count > dynamicContextCharBudget {
             dynamic = String(dynamic.prefix(dynamicContextCharBudget))
                 + "\n\n(Additional content omitted to stay within this turn's context budget.)\n"
         }
 
         return (stable, dynamic)
+    }
+
+    /// Hard ceiling on the cross-book section of a BOOK-SCOPED turn, well
+    /// under `dynamicContextCharBudget` (which still bounds the turn overall).
+    /// The point of a book-scoped thread is a smaller, cheaper, more focused
+    /// context than the general thread; letting the "also check the rest of
+    /// the library" section grow to general-thread size would erase that
+    /// difference and make the thread distinction cosmetic.
+    static let crossBookContextCharBudget = 30_000
+
+    /// Per-book cap inside the cross-book section — deliberately tighter than
+    /// `maxHighlightsPerBookInDynamicContext`, since this is supporting
+    /// material for a thread that is still primarily about a different book.
+    static let maxHighlightsPerCrossBook = 12
+
+    /// The material a book-scoped thread pulls in from the REST of the
+    /// library, or an empty string when the question doesn't reach outside
+    /// this thread's book.
+    ///
+    /// Admission is by explicit textual evidence only — the query names
+    /// another book's title or author (`queryMentions`), or shares a
+    /// distinctive word with one of its highlights (`highlightMatches`) —
+    /// rather than by unconditional semantic reach. That's the deliberate
+    /// difference from `buildSplitContext`, and it is what keeps "book-scoped"
+    /// meaningful: a question with no textual link to any other book produces
+    /// nothing here and costs nothing, so the default framing is preserved
+    /// without ever being enforced as a refusal. Once a book IS admitted, its
+    /// highlights are chosen by exactly the same `semanticSearch`/`Ranker`
+    /// path the general thread uses (with the same keyword safety net for
+    /// books whose embeddings haven't backfilled yet), so nothing about
+    /// relevance ranking is reimplemented here.
+    static func crossBookContextBlock(query: String, otherBooks: [Book]) -> String {
+        guard !otherBooks.isEmpty else { return "" }
+        let queryTokens = significantTokens(query)
+        guard !queryTokens.isEmpty else { return "" }
+
+        // Named books first, then books linked only by shared vocabulary —
+        // same relevance ordering `buildSplitContext` relies on, so if the
+        // budget below runs out it's never the explicitly-named book that
+        // gets dropped.
+        //
+        // WHY the admission reason is carried forward rather than discarded:
+        // a book the user NAMED usually shares no vocabulary with its own
+        // highlights. "What would Jordan Peterson say about this?" has exactly
+        // two distinctive words, and neither appears in the text of a Peterson
+        // highlight — so a name-admitted book whose embeddings haven't
+        // backfilled would pass admission and then contribute nothing, leaving
+        // the model to answer about a book it was handed no content from.
+        // That is Rajan's original failure wearing a different hat, so a named
+        // book falls back to its own opening highlights rather than to a
+        // keyword filter it can never satisfy.
+        var admitted: [(book: Book, wasNamed: Bool)] = otherBooks
+            .filter { queryMentions($0.title, queryTokens: queryTokens) || queryMentions($0.author, queryTokens: queryTokens) }
+            .map { ($0, true) }
+        for candidate in otherBooks where !admitted.contains(where: { $0.book.id == candidate.id }) {
+            if candidate.highlights.contains(where: { highlightMatches($0, queryTokens: queryTokens) }) {
+                admitted.append((candidate, false))
+            }
+        }
+        guard !admitted.isEmpty else { return "" }
+
+        let rankedIDs = Set(semanticSearch(query: query, books: admitted.map(\.book), topK: chunkTopK).map(\.id))
+
+        var block = "## Other Books In This Library (relevant to this question)\n\n"
+        block += "This question appears to reach beyond this thread's book, so relevant material from the rest of the user's library is included below. Name the book each point comes from when you use it.\n\n"
+
+        var used = false
+        for (candidate, wasNamed) in admitted {
+            var highlights = candidate.highlights.filter { rankedIDs.contains($0.id) }
+            if highlights.isEmpty {
+                // Same safety net as everywhere else in this file: an admitted
+                // book can contribute zero ranked highlights when its
+                // embeddings haven't backfilled. A keyword-admitted book falls
+                // back to the highlights that admitted it; a NAMED book falls
+                // back to its opening highlights, because the words that
+                // admitted it were the author's or the title's and will not
+                // appear in its own prose (see the admission comment above).
+                highlights = wasNamed
+                    ? candidate.highlights
+                    : candidate.highlights.filter { highlightMatches($0, queryTokens: queryTokens) }
+            }
+            highlights = Array(highlights.prefix(maxHighlightsPerCrossBook))
+            guard !highlights.isEmpty else { continue }
+
+            var bookBlock = "### \"\(candidate.title)\" by \(candidate.author)\n"
+            for highlight in highlights {
+                var locationParts: [String] = []
+                if let chapter = highlight.chapter {
+                    locationParts.append("Chapter: \(chapter)")
+                }
+                if let page = highlight.page {
+                    locationParts.append("Page: \(page)")
+                }
+                let locationString = locationParts.isEmpty ? "" : " (\(locationParts.joined(separator: ", ")))"
+                bookBlock += "- \"\(highlight.text)\"\(locationString)\n"
+                if let note = highlight.personalNote, !note.isEmpty {
+                    bookBlock += "  Personal note: \(note)\n"
+                }
+            }
+            bookBlock += "\n"
+
+            if block.count + bookBlock.count > crossBookContextCharBudget {
+                block += "(Further cross-book material omitted to keep this thread focused.)\n\n"
+                break
+            }
+            block += bookBlock
+            used = true
+        }
+
+        // Every admitted book turned out to have nothing showable — emit
+        // nothing at all rather than a header promising content that isn't
+        // there, which would invite the model to invent it.
+        return used ? block : ""
     }
 
     /// Ranks highlights across all books by cosine similarity between the
@@ -552,6 +836,155 @@ struct SearchService {
     /// one book can contribute, and uses a threshold relative to the pool's
     /// own best score instead of an absolute floor that doesn't mean anything
     /// for this embedding model.
+    /// Finds a `Figure` relevant to `query`, scoped to books the reply already
+    /// cited — a completely separate, ADDITIVE lookup that runs once per
+    /// completed chat turn, AFTER a reply has already streamed back and been
+    /// finalized (see `ChatView.completeReveal`). Never touches `buildContext`/
+    /// `buildSplitContext`, the stable/dynamic cache split, or citation
+    /// parsing — those pipelines are unaware this function exists.
+    ///
+    /// Deliberately cheap: reuses the existing ranked `semanticSearch` (no
+    /// reimplemented ranking), then a single scoped `FetchDescriptor` fetch —
+    /// not a full table scan — mirroring the exact safe by-id-predicate
+    /// pattern already used in `BookCard.loadHighlightCount()`.
+    static func relevantFigure(query: String, citedBooks: [Book], modelContext: ModelContext) -> Figure? {
+        guard !citedBooks.isEmpty else { return nil }
+
+        // Reuse the same ranked retrieval as everything else in this file.
+        // A `Highlight`'s real `chapterRef` relationship (NOT the plain
+        // `chapter: String?` display field) is the stable anchor back to a
+        // `Chapter` — and therefore to any `Figure`s filed under it.
+        let rankedHighlights = semanticSearch(query: query, books: citedBooks, topK: 5)
+        for highlight in rankedHighlights {
+            guard let chapterID = highlight.chapterRef?.id else { continue }
+            var descriptor = FetchDescriptor<Figure>(
+                predicate: #Predicate<Figure> { $0.chapter?.id == chapterID }
+            )
+            descriptor.fetchLimit = 1
+            if let figure = try? modelContext.fetch(descriptor).first {
+                return figure
+            }
+        }
+
+        // Safety-net fallback, matching this file's own keyword-fallback style
+        // elsewhere (see `buildContext`'s comments): no ranked highlight's
+        // chapter turned up a figure, so fall back to a plain caption keyword
+        // match against the cited books' own figures (`Book.figures` is
+        // already the real inverse relationship — no separate fetch needed).
+        let words = query
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count > 3 }
+        guard !words.isEmpty else { return nil }
+
+        for book in citedBooks {
+            for figure in book.figures {
+                let captionLower = figure.caption.lowercased()
+                if words.contains(where: { captionLower.contains($0) }) {
+                    return figure
+                }
+            }
+        }
+
+        return nil
+    }
+
+    /// How many ranked personal-writing entries get injected per chat turn —
+    /// deliberately small (unlike `chunkTopK` for highlights): this is
+    /// supplementary context to Rajan's own past reflections, not the
+    /// library's primary content.
+    static let personalWritingTopK = 3
+
+    /// Per-entry excerpt cap. Personal-writing entries (journal/reflection
+    /// text) can run far longer than a book highlight, so unlike highlights
+    /// (injected in full) each one is truncated to a short excerpt here —
+    /// combined with `personalWritingTopK`, this block can never meaningfully
+    /// threaten `dynamicContextCharBudget` on its own.
+    static let personalWritingExcerptCharLimit = 400
+
+    /// Builds the "Rajan's Own Personal Writing" dynamic-context block for a
+    /// chat turn, or an empty string when nothing is relevant. Callers
+    /// (`buildSplitContext`/`buildSplitContextForBook`) are responsible for
+    /// gating this behind the caller's privacy toggle — this function itself
+    /// makes no such check, so it must never be called when that toggle is
+    /// off.
+    // internal (not private) solely so the anonymization instruction is unit-testable —
+    // the names rule is the privacy core of the life-examples feature and must not
+    // silently regress in a refactor.
+    static func personalWritingContextBlock(query: String, entries: [PersonalWritingEntry], useRealNames: Bool) -> String {
+        let ranked = relevantPersonalWriting(query: query, entries: entries, topK: personalWritingTopK)
+        guard !ranked.isEmpty else { return "" }
+
+        // The life-examples layer: the model may ground an answer in the
+        // user's own lived experience the way it grounds one in a book —
+        // sparingly, and only where the parallel genuinely fits. The names
+        // rule is the privacy core: real names from journals stay private
+        // unless the user has explicitly flipped the Settings toggle, so an
+        // excerpt mentioning a real person surfaces as "a friend" / "someone
+        // he was close to", never the name itself.
+        var block = "## Rajan's Own Personal Writing (relevant excerpts, if any)\n\n"
+        block += "Where one of these excerpts genuinely parallels the question, you may briefly weave it in as a lived example alongside the books (\"something similar shows up in your own journal…\"). Use at most one such example per reply, only when it truly fits — most replies should not need one. "
+        block += useRealNames
+            ? "You may refer to people from these excerpts by the names used there.\n\n"
+            : "NEVER repeat personal names of private individuals from these excerpts — refer to people only by role or relationship (\"a friend\", \"someone you wrote about\"), even if the excerpt names them.\n\n"
+        for entry in ranked {
+            let excerpt = entry.text.count > personalWritingExcerptCharLimit
+                ? String(entry.text.prefix(personalWritingExcerptCharLimit)) + "…"
+                : entry.text
+            block += "- [\(entry.source)] \"\(entry.title)\": \(excerpt)\n"
+        }
+        block += "\n"
+        return block
+    }
+
+    /// Ranks Rajan's own personal-writing entries (imported via
+    /// `PersonalWritingImportService`) against `query`, reusing the exact
+    /// same `Ranker`/cosine-similarity approach `semanticSearch` uses for
+    /// highlights above — no reimplemented ranking logic. `entry.source`
+    /// (the Notes folder it came from) stands in for `Highlight`'s `bookID`
+    /// as `Ranker`'s per-pool grouping key, so no one folder can crowd out
+    /// the others the same way no one book can crowd out another.
+    ///
+    /// Falls back to case-insensitive substring matching on `text`/`title` if
+    /// the query itself can't be embedded, same degrade-gracefully rule as
+    /// `semanticSearch`. Entries without an embedding yet are simply skipped
+    /// in the ranked path, same as an un-embedded highlight.
+    ///
+    /// This is retrieval only — callers (`ChatView`/`ChatPromptBuilder`) are
+    /// responsible for skipping the call entirely when the user's privacy
+    /// toggle is off, not this function.
+    static func relevantPersonalWriting(query: String, entries: [PersonalWritingEntry], topK: Int = 3) -> [PersonalWritingEntry] {
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuery.isEmpty, !entries.isEmpty else { return [] }
+
+        guard let queryVector = EmbeddingService.embed(trimmedQuery) else {
+            let queryLower = trimmedQuery.lowercased()
+            return Array(
+                entries.filter { entry in
+                    entry.text.lowercased().contains(queryLower) ||
+                    entry.title.lowercased().contains(queryLower)
+                }
+                .prefix(topK)
+            )
+        }
+
+        var entriesByID: [String: PersonalWritingEntry] = [:]
+        var items: [RankableItem] = []
+        items.reserveCapacity(entries.count)
+        for entry in entries {
+            guard let vector = entry.embedding else { continue }
+            let idString = entry.id.uuidString
+            entriesByID[idString] = entry
+            items.append(RankableItem(
+                id: idString,
+                bookID: entry.source,
+                rawScore: EmbeddingService.cosineSimilarity(queryVector, vector)
+            ))
+        }
+
+        return Ranker.rank(items: items, topK: topK).compactMap { entriesByID[$0.id] }
+    }
+
     static func semanticSearch(query: String, books: [Book], topK: Int = 8) -> [Highlight] {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedQuery.isEmpty else { return [] }

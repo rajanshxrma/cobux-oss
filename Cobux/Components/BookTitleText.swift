@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// One render site for a book title, replacing five independent ones
+/// One render site for a book title, replacing four independent ones
 /// (`BookDetailView`, `BookCard`, `QuizHomeView`, `LibraryView`'s search
-/// result, `GoodreadsShelfView`) — none of which set `.multilineTextAlignment`,
+/// result) — none of which set `.multilineTextAlignment`,
 /// so a short title (one line) read left-aligned by coincidence while a long
 /// one (e.g. "Robbins & Cotran Pathologic Basis of Disease", which wraps to
 /// 2-3 lines) had its wrapped lines centered against each other by SwiftUI's

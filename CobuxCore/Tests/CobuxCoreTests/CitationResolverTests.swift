@@ -70,4 +70,28 @@ final class CitationResolverTests: XCTestCase {
         XCTAssertFalse(resolved.contains("Essentials of Medical Microbiology"))
         XCTAssertFalse(resolved.contains("Robbins & Cotran Pathologic Basis of Disease"))
     }
+
+    // MARK: Regression — duplicate library titles used to crash EVERY chat reply
+
+    /// `resolve` used to build its lookup with `Dictionary(uniqueKeysWithValues:)`,
+    /// which traps on a duplicate key. A re-entrant seeding race (fixed separately)
+    /// could write two `Book` rows sharing a title, and this function ran on every
+    /// single completed chat reply -- so a device that ever acquired a duplicate
+    /// crashed on every message, permanently, until a book was deleted. This is the
+    /// actual root cause of the "chat crashes" report from 2026-08-07's real device
+    /// testing. The only assertion that matters here is that this doesn't trap.
+    func testResolveDoesNotCrashOnDuplicateLibraryTitles() {
+        let library = ["Attached", "Attached", "12 Rules for Life"]
+        let resolved = CitationResolver.resolve(declaredTitles: ["Attached"], libraryTitles: library)
+        XCTAssertEqual(resolved, ["Attached"])
+    }
+
+    func testResolveDoesNotCrashOnCaseInsensitiveDuplicateLibraryTitles() {
+        // Two rows that differ only in case (e.g. "Attached" vs "attached") produce
+        // the same lowercased key -- the exact collision `uniqueKeysWithValues:`
+        // trapped on.
+        let library = ["Attached", "attached", "ATTACHED"]
+        let resolved = CitationResolver.resolve(declaredTitles: ["Attached"], libraryTitles: library)
+        XCTAssertEqual(resolved, ["Attached"])
+    }
 }

@@ -184,7 +184,17 @@ public enum FSRS {
 
         let raw = interval(forRetention: desiredRetention, stability: newState.stability)
         let fuzzedRaw = fuzzed(raw, seed: cardSeed)
-        let clampedDays = min(max(Int(fuzzedRaw.rounded()), minIntervalDays), maxIntervalDays)
+        // `Int(Double.nan)` and `Int(Double.infinity)` both trap. A degenerate
+        // `stability` (e.g. 0 with reps > 0 -- not reachable through normal
+        // scheduling, but real via an unvalidated backup JSON import) sends
+        // `pow(S, -w[9])` to +inf, which propagates through `nextStabilityOnSuccess`
+        // and `interval(forRetention:stability:)` as NaN. `fuzzed`'s
+        // `rawDays >= 2.5` guard doesn't catch it -- NaN comparisons are always
+        // false -- so it passes straight through to here. `.isFinite` is the
+        // actual trap site's guard, robust regardless of which upstream FSRS
+        // computation produced the non-finite value.
+        let safeRaw = fuzzedRaw.isFinite ? fuzzedRaw.rounded() : Double(minIntervalDays)
+        let clampedDays = min(max(Int(safeRaw), minIntervalDays), maxIntervalDays)
         let due = Calendar.current.date(byAdding: .day, value: clampedDays, to: now) ?? now
 
         return FSRSReviewResult(state: newState, intervalDays: clampedDays, dueDate: due)

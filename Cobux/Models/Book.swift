@@ -52,6 +52,34 @@ enum BookContentProfile: String, Codable, CaseIterable {
     var isExamStyleQuiz: Bool {
         self == .academicReference
     }
+
+    /// Whether books of this profile start switched OFF in the *browsing*
+    /// surfaces — Flow's feed and the Wisdom Graph — rather than on.
+    ///
+    /// This is a statement about the content, not about any particular
+    /// person. An academic reference text is authored for lookup and recall:
+    /// it carries an order of magnitude more highlights than a thesis-driven
+    /// book (Robbins and Microbiology are ~1,300 between them, against the
+    /// 50-150 a self-help title yields), and each one is a narrow factual
+    /// claim rather than something worth being handed unprompted on a
+    /// Tuesday. Because Flow and the graph both sample proportionally from
+    /// whatever they're given, leaving these on means one reference text
+    /// mathematically drowns out an entire library of everything else — the
+    /// browsing surfaces stop being a library and become that textbook.
+    ///
+    /// Note this is deliberately NOT medical-specific. Nothing about
+    /// pathology is the problem; density and authorial intent are, and any
+    /// future reference text would land exactly the same way. Equally
+    /// deliberately, it does not touch Quiz, Chat or Search — those are
+    /// surfaces you arrive at having already chosen a book, where a
+    /// reference text is doing precisely the job it was added for. Only the
+    /// unprompted, sample-from-everything surfaces default it off.
+    ///
+    /// Reversible per book, and shown as an ordinary switch in the picker —
+    /// see `BookSourceFilter`.
+    var startsExcludedFromBrowsing: Bool {
+        self == .academicReference
+    }
 }
 
 @Model
@@ -61,6 +89,20 @@ final class Book {
     var author: String
     var coverColorHex: String
     var coverImageURL: String?
+    /// The name of a bundled `Assets.xcassets` imageset (`Cover-<slug>`),
+    /// set only for the 26 built-in seed books. Takes priority over
+    /// `coverImageURL` wherever a cover renders (`BookCard`/`BookDetailView`)
+    /// -- see `SeedLoader`'s doc comment for why every seed book gets one and
+    /// no book added by hand ever does. `nil` for every user-added book,
+    /// which is exactly the case `coverImageURL`'s remote-fetch-and-cache
+    /// path still exists for.
+    var coverAssetName: String?
+    /// Groups books in the chat thread picker (`BookThreadPickerView`) once
+    /// the library gets long enough that a flat list is hard to scan.
+    /// Additive/optional like `coverImageURL` above — existing rows and any
+    /// future import path that doesn't set this simply stay `nil`, which the
+    /// picker groups into an "Other" section rather than treating as an error.
+    var category: String?
     var dateAdded: Date
     var dateFinished: Date?
     /// Exam Countdown mode — when set, nothing is ever scheduled past this
@@ -100,12 +142,14 @@ final class Book {
     @Relationship(deleteRule: .cascade, inverse: \Figure.book)
     var figures: [Figure] = []
 
-    init(title: String, author: String, coverColorHex: String = "#6366F1", coverImageURL: String? = nil, dateAdded: Date = .now, dateFinished: Date? = nil, contentProfile: BookContentProfile = .propositional) {
+    init(title: String, author: String, coverColorHex: String = "#6366F1", coverImageURL: String? = nil, coverAssetName: String? = nil, category: String? = nil, dateAdded: Date = .now, dateFinished: Date? = nil, contentProfile: BookContentProfile = .propositional) {
         self.id = UUID()
         self.title = title
         self.author = author
         self.coverColorHex = coverColorHex
         self.coverImageURL = coverImageURL
+        self.coverAssetName = coverAssetName
+        self.category = category
         self.dateAdded = dateAdded
         self.dateFinished = dateFinished
         self.contentProfileRaw = contentProfile.rawValue

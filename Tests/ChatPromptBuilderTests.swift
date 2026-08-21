@@ -128,7 +128,14 @@ final class ChatPromptBuilderTests: XCTestCase {
         XCTAssertTrue(voiceDynamic.contains("<sources>"), "general chat has a sources instruction, so the voice reminder must reference it")
     }
 
-    func testVoiceModeBookScopedOmitsSourcesReminderItWasNeverGiven() throws {
+    /// Was `testVoiceModeBookScopedOmitsSourcesReminderItWasNeverGiven`, and it
+    /// asserted the opposite of what this now checks. That was correct while a
+    /// book-scoped thread could only ever answer from its own single book, so
+    /// naming a source carried no information. It can now genuinely draw on a
+    /// second book, so its template carries the sources instruction like every
+    /// other path and the spoken variant must reference it — otherwise a voice
+    /// turn that reached across books would lose the citation.
+    func testVoiceModeBookScopedAppendsSourcesReminder() throws {
         let context = try makeContext()
         let book = makeBook("Atomic Habits", author: "James Clear", in: context)
 
@@ -139,7 +146,76 @@ final class ChatPromptBuilderTests: XCTestCase {
         }
         XCTAssertFalse(stableSystemPrompt.contains("read aloud"), "spoken-style instructions must never touch the cached stable prefix")
         XCTAssertTrue(dynamicContext.contains("read aloud"))
-        XCTAssertFalse(dynamicContext.contains("<sources>"), "bookScoped never instructs a <sources> tag, so voice must not reference one")
+        XCTAssertTrue(dynamicContext.contains("<sources>"), "bookScoped now instructs a <sources> tag, so voice must remind the model to still emit it")
+    }
+
+    /// The capability half of Rajan's report: a book-scoped thread must be able
+    /// to reach another book when the question names it, instead of refusing
+    /// and suggesting the general thread.
+    func testBookScopedThreadPullsInAnotherBookTheQueryNames() throws {
+        let context = try makeContext()
+        let focus = makeBook("Atomic Habits", author: "James Clear", in: context)
+        let other = makeBook("Beyond Order", author: "Jordan B. Peterson", in: context)
+        let peterson = Highlight(text: "Set your house in perfect order before you criticize the world.", chapter: "Rule 6")
+        peterson.book = other
+        other.highlights.append(peterson)
+
+        let assembled = ChatPromptBuilder.assemble(
+            userMessage: "what would Jordan Peterson say about this?",
+            books: [focus, other],
+            selectedBookID: focus.id,
+            symposiumModeEnabled: false
+        )
+        guard case .bookScoped(let stableSystemPrompt, let dynamicContext) = assembled else {
+            return XCTFail("expected .bookScoped")
+        }
+        XCTAssertTrue(dynamicContext.contains("Beyond Order"), "a named second book must reach the prompt, not be refused")
+        XCTAssertFalse(stableSystemPrompt.contains("Beyond Order"), "cross-book material must ride in the uncached suffix, never widen the cached prefix")
+    }
+
+    /// The other half: an ordinary in-book question must NOT drag the rest of
+    /// the library in. This is what keeps a book-scoped thread cheaper and more
+    /// focused than the general thread rather than a cosmetic label.
+    func testBookScopedThreadStaysFocusedWhenNothingReachesOutside() throws {
+        let context = try makeContext()
+        let focus = makeBook("Atomic Habits", author: "James Clear", in: context)
+        let other = makeBook("Beyond Order", author: "Jordan B. Peterson", in: context)
+        let peterson = Highlight(text: "Set your house in perfect order before you criticize the world.", chapter: "Rule 6")
+        peterson.book = other
+        other.highlights.append(peterson)
+
+        let assembled = ChatPromptBuilder.assemble(
+            userMessage: "Summarize chapter 1",
+            books: [focus, other],
+            selectedBookID: focus.id,
+            symposiumModeEnabled: false
+        )
+        guard case .bookScoped(_, let dynamicContext) = assembled else {
+            return XCTFail("expected .bookScoped")
+        }
+        XCTAssertFalse(dynamicContext.contains("Other Books In This Library"), "an in-book question must not pull the rest of the library in")
+    }
+
+    /// A book-scoped reply naming only its own book produces no chip; one that
+    /// reached across books does. Both channels share this rule.
+    func testBookScopedCitationsDropTheThreadsOwnBook() throws {
+        let context = try makeContext()
+        let focus = makeBook("Atomic Habits", author: "James Clear", in: context)
+        let other = makeBook("Beyond Order", author: "Jordan B. Peterson", in: context)
+
+        XCTAssertEqual(
+            ChatPromptBuilder.displayableCitations(resolvedTitles: ["Atomic Habits"], selectedBookID: focus.id, books: [focus, other]),
+            []
+        )
+        XCTAssertEqual(
+            ChatPromptBuilder.displayableCitations(resolvedTitles: ["Atomic Habits", "Beyond Order"], selectedBookID: focus.id, books: [focus, other]),
+            ["Beyond Order"]
+        )
+        XCTAssertEqual(
+            ChatPromptBuilder.displayableCitations(resolvedTitles: ["Atomic Habits", "Beyond Order"], selectedBookID: nil, books: [focus, other]),
+            ["Atomic Habits", "Beyond Order"],
+            "the general thread must keep every declared citation"
+        )
     }
 
     func testVoiceModeSymposiumAppendsSpokenInstructionWithSourcesReminder() throws {

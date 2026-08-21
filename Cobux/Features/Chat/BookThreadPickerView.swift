@@ -25,6 +25,23 @@ struct BookThreadPickerView: View {
         return sortedBooks.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
     }
 
+    /// Books grouped by `category` for the browsing (non-search) layout —
+    /// each section's books sorted by title, sections sorted alphabetically
+    /// by category name, with any `category == nil` books collected into a
+    /// trailing "Other" section rather than dropped. Only used when
+    /// `searchText` is empty; search results stay a flat filtered list (see
+    /// `filteredBooks`) since grouping only helps browsing, not searching.
+    private var groupedBooks: [(category: String, books: [Book])] {
+        let grouped = Dictionary(grouping: sortedBooks) { $0.category ?? "Other" }
+        return grouped
+            .sorted { lhs, rhs in
+                if lhs.key == "Other" { return false }
+                if rhs.key == "Other" { return true }
+                return lhs.key < rhs.key
+            }
+            .map { (category: $0.key, books: $0.value.sorted { $0.title < $1.title }) }
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -33,11 +50,25 @@ struct BookThreadPickerView: View {
                         selectedBookID = nil
                         dismiss()
                     }
-                }
-                ForEach(filteredBooks) { book in
-                    row(title: book.title, isSelected: selectedBookID == book.id) {
-                        selectedBookID = book.id
-                        dismiss()
+                    ForEach(groupedBooks, id: \.category) { group in
+                        Section {
+                            ForEach(group.books) { book in
+                                row(title: book.title, isSelected: selectedBookID == book.id) {
+                                    selectedBookID = book.id
+                                    dismiss()
+                                }
+                            }
+                        } header: {
+                            Text(group.category)
+                                .font(CobuxTypography.cobuxSectionHeader)
+                        }
+                    }
+                } else {
+                    ForEach(filteredBooks) { book in
+                        row(title: book.title, isSelected: selectedBookID == book.id) {
+                            selectedBookID = book.id
+                            dismiss()
+                        }
                     }
                 }
             }

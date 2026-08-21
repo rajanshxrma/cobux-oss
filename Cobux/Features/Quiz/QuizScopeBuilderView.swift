@@ -25,12 +25,41 @@ struct QuizScopeBuilderView: View {
     @State private var prepError: String?
     @State private var showCostConfirm = false
     @State private var pendingChaptersToGenerate: [Chapter] = []
+    @State private var failedChapters: [Chapter] = []
     @State private var sessionNavigation: AttemptNavigationWrapper?
     @State private var showNoAPIKeyAlert = false
 
     @State private var batchProgress: BatchGenerationService.Progress?
     @State private var batchStatusMessage: String?
     @State private var batchDidApplyResults = false
+    /// `BatchGenerationService.submit` only persists its "in progress" marker
+    /// AFTER the network call to Anthropic's Batch API returns -- its own
+    /// `guard pendingBatch == nil` at the top reads that same marker, so two
+    /// overlapping calls (a double-tap on the button below, fired before
+    /// either call's `await` returns) both pass the guard and both actually
+    /// submit the batch, paying for the same chapters twice. This is a
+    /// local, synchronous-on-tap guard around that gap -- flips true the
+    /// instant the button is tapped, well before the service's own check
+    /// would even run.
+    @State private var isSubmittingBatch = false
+    /// Same class of gap as `isSubmittingBatch` above, one level down:
+    /// `BatchGenerationService.applyResultsIfDone` reads `pendingBatch` from
+    /// UserDefaults, does a real network round trip (`batchStatus`, then
+    /// `batchResults`), and only clears that pending record in a `defer` at
+    /// the very end -- so two overlapping "Check Status" taps (an impatient
+    /// double-tap while waiting on a slow batch, or a normal tap landing
+    /// mid-flight from a previous one) both see the same pending batch,
+    /// both fetch and apply the same results, and each `applyGeneratedQuestions`
+    /// call deletes-then-reinserts that chapter's questions -- doubling the
+    /// "Applied N questions" count at best, and at worst discarding real FSRS
+    /// review history on any question answered between the two applications.
+    /// Guarded here the same synchronous-on-tap way, not inside the service.
+    @State private var isCheckingStatus = false
+    /// `BatchGenerationService.cancel` has the identical read-then-await-then-
+    /// clear shape -- a double-tap on "Cancel" fires the cancel API call twice
+    /// for the same batch, which is wasted work and flickers `batchStatusMessage`
+    /// even if Anthropic's side tolerates the redundant call.
+    @State private var isCancelingBatch = false
 
     init(book: Book, claudeService: ClaudeService) {
         self.book = book
@@ -141,6 +170,50 @@ struct QuizScopeBuilderView: View {
     }
 
     var body: some View {
+        Group {
+            if SeedingStatus.shared.isSeeding {
+                // Same seed-merge guard as `BookCard`/`BookDetailView`/`QuizHomeView` --
+                // every computed property below (`chapterCandidates`, `allTags`,
+                // `dueQuestions()`, `notIntroducedCount`) faults this book's
+                // `chapters`/`highlights` (and each chapter's `quizQuestions`)
+                // relationships synchronously in `body`. Landing that fault mid
+                // seed/upgrade merge is the confirmed Build-5 crash class. This
+                // screen is normally only reachable through `QuizHomeView`'s own
+                // gated book list, but that's a fragile guarantee to lean on from
+                // here -- a direct, local guard costs nothing and can't be
+                // silently invalidated by a future new entry point.
+                ProgressView("Syncing your library…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                scopeForm
+            }
+        }
+        .navigationTitle(book.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .alert("Generate Questions?", isPresented: $showCostConfirm) {
+            Button("Cancel", role: .cancel) { }
+            Button("Generate & Start") {
+                Task { await generateThenStart() }
+            }
+        } message: {
+            Text("Uses your Anthropic API key to write quiz questions for \(pendingChaptersToGenerate.count) chapter(s) — about $\(String(format: "%.2f", totalEstimatedCost)), a one-time cost. Cached afterward, so re-quizzing this scope is free unless the chapter's highlights change.")
+        }
+        .alert("API Key Required", isPresented: $showNoAPIKeyAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Add your Anthropic API key in Settings to generate quiz questions.")
+        }
+        .navigationDestination(item: $sessionNavigation) { wrapper in
+            // Clearing the item unwinds the whole Session -> Results stack in
+            // one step (both are pushed as descendants of this destination) --
+            // the fix for Results being a dead end with no way back except
+            // switching tabs.
+            QuizSessionView(attempt: wrapper.attempt, questions: wrapper.questions, onDone: { sessionNavigation = nil })
+        }
+        .sensoryFeedback(.success, trigger: batchDidApplyResults)
+    }
+
+    private var scopeForm: some View {
         Form {
             Section("What to quiz") {
                 Picker("Scope", selection: Binding(
@@ -197,8 +270,14 @@ struct QuizScopeBuilderView: View {
             if let prepError {
                 Section {
                     Text(prepError)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Color.cobuxDanger)
                         .font(.footnote)
+                    if !failedChapters.isEmpty {
+                        Button("Retry Failed Chapters") {
+                            retryFailedChapters()
+                        }
+                        .disabled(isPreparing)
+                    }
                 }
             }
 
@@ -220,29 +299,6 @@ struct QuizScopeBuilderView: View {
                 .disabled(isPreparing || !scopeHasAnyContent)
             }
         }
-        .navigationTitle(book.title)
-        .navigationBarTitleDisplayMode(.inline)
-        .alert("Generate Questions?", isPresented: $showCostConfirm) {
-            Button("Cancel", role: .cancel) { }
-            Button("Generate & Start") {
-                Task { await generateThenStart() }
-            }
-        } message: {
-            Text("Uses your Anthropic API key to write quiz questions for \(pendingChaptersToGenerate.count) chapter(s) — about $\(String(format: "%.2f", totalEstimatedCost)), a one-time cost. Cached afterward, so re-quizzing this scope is free unless the chapter's highlights change.")
-        }
-        .alert("API Key Required", isPresented: $showNoAPIKeyAlert) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text("Add your Anthropic API key in Settings to generate quiz questions.")
-        }
-        .navigationDestination(item: $sessionNavigation) { wrapper in
-            // Clearing the item unwinds the whole Session -> Results stack in
-            // one step (both are pushed as descendants of this destination) --
-            // the fix for Results being a dead end with no way back except
-            // switching tabs.
-            QuizSessionView(attempt: wrapper.attempt, questions: wrapper.questions, onDone: { sessionNavigation = nil })
-        }
-        .sensoryFeedback(.success, trigger: batchDidApplyResults)
     }
 
     // MARK: - Scope selection plumbing
@@ -335,8 +391,25 @@ struct QuizScopeBuilderView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Button("Check Status") { Task { await checkBatchStatus() } }
-                Button("Cancel Background Generation", role: .destructive) { Task { await cancelBatchGeneration() } }
+                Button {
+                    isCheckingStatus = true
+                    Task { await checkBatchStatus() }
+                } label: {
+                    if isCheckingStatus {
+                        HStack {
+                            ProgressView()
+                            Text("Checking…")
+                        }
+                    } else {
+                        Text("Check Status")
+                    }
+                }
+                .disabled(isCheckingStatus || isCancelingBatch)
+                Button("Cancel Background Generation", role: .destructive) {
+                    isCancelingBatch = true
+                    Task { await cancelBatchGeneration() }
+                }
+                .disabled(isCheckingStatus || isCancelingBatch)
                 if let batchStatusMessage {
                     Text(batchStatusMessage).font(.caption).foregroundStyle(.secondary)
                 }
@@ -347,9 +420,20 @@ struct QuizScopeBuilderView: View {
             }
         } else if chaptersNeedingGeneration.count > 2 {
             Section {
-                Button("Generate All \(chaptersNeedingGeneration.count) Chapters in Background (~50% cheaper)") {
+                Button {
+                    isSubmittingBatch = true
                     Task { await startBackgroundGeneration() }
+                } label: {
+                    if isSubmittingBatch {
+                        HStack {
+                            ProgressView()
+                            Text("Submitting…")
+                        }
+                    } else {
+                        Text("Generate All \(chaptersNeedingGeneration.count) Chapters in Background (~50% cheaper)")
+                    }
                 }
+                .disabled(isSubmittingBatch)
                 if let batchStatusMessage {
                     Text(batchStatusMessage).font(.caption).foregroundStyle(.secondary)
                 }
@@ -360,6 +444,7 @@ struct QuizScopeBuilderView: View {
     }
 
     private func startBackgroundGeneration() async {
+        defer { isSubmittingBatch = false }
         guard !claudeService.apiKey.isEmpty else {
             showNoAPIKeyAlert = true
             return
@@ -373,6 +458,7 @@ struct QuizScopeBuilderView: View {
     }
 
     private func checkBatchStatus() async {
+        defer { isCheckingStatus = false }
         do {
             guard let progress = try await BatchGenerationService.checkProgress(claudeService: claudeService) else {
                 batchProgress = nil
@@ -398,6 +484,7 @@ struct QuizScopeBuilderView: View {
     }
 
     private func cancelBatchGeneration() async {
+        defer { isCancelingBatch = false }
         do {
             try await BatchGenerationService.cancel(claudeService: claudeService)
             batchProgress = nil
@@ -411,6 +498,7 @@ struct QuizScopeBuilderView: View {
 
     private func beginPreparation() {
         prepError = nil
+        failedChapters = []
         if !chaptersNeedingGeneration.isEmpty {
             guard !claudeService.apiKey.isEmpty else {
                 showNoAPIKeyAlert = true
@@ -419,22 +507,72 @@ struct QuizScopeBuilderView: View {
             pendingChaptersToGenerate = chaptersNeedingGeneration
             showCostConfirm = true
         } else {
+            // Set synchronously, not just inside `startWithoutGenerating()`'s own
+            // first line -- `Task { }` doesn't run its body inline, it schedules it,
+            // so a fast double-tap on "Start Quiz" landed both taps before the
+            // button's `.disabled(isPreparing || ...)` had actually flipped, each
+            // one inserting and saving its own `QuizAttempt`. Flipping the flag
+            // here, before the tap handler even returns, makes the second tap see
+            // the button already disabled.
+            isPreparing = true
             Task { await startWithoutGenerating() }
         }
     }
 
+    /// Used to be: one thrown error on ANY chapter set `prepError` and `return`ed
+    /// immediately, abandoning every remaining chapter in the batch — a single
+    /// network blip on chapter 2 of 12 meant chapters 3-12 never even attempted.
+    /// Now each chapter gets its own bounded retry (`RetryPolicy`, transient
+    /// failures only — a bad API key or a content refusal isn't retried, since
+    /// asking again wouldn't help and would just bill twice for the same
+    /// non-answer) and a chapter that still fails after retrying doesn't stop the
+    /// rest of the batch — it's recorded in `failedChapters` and the loop
+    /// continues. Only chapters that never succeeded stay in scope for a manual
+    /// retry via `retryFailedChapters()`.
     private func generateThenStart() async {
         isPreparing = true
         defer { isPreparing = false }
+        failedChapters = []
+
         for chapter in pendingChaptersToGenerate {
             do {
-                try await QuizGenerationService.generateQuestions(for: chapter, in: book, claudeService: claudeService, modelContext: modelContext)
+                try await RetryPolicy.run {
+                    try await QuizGenerationService.generateQuestions(for: chapter, in: book, claudeService: claudeService, modelContext: modelContext)
+                }
             } catch {
-                prepError = "Couldn't generate questions for \"\(chapter.title)\": \(error.localizedDescription)"
-                return
+                failedChapters.append(chapter)
             }
         }
+
+        if failedChapters.isEmpty {
+            prepError = nil
+        } else if failedChapters.count == pendingChaptersToGenerate.count {
+            prepError = "Couldn't generate questions for any chapter — check your connection and try again."
+        } else {
+            let succeededCount = pendingChaptersToGenerate.count - failedChapters.count
+            prepError = "Generated \(succeededCount) of \(pendingChaptersToGenerate.count) chapters — \(failedChapters.count) failed: \(failedChapters.map(\.title).joined(separator: ", "))."
+        }
+
+        // Start with whatever DID generate rather than blocking the whole quiz on
+        // a chapter or two that didn't -- a partial quiz is more useful than none.
+        // But skip this entirely on a TOTAL failure: `startWithoutGenerating()`
+        // unconditionally overwrites `prepError` with a generic "No questions
+        // available for this scope yet." the moment its own pool is empty,
+        // silently clobbering the more useful "check your connection and try
+        // again" message just set above with no way back to it.
+        let allChaptersFailed = !pendingChaptersToGenerate.isEmpty && failedChapters.count == pendingChaptersToGenerate.count
+        guard !allChaptersFailed else { return }
         await startWithoutGenerating()
+    }
+
+    private func retryFailedChapters() {
+        prepError = nil
+        pendingChaptersToGenerate = failedChapters
+        // Same eager flip as `beginPreparation()` above, and for the same reason --
+        // this button is only `.disabled(isPreparing)`, which doesn't actually
+        // become true until `generateThenStart()`'s Task body starts running.
+        isPreparing = true
+        Task { await generateThenStart() }
     }
 
     private func startWithoutGenerating() async {

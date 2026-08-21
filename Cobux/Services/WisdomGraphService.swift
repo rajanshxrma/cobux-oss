@@ -93,8 +93,14 @@ struct WisdomGraphService {
         }
 
         // Normalize keys to match how `buildGraph` normalizes tags, so
-        // lookups against it are a direct match.
-        let normalizedMapping = Dictionary(uniqueKeysWithValues: mapping.map { ($0.key.lowercased(), $0.value) })
+        // lookups against it are a direct match. `mapping`'s own keys are
+        // unique (decoded from a JSON object), but two of Claude's original
+        // keys can still collide after `.lowercased()` (e.g. "Ego" and "ego"
+        // both present) -- `uniqueKeysWithValues:` would trap on exactly that,
+        // crashing the AI tag-merge button on a response this app doesn't
+        // control the casing of. `uniquingKeysWith:` keeps the last value,
+        // an arbitrary but harmless pick between two spellings of one tag.
+        let normalizedMapping = Dictionary(mapping.map { ($0.key.lowercased(), $0.value) }, uniquingKeysWith: { _, last in last })
 
         if let encoded = try? JSONEncoder().encode(normalizedMapping) {
             UserDefaults.standard.set(encoded, forKey: mergeMappingKey)
@@ -105,7 +111,7 @@ struct WisdomGraphService {
     }
 
     @MainActor
-    static func buildGraph(highlights: [Highlight], modelContext: ModelContext) {
+    static func buildGraph(highlights: [Highlight], modelContext: ModelContext) throws {
         // 1. Clean rebuild: wipe all existing Theme records. This is cheap and avoids
         //    having to diff/merge stale themes against the current tag set.
         let existingThemes = (try? modelContext.fetch(FetchDescriptor<Theme>())) ?? []
@@ -193,6 +199,13 @@ struct WisdomGraphService {
             modelContext.insert(theme)
         }
 
-        try? modelContext.save()
+        // Was `try?` -- this function wipes every existing `Theme` row above
+        // (shared state `QuizAnalyticsView`/`QuizModeService.weakestThemes` both
+        // read) before repopulating it, and silently swallowed a failure to save
+        // the replacement. A failed save used to leave the user looking at a
+        // freshly rebuilt graph that would vanish the moment they relaunched, with
+        // nothing telling them so. Propagating lets every call site show a real
+        // error instead.
+        try modelContext.save()
     }
 }

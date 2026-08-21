@@ -1,13 +1,49 @@
 import SwiftUI
 import SwiftData
+import WidgetKit
 
 struct QuizResultsView: View {
     let attempt: QuizAttempt
     let onDone: () -> Void
     @Query private var books: [Book]
+    @Query private var allAttempts: [QuizAttempt]
+    @State private var showCelebration = false
+    @State private var milestone = 0
 
     private var scorePercent: Int {
         Int((attempt.scorePercent ?? 0) * 100)
+    }
+
+    /// Answered-question totals per calendar day/week across ALL attempts,
+    /// used for the personal-best callouts. A record only counts when there's
+    /// real history to beat (a previous best > 0) — the first session ever
+    /// shouldn't congratulate itself.
+    private var personalBests: (day: Bool, dayTotal: Int, week: Bool, weekTotal: Int) {
+        let calendar = Calendar.current
+        var dayTotals: [Date: Int] = [:]
+        var weekTotals: [Date: Int] = [:]
+        for past in allAttempts {
+            guard let completedAt = past.completedAt else { continue }
+            dayTotals[calendar.startOfDay(for: completedAt), default: 0] += past.answeredCount
+            if let weekStart = calendar.dateInterval(of: .weekOfYear, for: completedAt)?.start {
+                weekTotals[weekStart, default: 0] += past.answeredCount
+            }
+        }
+
+        let today = calendar.startOfDay(for: .now)
+        let todayTotal = dayTotals[today] ?? 0
+        let previousBestDay = dayTotals.filter { $0.key != today }.values.max() ?? 0
+
+        let thisWeekStart = calendar.dateInterval(of: .weekOfYear, for: .now)?.start
+        let thisWeekTotal = thisWeekStart.flatMap { weekTotals[$0] } ?? 0
+        let previousBestWeek = weekTotals.filter { $0.key != thisWeekStart }.values.max() ?? 0
+
+        return (
+            day: previousBestDay > 0 && todayTotal > previousBestDay,
+            dayTotal: todayTotal,
+            week: previousBestWeek > 0 && thisWeekTotal > previousBestWeek,
+            weekTotal: thisWeekTotal
+        )
     }
 
     private var needsReviewAnswers: [QuizAnswerRecord] {
@@ -23,7 +59,15 @@ struct QuizResultsView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
+                if milestone > 0 {
+                    milestoneBanner
+                }
+
                 scoreHeader
+
+                if personalBests.day || personalBests.week {
+                    personalBestSection
+                }
 
                 if !typeBreakdown.isEmpty {
                     typeBreakdownSection
@@ -42,7 +86,29 @@ struct QuizResultsView: View {
             // "End of any quiz/review session" per Fable's Watch companion ruling — the
             // results screen appearing is the natural signal a session just finished.
             WatchSyncService.sync(books: books)
+            // The session just graded cards the Quick Check widget may still be
+            // offering — reload it so a stale card can't collect a second,
+            // schedule-skewing review from the home screen.
+            WidgetCenter.shared.reloadTimelines(ofKind: "CobuxQuickCheckWidget")
+
+            // Capture-and-clear immediately: this screen owns the milestone
+            // moment for quiz sessions, and clearing now is what stops
+            // ContentView's overlay from replaying it on the next foreground.
+            milestone = StreakTracker.pendingMilestone
+            if milestone > 0 {
+                StreakTracker.clearPendingMilestone()
+            }
+            if attempt.answeredCount > 0 {
+                showCelebration = true
+            }
         }
+        .overlay {
+            if showCelebration {
+                ConfettiView()
+                    .ignoresSafeArea()
+            }
+        }
+        .sensoryFeedback(.success, trigger: showCelebration)
         .toolbar {
             // This screen used to be a dead end -- back button hidden, no
             // replacement, the only way off was switching tabs entirely.
@@ -51,6 +117,40 @@ struct QuizResultsView: View {
                     .fontWeight(.semibold)
             }
         }
+    }
+
+    private var milestoneBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "flame.fill")
+                .font(.title2)
+                .foregroundStyle(Color.cobuxWarning.gradient)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(milestone)-day streak milestone")
+                    .font(.headline)
+                Text("This session just crossed it. Keep the run alive.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(16)
+        .cobuxCard()
+    }
+
+    private var personalBestSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if personalBests.day {
+                Label("New best day — \(personalBests.dayTotal) questions answered", systemImage: "trophy.fill")
+            }
+            if personalBests.week {
+                Label("New best week — \(personalBests.weekTotal) questions answered", systemImage: "calendar.badge.checkmark")
+            }
+        }
+        .font(.subheadline.weight(.medium))
+        .foregroundStyle(Color.cobuxAccent)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .cobuxCard()
     }
 
     private var scoreHeader: some View {

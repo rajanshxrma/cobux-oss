@@ -143,21 +143,64 @@ struct VoiceModeView: View {
             switch controller?.state ?? .idle {
             case .idle:
                 Text("Voice mode listens, asks Claude, and speaks the answer back as it streams in — hands-free. Each question uses your Anthropic API credits. Tap anywhere while it's thinking or speaking to interrupt.")
+                    .font(.title3)
+                    .foregroundStyle(.white.opacity(0.92))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
             case .listening:
                 Text((controller?.liveTranscript.isEmpty ?? true) ? "Listening…" : (controller?.liveTranscript ?? ""))
+                    .font(.title3)
+                    .foregroundStyle(.white.opacity(0.92))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
             case .thinking:
                 Text("Thinking…")
+                    .font(.title3)
+                    .foregroundStyle(.white.opacity(0.92))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
             case .speaking:
-                Text(controller?.spokenCaption ?? "")
+                spokenSentenceStack
             }
         }
-        .font(.title3)
-        .foregroundStyle(.white.opacity(0.92))
-        .multilineTextAlignment(.center)
-        .padding(.horizontal, 32)
         .frame(minHeight: 80)
         .animation(.easeOut(duration: 0.2), value: controller?.liveTranscript)
-        .animation(.easeOut(duration: 0.2), value: controller?.spokenCaption)
+    }
+
+    /// Each sentence spring-appends as it's actually spoken, mirroring
+    /// `MessageBubbleView`'s own insertion transition, instead of one static
+    /// block of text that silently grows -- Rajan's own ask for voice
+    /// mode's captions to feel as smooth/readable as text chat while he
+    /// looks at the phone. Auto-scrolls to the newest sentence; bounded
+    /// height keeps a long reply from pushing the End button off-screen.
+    private var spokenSentenceStack: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(Array((controller?.spokenSentences ?? []).enumerated()), id: \.offset) { index, sentence in
+                        Text(sentence)
+                            .font(.title3)
+                            .foregroundStyle(.white.opacity(0.92))
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .id(index)
+                            .transition(.asymmetric(
+                                insertion: .opacity.combined(with: .move(edge: .bottom))
+                                    .animation(.spring(response: 0.38, dampingFraction: 0.78)),
+                                removal: .opacity
+                            ))
+                    }
+                }
+                .padding(.horizontal, 32)
+            }
+            .frame(maxHeight: 220)
+            .onChange(of: controller?.spokenSentences.count) { _, newCount in
+                guard let newCount, newCount > 0 else { return }
+                withAnimation {
+                    proxy.scrollTo(newCount - 1, anchor: .bottom)
+                }
+            }
+        }
     }
 
     // MARK: - Setup

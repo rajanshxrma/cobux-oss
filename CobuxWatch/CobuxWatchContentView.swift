@@ -27,11 +27,16 @@ struct CobuxWatchContentView: View {
         .onAppear { receiver.activateIfNeeded() }
     }
 
+    // Was `receiver.latestPayload?.dueCount ?? 0` -- a genuinely-zero due count and
+    // "never synced yet" rendered identically, which is exactly what the "0 day
+    // streak / 0 due" report turned out to be: a watch that had never once
+    // received real data, indistinguishable on screen from having correctly
+    // received zero. An em dash can't be confused with a real count.
     private var streakRow: some View {
         HStack {
             Image(systemName: "flame.fill")
                 .foregroundStyle(Color.cobuxWarning)
-            Text("\(receiver.latestPayload?.streakCount ?? StreakTracker.currentStreak) day streak")
+            Text("\(receiver.latestPayload.map { "\($0.streakCount)" } ?? "—") day streak")
                 .font(.headline)
             Spacer()
         }
@@ -41,7 +46,7 @@ struct CobuxWatchContentView: View {
         HStack {
             Image(systemName: "checkmark.circle.fill")
                 .foregroundStyle(Color.cobuxGood)
-            Text("\(receiver.latestPayload?.dueCount ?? 0) due")
+            Text("\(receiver.latestPayload.map { "\($0.dueCount)" } ?? "—") due")
                 .font(.headline)
             Spacer()
         }

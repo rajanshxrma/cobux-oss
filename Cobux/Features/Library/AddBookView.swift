@@ -8,6 +8,7 @@ struct AddBookView: View {
     @State private var title = ""
     @State private var author = ""
     @State private var selectedColorHex = "#6366F1"
+    @State private var isSaving = false
 
     let presetColors = ["#6366F1", "#8B5CF6", "#EC4899", "#F59E0B", "#10B981", "#3B82F6", "#EF4444", "#6B7280"]
 
@@ -54,13 +55,19 @@ struct AddBookView: View {
                     Button("Save") {
                         saveBook()
                     }
-                    .disabled(title.isEmpty || author.isEmpty)
+                    .disabled(title.isEmpty || author.isEmpty || isSaving)
                 }
             }
         }
     }
 
     private func saveBook() {
+        // A quick real-device double-tap on "Save" (the toolbar button stays
+        // interactive for the ~0.3s the sheet takes to actually dismiss) used
+        // to insert two identical books before the sheet closed once -- this
+        // guard makes the second tap a no-op instead of a silent duplicate.
+        guard !isSaving else { return }
+        isSaving = true
         let newBook = Book(title: title, author: author, coverColorHex: selectedColorHex)
         modelContext.insert(newBook)
         WidgetCenter.shared.reloadAllTimelines()

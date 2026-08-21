@@ -31,6 +31,7 @@ extension ClaudeService {
     /// decode it directly with no fence-stripping or cleanup.
     func generateStructured(userMessage: String, systemPrompt: String, model: CobuxModelID, jsonSchema: [String: Any]) async throws -> String {
         guard !apiKey.isEmpty else { throw ClaudeError.missingAPIKey }
+        guard await NetworkMonitor.shared.isConnected else { throw ClaudeError.offline }
 
         var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
         request.httpMethod = "POST"
@@ -137,9 +138,9 @@ extension ClaudeService {
         if let errorBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
            let error = errorBody["error"] as? [String: Any] {
             if error["type"] as? String == "authentication_error" { return .invalidAPIKey }
-            if let message = error["message"] as? String { return .apiError(message) }
+            if let message = error["message"] as? String { return .retryableAPIError(statusCode: statusCode, message: message) }
         }
-        return .apiError("HTTP \(statusCode)")
+        return .retryableAPIError(statusCode: statusCode, message: "HTTP \(statusCode)")
     }
 
     // MARK: - Batch API
@@ -228,7 +229,16 @@ extension ClaudeService {
     func batchStatus(_ handle: BatchHandle) async throws -> BatchStatusReport {
         guard !apiKey.isEmpty else { throw ClaudeError.missingAPIKey }
 
-        var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages/batches/\(handle.id)")!)
+        // `handle.id` is Anthropic's own batch ID, not user input, so this "should"
+        // always be a well-formed URL -- but `ClaudeService.swift`'s equivalent
+        // request-building already uses `guard let` rather than force-unwrap for
+        // exactly this reason (an API-issued value is still not a guarantee), and
+        // these two `ClaudeGenerationService` call sites were the two places that
+        // hadn't matched that pattern yet.
+        guard let url = URL(string: "https://api.anthropic.com/v1/messages/batches/\(handle.id)") else {
+            throw ClaudeError.invalidResponse
+        }
+        var request = URLRequest(url: url)
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
@@ -316,7 +326,10 @@ extension ClaudeService {
     func cancelBatch(_ handle: BatchHandle) async throws {
         guard !apiKey.isEmpty else { throw ClaudeError.missingAPIKey }
 
-        var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages/batches/\(handle.id)/cancel")!)
+        guard let url = URL(string: "https://api.anthropic.com/v1/messages/batches/\(handle.id)/cancel") else {
+            throw ClaudeError.invalidResponse
+        }
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")

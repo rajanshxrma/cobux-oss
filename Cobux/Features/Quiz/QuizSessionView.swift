@@ -132,6 +132,16 @@ struct QuizSessionView: View {
         }
     }
 
+    // Glass HUD panel (2.2.0), not flush with the background: this is the
+    // exact "genuinely floating over content, not content itself" case the
+    // redesign plan calls out as the single highest-payoff real glass moment
+    // in the app -- persistent chrome (progress/timer) around a scrolling
+    // question, the same relationship a tab bar has to its tab content.
+    // The primary CTA button in `footer` below stays a solid fill, not
+    // glass -- a translucent primary action button is a real legibility
+    // risk the plan explicitly flags as only verifiable on-device, and a
+    // strong solid CTA inside a glass panel is the standard Liquid Glass
+    // pattern anyway (e.g. Camera's shutter button).
     private var header: some View {
         VStack(spacing: 6) {
             HStack {
@@ -142,13 +152,16 @@ struct QuizSessionView: View {
                 if isExamMode {
                     Label(timeString(remainingSeconds), systemImage: "timer")
                         .font(.subheadline.monospacedDigit())
-                        .foregroundStyle(remainingSeconds < 30 ? .red : .secondary)
+                        .foregroundStyle(remainingSeconds < 30 ? Color.cobuxDanger : .secondary)
                 }
             }
             ProgressView(value: Double(currentIndex), total: Double(max(questions.count, 1)))
                 .tint(sessionAccent)
         }
         .padding()
+        .cobuxGlassCard()
+        .padding(.horizontal)
+        .padding(.top, 8)
     }
 
     @ViewBuilder
@@ -176,6 +189,9 @@ struct QuizSessionView: View {
             .disabled(!canSubmit)
         }
         .padding()
+        .cobuxGlassCard()
+        .padding(.horizontal)
+        .padding(.bottom, 8)
     }
 
     private var submitButtonLabel: String {
@@ -462,9 +478,9 @@ private struct QuestionCardView: View {
                 Text(question.choices[index])
                 Spacer()
                 if showFeedback, isCorrectChoice {
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.cobuxGood)
                 } else if showFeedback, isSelected, !isCorrectChoice {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(Color.cobuxWarning)
                 }
             }
             .padding()
@@ -481,8 +497,8 @@ private struct QuestionCardView: View {
 
     private func rowBackground(isSelected: Bool, isCorrectChoice: Bool) -> Color {
         if showFeedback {
-            if isCorrectChoice { return .green.opacity(0.12) }
-            if isSelected { return .red.opacity(0.12) }
+            if isCorrectChoice { return Color.cobuxGood.opacity(0.12) }
+            if isSelected { return Color.cobuxWarning.opacity(0.12) }
         }
         return isSelected ? accentColor.opacity(0.08) : Color.secondary.opacity(0.06)
     }

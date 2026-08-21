@@ -1,0 +1,88 @@
+import SwiftUI
+import UIKit
+
+/// A plain multi-line text editor that focuses itself and places the cursor
+/// at the very end of whatever text it starts with, the moment it appears.
+///
+/// SwiftUI's own `TextEditor(text:selection:)` does exactly this, but
+/// `TextSelection` isn't available until iOS 18 -- Cobux's deployment target
+/// is iOS 17 (`project.yml`), so `JournalEntryComposeView` needs a real
+/// `UITextView` wrapper instead. Deliberately minimal: this only ever needs
+/// to do the one thing it's named for (focus + cursor at end on creation),
+/// not general arbitrary cursor placement.
+struct CursorEndTextEditor: UIViewRepresentable {
+    @Binding var text: String
+    /// Defaults to the stock body style, unchanged from before this
+    /// parameter existed -- `JournalEntryComposeView` passes a serif design
+    /// matching `CobuxTypography.display()`'s own light-mode face, so the
+    /// entry reads in the same editorial type while writing it as it does
+    /// afterward in `JournalEntryDetailView`. UIKit has no direct bridge
+    /// from a SwiftUI `Font`, so this takes a `UIFont` rather than
+    /// duplicating `CobuxTypography`'s scheme-switching logic here.
+    var font: UIFont = .preferredFont(forTextStyle: .body)
+
+    func makeUIView(context: Context) -> UITextView {
+        let textView = UITextView()
+        textView.font = font
+        textView.adjustsFontForContentSizeCategory = true
+        textView.backgroundColor = .clear
+        textView.text = text
+        textView.delegate = context.coordinator
+        attemptFocus(textView, coordinator: context.coordinator)
+        return textView
+    }
+
+    func updateUIView(_ uiView: UITextView, context: Context) {
+        // A `UIViewRepresentable`'s coordinator is created once and reused
+        // across every `updateUIView` call -- without this, its `parent`
+        // stays the SPECIFIC struct snapshot captured back in
+        // `makeCoordinator()`'s one call, for the view's entire lifetime.
+        // That happens to keep working today only because the binding here
+        // is backed by plain `@State` in the immediate parent; refreshing it
+        // explicitly is the correct, general fix regardless.
+        context.coordinator.parent = self
+        uiView.font = font
+
+        // Only pushed when the SwiftUI-side `text` changed for a reason
+        // OTHER than this view's own typing (e.g. the binding was reset
+        // externally) -- otherwise this would fight the user's own cursor
+        // position on every keystroke, since typing already round-trips
+        // through `textViewDidChange` below.
+        if uiView.text != text {
+            uiView.text = text
+        }
+
+        // `updateUIView` fires repeatedly as SwiftUI's own lifecycle
+        // progresses (e.g. while a sheet is still animating in) -- a genuine,
+        // event-driven retry point, unlike a single blind
+        // `DispatchQueue.main.async` in `makeUIView` alone, which could fire
+        // before the view is actually attached to a window and then never
+        // try again. `hasFocused` makes this a one-time success, not a fight
+        // for focus on every re-render once it's already worked (or once the
+        // user has intentionally tapped elsewhere).
+        attemptFocus(uiView, coordinator: context.coordinator)
+    }
+
+    private func attemptFocus(_ textView: UITextView, coordinator: Coordinator) {
+        guard !coordinator.hasFocused else { return }
+        DispatchQueue.main.async {
+            guard !coordinator.hasFocused, textView.window != nil else { return }
+            guard textView.becomeFirstResponder() else { return }
+            coordinator.hasFocused = true
+            let end = textView.endOfDocument
+            textView.selectedTextRange = textView.textRange(from: end, to: end)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: CursorEndTextEditor
+        var hasFocused = false
+        init(_ parent: CursorEndTextEditor) { self.parent = parent }
+
+        func textViewDidChange(_ textView: UITextView) {
+            parent.text = textView.text
+        }
+    }
+}

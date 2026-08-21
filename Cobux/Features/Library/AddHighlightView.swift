@@ -50,7 +50,7 @@ struct AddHighlightView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { saveHighlight() }
-                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || didSave)
                 }
             }
         }
@@ -58,6 +58,10 @@ struct AddHighlightView: View {
     }
 
     private func saveHighlight() {
+        // Same double-tap guard as `AddChapterView`/`AddBookView` -- without
+        // it, a fast second tap in the moment before the sheet actually
+        // dismisses appended a second, identical highlight.
+        guard !didSave else { return }
         let tags = tagsString.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         let page = Int(pageString)
 
@@ -75,6 +79,9 @@ struct AddHighlightView: View {
         SpotlightIndexer.index(highlight)
         WidgetCenter.shared.reloadAllTimelines()
         StreakTracker.recordActivityToday()
+        // This sheet dismisses straight back to Library, so any milestone the
+        // record just crossed is celebrated by ContentView's overlay.
+        StreakCelebrationCenter.shared.checkForPendingMilestone()
         WatchSyncService.sync(books: books)
         didSave = true
         dismiss()

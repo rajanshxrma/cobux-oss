@@ -2,18 +2,28 @@ import XCTest
 import SwiftData
 @testable import Cobux
 
-/// Regression coverage for a real, shipped gap: `QuizQuestion` (and the FSRS scheduling
-/// state that lives on it since Phase 3) was entirely excluded from backup/restore, on the
-/// stale theory that questions are "regeneratable" -- true of their content, false of the
-/// FSRS progress earned by actually reviewing them. Since chapter regeneration deletes and
-/// recreates every question in a chapter (see `QuizGenerationServiceTests`'s
-/// `WipesPreviousBankOnRegeneration` test), a backup was the one thing that could have
-/// protected that progress, and it didn't cover it at all.
+/// Regression coverage for two real, shipped gaps.
+///
+/// 1. `QuizQuestion` (and the FSRS scheduling state that lives on it since Phase 3) was
+///    entirely excluded from backup/restore, on the stale theory that questions are
+///    "regeneratable" -- true of their content, false of the FSRS progress earned by
+///    actually reviewing them. Since chapter regeneration deletes and recreates every
+///    question in a chapter (see `QuizGenerationServiceTests`'s `WipesPreviousBankOnRegeneration`
+///    test), a backup was the one thing that could have protected that progress, and it
+///    didn't cover it at all.
+/// 2. `importData` used to skip EVERY book whose title already existed locally, full stop --
+///    which after any reseed (the ordinary "device died, reinstalled, restored" case this
+///    whole feature exists for) is every seed book. So a restore silently dropped all FSRS
+///    progress, personal notes, and highlight memories; only chat messages and personal
+///    writing (neither gated on a newly-created book) actually survived. `testExistingBook...`
+///    below used to assert that exact bug as correct behavior -- it's been rewritten to
+///    assert the fix instead: an existing book now MERGES in new content, while genuinely
+///    pre-existing local progress is never overwritten.
 @MainActor
 final class BackupServiceTests: XCTestCase {
 
     private func makeContext() throws -> ModelContext {
-        let schema = Schema([Book.self, Chapter.self, Highlight.self, QuizQuestion.self, ChatMessage.self])
+        let schema = Schema([Book.self, Chapter.self, Highlight.self, HighlightMemory.self, QuizQuestion.self, ChatMessage.self, PersonalWritingEntry.self, QuizAttempt.self, QuizAnswerRecord.self])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: config)
         return ModelContext(container)
@@ -73,10 +83,11 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertEqual(restored.sourceHighlights.first?.text, "Apoptosis is programmed cell death.")
     }
 
-    /// A book that already exists locally keeps its own live questions/progress untouched --
-    /// same "skip, don't merge" rule as `HighlightMemory` restore, so importing an old backup
-    /// can never stomp on newer local progress.
-    func testExistingBookSkipsQuizQuestionImportEntirely() throws {
+    /// The core fix, exercised directly: restoring onto a book that already exists locally
+    /// (but has nothing in it yet -- the exact shape of a freshly-reseeded book before any
+    /// of the backup's content has landed) now MERGES the backup's chapter/question/FSRS
+    /// state in, rather than skipping the whole book the way it used to.
+    func testExistingEmptyBookMergesInNewContentFromBackup() throws {
         let sourceContext = try makeContext()
         let book = Book(title: "Attached", author: "Amir Levine")
         sourceContext.insert(book)
@@ -85,6 +96,43 @@ final class BackupServiceTests: XCTestCase {
         book.chapters.append(chapter)
         let question = QuizQuestion(book: book, chapter: chapter, questionType: .recallMCQ, prompt: "p", explanation: "e")
         question.fsrsReps = 5
+        question.fsrsStability = 7.5
+        sourceContext.insert(question)
+        chapter.quizQuestions.append(question)
+        try sourceContext.save()
+        let data = try BackupService.exportData(books: [book])
+
+        let targetContext = try makeContext()
+        // Same title, but nothing in it yet -- exactly what a reseeded book looks like
+        // before restore lands.
+        let existingBook = Book(title: "Attached", author: "Amir Levine")
+        targetContext.insert(existingBook)
+        try targetContext.save()
+
+        let result = try BackupService.importData(data, existingBooks: [existingBook], modelContext: targetContext)
+
+        XCTAssertEqual(result.booksImported, 0, "the book itself already existed -- this is a merge, not a new insert")
+        XCTAssertEqual(result.booksMerged, 1)
+        XCTAssertEqual(result.quizQuestionsImported, 1, "the chapter/question genuinely didn't exist locally yet, so they should be merged in")
+
+        let restoredQuestions = try targetContext.fetch(FetchDescriptor<QuizQuestion>())
+        XCTAssertEqual(restoredQuestions.count, 1)
+        XCTAssertEqual(restoredQuestions.first?.fsrsReps, 5)
+        XCTAssertEqual(restoredQuestions.first?.fsrsStability, 7.5)
+    }
+
+    /// The other half of the same fix: a question that DOES already exist locally (same
+    /// prompt, in the same chapter of the same book) keeps its own real local progress --
+    /// restoring an older backup must never roll a more-advanced local FSRS state backward.
+    func testExistingQuestionProgressIsNeverOverwrittenByRestore() throws {
+        let sourceContext = try makeContext()
+        let book = Book(title: "Attached", author: "Amir Levine")
+        sourceContext.insert(book)
+        let chapter = Chapter(title: "Ch 1", summary: "s")
+        chapter.book = book
+        book.chapters.append(chapter)
+        let question = QuizQuestion(book: book, chapter: chapter, questionType: .recallMCQ, prompt: "p", explanation: "e")
+        question.fsrsReps = 1 // an OLDER backup's state
         sourceContext.insert(question)
         chapter.quizQuestions.append(question)
         try sourceContext.save()
@@ -93,11 +141,196 @@ final class BackupServiceTests: XCTestCase {
         let targetContext = try makeContext()
         let existingBook = Book(title: "Attached", author: "Amir Levine")
         targetContext.insert(existingBook)
+        let existingChapter = Chapter(title: "Ch 1", summary: "s")
+        existingChapter.book = existingBook
+        existingBook.chapters.append(existingChapter)
+        let existingQuestion = QuizQuestion(book: existingBook, chapter: existingChapter, questionType: .recallMCQ, prompt: "p", explanation: "e")
+        existingQuestion.fsrsReps = 9 // NEWER, more-advanced real local progress
+        targetContext.insert(existingQuestion)
+        existingChapter.quizQuestions.append(existingQuestion)
         try targetContext.save()
 
         let result = try BackupService.importData(data, existingBooks: [existingBook], modelContext: targetContext)
 
-        XCTAssertEqual(result.quizQuestionsImported, 0, "an already-existing book's questions must not be touched by import")
-        XCTAssertEqual(try targetContext.fetch(FetchDescriptor<QuizQuestion>()).count, 0)
+        XCTAssertEqual(result.quizQuestionsImported, 0, "the question already exists locally (same prompt, same chapter) -- must not be duplicated or touched")
+        let questions = try targetContext.fetch(FetchDescriptor<QuizQuestion>())
+        XCTAssertEqual(questions.count, 1)
+        XCTAssertEqual(questions.first?.fsrsReps, 9, "local progress must survive untouched, not get rolled back by an older backup")
+    }
+
+    /// `personalNote`/`tags`/`isReminder` on a highlight that already exists locally (same
+    /// book, same text) get filled in from the backup only where the local value is empty --
+    /// never overwriting something the user already wrote.
+    func testHighlightPersonalNoteFillsGapWithoutOverwritingExisting() throws {
+        let sourceContext = try makeContext()
+        let book = Book(title: "Walden", author: "Thoreau")
+        sourceContext.insert(book)
+        let noted = Highlight(text: "Simplify, simplify.", personalNote: "From the backup.", tags: ["simplicity"])
+        noted.book = book
+        book.highlights.append(noted)
+        let untouched = Highlight(text: "I went to the woods.", personalNote: "Backup's own note -- must not overwrite local.")
+        untouched.book = book
+        book.highlights.append(untouched)
+        try sourceContext.save()
+        let data = try BackupService.exportData(books: [book])
+
+        let targetContext = try makeContext()
+        let existingBook = Book(title: "Walden", author: "Thoreau")
+        targetContext.insert(existingBook)
+        // No local note yet -- should be filled in from the backup.
+        let localNoted = Highlight(text: "Simplify, simplify.")
+        localNoted.book = existingBook
+        existingBook.highlights.append(localNoted)
+        // Already has a real local note -- must survive untouched.
+        let localUntouched = Highlight(text: "I went to the woods.", personalNote: "My own real note.")
+        localUntouched.book = existingBook
+        existingBook.highlights.append(localUntouched)
+        try targetContext.save()
+
+        try BackupService.importData(data, existingBooks: [existingBook], modelContext: targetContext)
+
+        let highlights = try targetContext.fetch(FetchDescriptor<Highlight>())
+        let restoredNoted = try XCTUnwrap(highlights.first { $0.text == "Simplify, simplify." })
+        XCTAssertEqual(restoredNoted.personalNote, "From the backup.", "gap should be filled in")
+        XCTAssertEqual(restoredNoted.tags, ["simplicity"])
+
+        let restoredUntouched = try XCTUnwrap(highlights.first { $0.text == "I went to the woods." })
+        XCTAssertEqual(restoredUntouched.personalNote, "My own real note.", "an existing note must never be overwritten by a restore")
+    }
+
+    /// The end-to-end scenario the whole feature exists for: a reinstall reseeds every book
+    /// fresh (so every title already exists, matching `testExistingEmptyBookMergesInNewContentFromBackup`'s
+    /// setup), and restoring an old backup on top of that must bring back highlight memories
+    /// too, not just questions and notes.
+    func testHighlightMemoryRestoresOntoAlreadyExistingBook() throws {
+        let sourceContext = try makeContext()
+        let book = Book(title: "Sapiens", author: "Harari")
+        sourceContext.insert(book)
+        let highlight = Highlight(text: "Fiction has enabled us to cooperate.")
+        highlight.book = book
+        book.highlights.append(highlight)
+        let memory = HighlightMemory(highlight: highlight, nextReviewDate: Date(timeIntervalSince1970: 1_900_000_000))
+        memory.box = 3
+        memory.timesSeen = 4
+        memory.timesCorrect = 3
+        highlight.memory = memory
+        sourceContext.insert(memory)
+        try sourceContext.save()
+        let data = try BackupService.exportData(books: [book])
+
+        let targetContext = try makeContext()
+        let existingBook = Book(title: "Sapiens", author: "Harari")
+        targetContext.insert(existingBook)
+        try targetContext.save()
+
+        let result = try BackupService.importData(data, existingBooks: [existingBook], modelContext: targetContext)
+
+        XCTAssertEqual(result.highlightMemoriesImported, 1)
+        let highlights = try targetContext.fetch(FetchDescriptor<Highlight>())
+        let restored = try XCTUnwrap(highlights.first)
+        XCTAssertEqual(restored.memory?.box, 3)
+        XCTAssertEqual(restored.memory?.timesSeen, 4)
+    }
+
+    /// `QuizAttempt`/`QuizAnswerRecord` -- exam scores, timing, free-recall answers -- had
+    /// zero backup coverage at all before this. Pure history: always imports regardless of
+    /// whether the book was new or already existed, since there's nothing local it could
+    /// conflict with.
+    func testQuizAttemptAndAnswersRoundTrip() throws {
+        let sourceContext = try makeContext()
+        let book = Book(title: "Sapiens", author: "Harari")
+        sourceContext.insert(book)
+        let chapter = Chapter(title: "Ch 1", summary: "s")
+        chapter.book = book
+        book.chapters.append(chapter)
+        let question = QuizQuestion(book: book, chapter: chapter, questionType: .recallMCQ, prompt: "What enabled cooperation?", choices: ["Fiction", "Fire"], correctAnswerIndex: 0, explanation: "e")
+        sourceContext.insert(question)
+        chapter.quizQuestions.append(question)
+
+        let attempt = QuizAttempt(book: book, scopeDescription: "Ch 1", mode: .examSimulation, timeLimitSeconds: 600, startedAt: Date(timeIntervalSince1970: 1_750_000_000))
+        attempt.completedAt = Date(timeIntervalSince1970: 1_750_000_500)
+        attempt.totalQuestions = 1
+        attempt.correctCount = 1
+        attempt.answeredCount = 1
+        sourceContext.insert(attempt)
+
+        let answer = QuizAnswerRecord(attempt: attempt, question: question)
+        answer.selectedAnswerIndex = 0
+        answer.isCorrect = true
+        answer.answerText = "Fiction"
+        answer.timeSpentSeconds = 12.5
+        sourceContext.insert(answer)
+        attempt.answers.append(answer)
+        try sourceContext.save()
+
+        let data = try BackupService.exportData(books: [book], quizAttempts: [attempt])
+
+        let targetContext = try makeContext()
+        let result = try BackupService.importData(data, existingBooks: [], modelContext: targetContext)
+
+        XCTAssertEqual(result.quizAttemptsImported, 1)
+        let restoredAttempts = try targetContext.fetch(FetchDescriptor<QuizAttempt>())
+        XCTAssertEqual(restoredAttempts.count, 1)
+        let restoredAttempt = try XCTUnwrap(restoredAttempts.first)
+        XCTAssertEqual(restoredAttempt.correctCount, 1)
+        XCTAssertEqual(restoredAttempt.answers.count, 1)
+        // The real bug caught in review before shipping: the restored answer's
+        // `question` link used to resolve against an arbitrary highlight's book
+        // instead of the attempt's own book.
+        XCTAssertEqual(restoredAttempt.answers.first?.question?.prompt, "What enabled cooperation?")
+        XCTAssertEqual(restoredAttempt.answers.first?.answerText, "Fiction")
+    }
+
+    /// Re-running the exact same restore a second time must not duplicate the attempt --
+    /// same idempotence guarantee every other DTO in this file already has.
+    func testQuizAttemptImportIsIdempotent() throws {
+        let sourceContext = try makeContext()
+        let book = Book(title: "Sapiens", author: "Harari")
+        sourceContext.insert(book)
+        let attempt = QuizAttempt(book: book, scopeDescription: "Ch 1", mode: .practice, startedAt: Date(timeIntervalSince1970: 1_750_000_000))
+        sourceContext.insert(attempt)
+        try sourceContext.save()
+        let data = try BackupService.exportData(books: [book], quizAttempts: [attempt])
+
+        let targetContext = try makeContext()
+        _ = try BackupService.importData(data, existingBooks: [], modelContext: targetContext)
+        let existingAttempts = try targetContext.fetch(FetchDescriptor<QuizAttempt>())
+        let existingBooksAfterFirstImport = try targetContext.fetch(FetchDescriptor<Book>())
+
+        let result = try BackupService.importData(data, existingBooks: existingBooksAfterFirstImport, existingQuizAttempts: existingAttempts, modelContext: targetContext)
+
+        XCTAssertEqual(result.quizAttemptsImported, 0, "the exact same attempt re-imported a second time must not duplicate")
+        XCTAssertEqual(try targetContext.fetch(FetchDescriptor<QuizAttempt>()).count, 1)
+    }
+
+    /// Precise Undo: deletes exactly the objects one import inserted, leaving everything
+    /// that already existed locally completely untouched.
+    func testUndoImportRemovesExactlyWhatWasInserted() throws {
+        let sourceContext = try makeContext()
+        let book = Book(title: "Walden", author: "Thoreau")
+        sourceContext.insert(book)
+        let highlight = Highlight(text: "Simplify, simplify.")
+        highlight.book = book
+        book.highlights.append(highlight)
+        try sourceContext.save()
+        let data = try BackupService.exportData(books: [book])
+
+        let targetContext = try makeContext()
+        // A real, pre-existing entry that must survive the undo untouched.
+        let survivor = PersonalWritingEntry(source: "journal", title: "Mine", text: "Untouched by any of this.")
+        targetContext.insert(survivor)
+        try targetContext.save()
+
+        let result = try BackupService.importData(data, existingBooks: [], modelContext: targetContext)
+        XCTAssertEqual(result.booksImported, 1)
+        XCTAssertEqual(try targetContext.fetch(FetchDescriptor<Book>()).count, 1)
+
+        BackupService.undoImport(result.insertedIdentifiers, modelContext: targetContext)
+
+        XCTAssertEqual(try targetContext.fetch(FetchDescriptor<Book>()).count, 0, "the restored book should be gone")
+        XCTAssertEqual(try targetContext.fetch(FetchDescriptor<Highlight>()).count, 0, "cascaded away with its book")
+        let remainingEntries = try targetContext.fetch(FetchDescriptor<PersonalWritingEntry>())
+        XCTAssertEqual(remainingEntries.count, 1, "the pre-existing entry must survive an undo of an unrelated import")
+        XCTAssertEqual(remainingEntries.first?.title, "Mine")
     }
 }

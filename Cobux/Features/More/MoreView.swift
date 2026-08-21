@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Landing point for the lower-priority tabs — Goodreads import, Reminders,
-/// and Settings (which already has its own Appearance/theme picker) — kept
+/// Landing point for the lower-priority tabs — Reminders and Settings
+/// (which already has its own Appearance/theme picker) — kept
 /// off the main tab bar so Library/Wisdom/Chat, the features actually used
 /// day to day, stay front and center.
 struct MoreView: View {
@@ -12,35 +12,56 @@ struct MoreView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
+                // Second consumer of CobuxFormSection/CobuxSettingsRow (2.2.0),
+                // proving the pattern established on SettingsView generalizes.
+                // This screen was a flat, unsectioned List before -- grouping it
+                // into "Progress"/"Library" is itself part of "looks modern," not
+                // just a mechanical swap: a flat list of unrelated rows is exactly
+                // the stock-Form look this redesign is fixing.
                 if streak > 0 {
-                    HStack {
-                        Image(systemName: "flame.fill")
-                            .foregroundStyle(Color.cobuxWarning)
-                        Text("\(streak) day\(streak == 1 ? "" : "s") streak")
-                            .fontWeight(.semibold)
-                            .contentTransition(.numericText())
-                            .animation(.easeOut(duration: 0.3), value: streak)
-                        Spacer()
+                    CobuxFormSection(title: "Progress") {
+                        CobuxSettingsRow(
+                            icon: "flame.fill",
+                            iconTint: Color.cobuxWarning,
+                            label: "Current streak",
+                            value: "\(streak) day\(streak == 1 ? "" : "s")",
+                            valueNumericTransition: true
+                        )
+                        .animation(.easeOut(duration: 0.3), value: streak)
                     }
                 }
 
-                NavigationLink(destination: GoodreadsShelfView()) {
-                    Label("Goodreads", systemImage: "text.book.closed.fill")
+                // Its own section, not folded into "Library" below -- unlike
+                // Reminders/Settings/What's New (each a one-time visit, or an
+                // occasional check-in), this is meant to be a daily habit, and
+                // burying it as the fourth row of a settings-shaped list would
+                // undersell that. `path` binding matches the four other tabs'
+                // convention (see `ContentView.tabSelection`'s doc comment) --
+                // More is a menu, not content, so this is the one place that
+                // convention doesn't apply, and this NavigationLink is fine
+                // pushing onto More's own reset-on-leave path.
+                CobuxFormSection(title: "Journal") {
+                    NavigationLink(destination: JournalListView()) {
+                        Label("Journal", systemImage: "book.closed.fill")
+                    }
                 }
-                NavigationLink(destination: RemindersView(notificationManager: notificationManager)) {
-                    Label("Reminders", systemImage: "bell.fill")
+
+                CobuxFormSection(title: "Library") {
+                    NavigationLink(destination: RemindersView(notificationManager: notificationManager)) {
+                        Label("Reminders", systemImage: "bell.fill")
+                    }
+                    NavigationLink(destination: SettingsView()) {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                    NavigationLink(destination: ChangelogView()) {
+                        Label("What's New", systemImage: "sparkles")
+                    }
+                    #if DEBUG
+                    NavigationLink(destination: DiagnosticsView()) {
+                        Label("Diagnostics", systemImage: "stethoscope")
+                    }
+                    #endif
                 }
-                NavigationLink(destination: SettingsView()) {
-                    Label("Settings", systemImage: "gearshape")
-                }
-                NavigationLink(destination: ChangelogView()) {
-                    Label("What's New", systemImage: "sparkles")
-                }
-                #if DEBUG
-                NavigationLink(destination: DiagnosticsView()) {
-                    Label("Diagnostics", systemImage: "stethoscope")
-                }
-                #endif
             }
             .navigationTitle("More")
             .onAppear { streak = StreakTracker.currentStreak }

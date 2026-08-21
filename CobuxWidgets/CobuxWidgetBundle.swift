@@ -5,6 +5,7 @@ import SwiftUI
 struct CobuxWidgetBundle: WidgetBundle {
     var body: some Widget {
         CobuxHighlightWidget()
+        CobuxQuickCheckWidget()
         CobuxQuizLiveActivity()
     }
 }

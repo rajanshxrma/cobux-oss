@@ -33,7 +33,15 @@ struct UnsortedHighlightsView: View {
         .navigationTitle("Unsorted")
         .onAppear(perform: reload)
         .onChange(of: scenePhase) { _, newPhase in
-            guard newPhase == .active, CrossProcessSync.consumeDirtyFlag() else { return }
+            // Deliberately unconditional, not gated on `CrossProcessSync.consumeDirtyFlag()`
+            // -- that flag is single-shot process-wide, and `LibraryView` (the tab root,
+            // always present underneath this pushed screen) already consumes it for its
+            // own refresh. Two `.onChange` handlers racing to consume the same one-shot
+            // flag meant whichever fired first silently starved the other of a refresh
+            // it also needed. `reload()` is a bounded, cheap fetch (`fetchLimit = 500`),
+            // same "safe to call every foreground" cost class as `WatchSyncService.sync`
+            // elsewhere in this app -- no correctness reason to gate it at all.
+            guard newPhase == .active else { return }
             reload()
         }
     }

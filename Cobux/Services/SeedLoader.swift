@@ -12,6 +12,14 @@ struct SeedBookDocument: Codable {
     let author: String
     let coverColorHex: String
     let coverImageURL: String?
+    /// The bundled `Cover-<slug>` imageset name for this book -- see
+    /// `Book.coverAssetName`'s doc comment. Optional only so a JSON file that
+    /// predates this field still decodes; every current seed book sets it.
+    let coverAssetName: String?
+    /// Groups this book in the chat thread picker's category sections.
+    /// Optional so a JSON file that predates this field decodes fine and the
+    /// book simply lands in the picker's "Other" bucket.
+    let category: String?
     /// Maps to `BookContentProfile.rawValue`; unknown/missing values fall
     /// back to `.propositional` rather than failing the whole book.
     let contentProfile: String
@@ -78,18 +86,36 @@ enum SeedLoader {
 
         let book: Book
         if let existingBook {
+            // Nil-only backfills run BEFORE the version guard: a device that
+            // seeded a book before these fields existed must still pick them
+            // up even when the book's contentVersion never changes. Keeping
+            // them behind the guard is exactly the bug that left every
+            // pre-category install showing "Medical Reference" + "Other" as
+            // the only picker sections.
+            if existingBook.coverImageURL == nil {
+                existingBook.coverImageURL = doc.coverImageURL
+            }
+            // Same nil-only backfill, same reasoning -- a device that seeded
+            // this book before `coverAssetName` existed must still pick up
+            // the bundled cover on the very next launch, not stay on
+            // whatever the old `coverImageURL` fetch happened to render.
+            if existingBook.coverAssetName == nil {
+                existingBook.coverAssetName = doc.coverAssetName
+            }
+            if existingBook.category == nil {
+                existingBook.category = doc.category
+            }
             guard existingBook.seedContentVersion < doc.contentVersion else { return }
             book = existingBook
             book.contentProfile = BookContentProfile(rawValue: doc.contentProfile) ?? .propositional
-            if book.coverImageURL == nil {
-                book.coverImageURL = doc.coverImageURL
-            }
         } else {
             book = Book(
                 title: doc.title,
                 author: doc.author,
                 coverColorHex: doc.coverColorHex,
                 coverImageURL: doc.coverImageURL,
+                coverAssetName: doc.coverAssetName,
+                category: doc.category,
                 contentProfile: BookContentProfile(rawValue: doc.contentProfile) ?? .propositional
             )
             modelContext.insert(book)
@@ -116,7 +142,16 @@ enum SeedLoader {
             }
         }
 
-        let existingTexts = Set(book.highlights.map(\.text))
+        // `var`, updated inside the loop -- when a `contentVersion` bump's own
+        // JSON has two highlights sharing exact text (a duplicate that slips
+        // past content authoring, e.g. the same quote pasted into two
+        // chapters), a `let` snapshot taken before the loop only ever reflects
+        // what was already in the store, so both copies pass the "not
+        // existing yet" check and both get inserted -- a visible duplicate
+        // quote in the library. Inserting into this set as each highlight is
+        // added keeps later duplicates in the same document from re-passing
+        // the check.
+        var existingTexts = Set(book.highlights.map(\.text))
         for highlightDoc in doc.highlights where !existingTexts.contains(highlightDoc.text) {
             let highlight = Highlight(
                 text: highlightDoc.text,
@@ -126,6 +161,7 @@ enum SeedLoader {
             )
             highlight.book = book
             book.highlights.append(highlight)
+            existingTexts.insert(highlightDoc.text)
         }
 
         book.seedContentVersion = doc.contentVersion

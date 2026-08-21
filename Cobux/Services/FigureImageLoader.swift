@@ -1,16 +1,46 @@
 import UIKit
+import ImageIO
 
 /// Resolves a `Figure.fileName` to its bundled image, mirroring `SeedLoader`'s bundle-lookup
-/// pattern. Nothing calls this yet with real data -- `Cobux/Resources/Figures/` is empty until
-/// image extraction runs (blocked on Rajan's own Anthropic API key) -- but the lookup itself
-/// works today, so bundling real images later needs zero code changes here.
+/// pattern. `Cobux/Resources/Figures/` now holds the real extracted images (1,597 of them).
 enum FigureImageLoader {
-    static func image(for figure: Figure) -> UIImage? {
-        guard let url = Bundle.main.url(forResource: figure.fileName, withExtension: nil, subdirectory: "Figures")
-                ?? Bundle.main.url(forResource: (figure.fileName as NSString).deletingPathExtension, withExtension: (figure.fileName as NSString).pathExtension, subdirectory: "Figures"),
-              let data = try? Data(contentsOf: url) else {
-            return nil
-        }
-        return UIImage(data: data)
+    /// `async`, not a plain sync function returning `UIImage?` directly: the disk read +
+    /// JPEG decode below are genuinely blocking work, and every call site (`MessageBubbleView`)
+    /// runs on `@MainActor`. Without the `Task.detached` hop, calling this from a chat bubble's
+    /// `.task` would still execute the blocking I/O ON the main thread despite the `await`
+    /// keyword being present at the call site -- an `async` signature alone doesn't move work
+    /// off the calling actor unless something inside actually hops. Matters here because chat
+    /// bubbles render inside a `LazyVStack`, which re-creates bubble state (and re-triggers
+    /// this load) every time a figure-bearing reply scrolls back into view -- a synchronous
+    /// decode on every one of those would show up as real scroll stutter.
+    static func image(for figure: Figure) async -> UIImage? {
+        let fileName = figure.fileName
+        return await Task.detached(priority: .userInitiated) {
+            guard let url = Bundle.main.url(forResource: fileName, withExtension: nil, subdirectory: "Figures")
+                    ?? Bundle.main.url(forResource: (fileName as NSString).deletingPathExtension, withExtension: (fileName as NSString).pathExtension, subdirectory: "Figures") else {
+                return nil
+            }
+            return downsampled(at: url, maxPixelDimension: 800)
+        }.value
+    }
+
+    /// ImageIO thumbnail decode instead of `UIImage(data:)`: a chat thread's
+    /// `LazyVStack` retains each figure-bearing bubble's decoded image for
+    /// every row scrolled past, so on a 4GB device a long study session can
+    /// accumulate toward a jetsam kill. Decoding straight to display size
+    /// (~800px covers the widest bubble on any current phone at 2-3x) caps
+    /// each retained image at a fraction of a full decode, and never holds
+    /// the original bitmap in memory at all.
+    private static func downsampled(at url: URL, maxPixelDimension: CGFloat) -> UIImage? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else { return nil }
+        let thumbnailOptions = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelDimension,
+        ] as CFDictionary
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions) else { return nil }
+        return UIImage(cgImage: cgImage)
     }
 }

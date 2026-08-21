@@ -24,10 +24,7 @@ struct AskCobuxIntent: AppIntent {
     var question: String
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
-        guard let container = try? ModelContainer(
-            for: Book.self, Highlight.self, Chapter.self, ChatMessage.self, Theme.self,
-            configurations: ModelConfiguration(groupContainer: .identifier("group.com.rajansharma.Cobux"))
-        ) else {
+        guard let container = CobuxSchema.makeAppGroupContainer() else {
             throw AskCobuxIntentError.noContainer
         }
 

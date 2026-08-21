@@ -10,6 +10,10 @@ struct WisdomGraphView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Theme.name) private var themes: [Theme]
     @Query private var highlights: [Highlight]
+    @Query private var books: [Book]
+    @AppStorage(BookSourceFilter.excludedKey) private var excludedRaw: String = ""
+    @AppStorage(BookSourceFilter.includedKey) private var includedRaw: String = ""
+    @State private var showingSourcePicker = false
     @State private var searchText = ""
     @State private var showMergeExplanation = false
     @State private var isMerging = false
@@ -17,35 +21,145 @@ struct WisdomGraphView: View {
     @State private var showMergeResult = false
     @State private var showNoAPIKeyAlert = false
     @AppStorage("hasSeenTagMergeExplanation") private var hasSeenTagMergeExplanation = false
+    @State private var showingFlow = false
 
     private let columns = [GridItem(.adaptive(minimum: 160), spacing: 14)]
 
-    /// Filters by theme name only — with the medical textbooks now in the
-    /// library, there can be hundreds of narrow, disease-specific themes
-    /// (vs. the small handful the self-help books produced), so finding one
-    /// by scrolling alone stopped being practical.
-    private var filteredThemes: [Theme] {
-        guard !searchText.isEmpty else { return themes }
-        return themes.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+    /// The same book scoping Flow applies, shared through `BookSourceFilter`
+    /// so a book switched off in one surface is off in both. One filter, one
+    /// answer — being told a book is excluded and then meeting it here anyway
+    /// would read as the setting being broken.
+    private var excludedBookIDs: Set<UUID> {
+        BookSourceFilter.effectiveExcludedIDs(books: books, excludedRaw: excludedRaw, includedRaw: includedRaw)
+    }
+
+    /// Everything `body` needs to know about book scoping, resolved in exactly
+    /// one pass over the library.
+    ///
+    /// This used to be five separate computed properties (`excludedBookIDs`,
+    /// `scopedHighlights`, `scopedThemes`, `visibleHighlights(in:)`,
+    /// `filteredThemes`), each recomputed from scratch on every single access —
+    /// and `body` touched them nine times, twice from *inside* a `ForEach` over
+    /// themes. Worse, the per-highlight `isVisible` helper called
+    /// `excludedBookIDs` itself, so `effectiveExcludedIDs` (a full scan of every
+    /// `Book`, faulting `contentProfileRaw` on each) ran once per highlight
+    /// rather than once per render. With this library's seed content — 26 books,
+    /// ~5,900 highlights, hundreds of themes — a single render of this screen
+    /// worked out to tens of millions of relationship faults, which is the
+    /// "switching tabs takes forever" report: the Wisdom tab was recomputing an
+    /// O(themes² × highlights × books) answer to a question with an O(themes +
+    /// highlights) answer. Same numbers on screen, computed once.
+    private struct Scope {
+        var excludedBookIDs: Set<UUID> = []
+        var hasAnyVisibleHighlight = false
+        /// A theme survives if anything still in scope carries it. Themes that
+        /// only ever came from a switched-off book disappear entirely; themes a
+        /// reference text merely *shares* with the rest of the library stay,
+        /// with their counts narrowed to what's in scope.
+        var themes: [Theme] = []
+        /// `themes` narrowed by the search field.
+        var filteredThemes: [Theme] = []
+        var visibleCounts: [UUID: Int] = [:]
+
+        func visibleHighlightCount(in theme: Theme) -> Int { visibleCounts[theme.id] ?? 0 }
+    }
+
+    private func makeScope() -> Scope {
+        var scope = Scope()
+        let excluded = excludedBookIDs
+        scope.excludedBookIDs = excluded
+
+        if excluded.isEmpty {
+            // Nothing is filtered out, so no highlight needs visiting at all —
+            // the counts are the relationship counts and every theme survives.
+            scope.hasAnyVisibleHighlight = !highlights.isEmpty
+            scope.themes = themes
+            for theme in themes { scope.visibleCounts[theme.id] = theme.highlights.count }
+        } else {
+            // `contains(where:)` rather than building and discarding a filtered
+            // array of every visible highlight just to ask whether one exists.
+            scope.hasAnyVisibleHighlight = highlights.contains {
+                BookSourceFilter.isVisible($0, excluding: excluded)
+            }
+            for theme in themes {
+                let visible = theme.highlights.reduce(into: 0) { total, highlight in
+                    if BookSourceFilter.isVisible(highlight, excluding: excluded) { total += 1 }
+                }
+                scope.visibleCounts[theme.id] = visible
+                if visible > 0 { scope.themes.append(theme) }
+            }
+        }
+
+        // Filters by theme name only — a reference textbook can contribute
+        // hundreds of narrow, subject-specific themes (vs. the small handful a
+        // self-help book produces), so finding one by scrolling alone stopped
+        // being practical.
+        scope.filteredThemes = searchText.isEmpty
+            ? scope.themes
+            : scope.themes.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+        return scope
+    }
+
+    /// Only `runTagMerge` needs the highlights themselves rather than a count,
+    /// and it runs on a tap, not on every render — so this stays a one-shot
+    /// computation instead of joining `Scope`. It still resolves
+    /// `excludedBookIDs` exactly once rather than once per highlight.
+    private var scopedHighlights: [Highlight] {
+        let excluded = excludedBookIDs
+        guard !excluded.isEmpty else { return highlights }
+        return highlights.filter { BookSourceFilter.isVisible($0, excluding: excluded) }
     }
 
     var body: some View {
         NavigationStack(path: $path) {
+            if SeedingStatus.shared.isSeeding {
+                // Same seed-merge guard as `BookDetailView`/`QuizHomeView` --
+                // `Scope` faults `Theme.highlights` synchronously while building,
+                // which is the confirmed Build-5 crash class if it lands mid
+                // seed/upgrade merge. Missing here until now; a user swiping to
+                // Wisdom during a merge could hit the same crash every other
+                // launch-adjacent screen already guards against.
+                ProgressView("Syncing your library…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .navigationTitle("Wisdom Graph")
+            } else {
+                graphContent(makeScope())
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func graphContent(_ scope: Scope) -> some View {
             ScrollView {
                 VStack(spacing: 20) {
+                    // Flow lives here rather than as a 6th tab — five tabs is
+                    // already the ergonomic ceiling, and Wisdom is the
+                    // browse-your-library tab Flow is the moving version of.
+                    if scope.hasAnyVisibleHighlight {
+                        flowHeroCard
+                    }
+
                     if themes.isEmpty {
                         emptyState
-                    } else if filteredThemes.isEmpty {
+                    } else if scope.themes.isEmpty {
+                        allBooksExcludedState
+                    } else if scope.filteredThemes.isEmpty {
                         noSearchResultsState
                     } else {
                         LazyVGrid(columns: columns, spacing: 14) {
-                            ForEach(filteredThemes) { theme in
-                                // `allThemes:` always passes the full, unfiltered
-                                // list — related-theme navigation inside a theme's
-                                // detail view shouldn't be limited by whatever
-                                // search text happens to be active here.
-                                NavigationLink(destination: WisdomThemeDetailView(theme: theme, allThemes: themes)) {
-                                    ThemeCard(theme: theme)
+                            ForEach(scope.filteredThemes) { theme in
+                                // `allThemes:` passes the scoped list, not the
+                                // search-filtered one — related-theme navigation
+                                // inside a theme's detail view shouldn't be
+                                // limited by whatever search text happens to be
+                                // active here, but it must still respect which
+                                // books are switched on.
+                                NavigationLink(destination: WisdomThemeDetailView(
+                                    theme: theme,
+                                    allThemes: scope.themes,
+                                    excludedBookIDs: scope.excludedBookIDs
+                                )) {
+                                    ThemeCard(theme: theme, highlightCount: scope.visibleHighlightCount(in: theme))
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -57,6 +171,19 @@ struct WisdomGraphView: View {
             }
             .navigationTitle("Wisdom Graph")
             .searchable(text: $searchText, prompt: "Search themes")
+            .fullScreenCover(isPresented: $showingFlow) {
+                FlowView()
+            }
+            .sheet(isPresented: $showingSourcePicker) {
+                NavigationStack {
+                    BookSourceFilterView()
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { showingSourcePicker = false }
+                            }
+                        }
+                }
+            }
             .onAppear {
                 claudeService.apiKey = KeychainManager.load(key: KeychainManager.anthropicAPIKey) ?? ""
             }
@@ -65,11 +192,15 @@ struct WisdomGraphView: View {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
                             Button {
-                                withAnimation(.easeInOut(duration: 0.25)) {
-                                    WisdomGraphService.buildGraph(highlights: highlights, modelContext: modelContext)
-                                }
+                                rebuildGraph()
                             } label: {
                                 Label("Rebuild (Free)", systemImage: "arrow.clockwise")
+                            }
+
+                            Button {
+                                showingSourcePicker = true
+                            } label: {
+                                Label("Books in Flow and Wisdom", systemImage: "line.3.horizontal.decrease.circle")
                             }
 
                             Button {
@@ -118,6 +249,22 @@ struct WisdomGraphView: View {
             } message: {
                 Text("Add your Anthropic API key in Settings to use AI tag merging. The free rebuild option doesn't need one.")
             }
+    }
+
+    /// Shared by the two plain "rebuild the graph" call sites (toolbar menu,
+    /// empty-state button) -- `buildGraph` now throws (see its doc comment: it
+    /// wipes and repopulates every `Theme` row, and a silently swallowed save
+    /// failure used to leave the user looking at a rebuilt graph that would
+    /// vanish on relaunch with no indication anything went wrong). Reuses the
+    /// same alert `runTagMerge` already has rather than adding a second one.
+    private func rebuildGraph() {
+        do {
+            try withAnimation(.easeInOut(duration: 0.25)) {
+                try WisdomGraphService.buildGraph(highlights: highlights, modelContext: modelContext)
+            }
+        } catch {
+            mergeResultMessage = "Couldn't rebuild the graph: \(error.localizedDescription)"
+            showMergeResult = true
         }
     }
 
@@ -125,11 +272,28 @@ struct WisdomGraphView: View {
         isMerging = true
         Task {
             do {
-                let (mapping, madeAPICall, usedLocalAI) = try await WisdomGraphService.mergeSimilarTags(highlights: highlights, claudeService: claudeService)
+                // Scoped, unlike `buildGraph` above: this one can be a real
+                // paid call priced on the tag list it's handed, and there's no
+                // sense paying to tidy up tags from books that are switched
+                // off and will never be displayed.
+                let (mapping, madeAPICall, usedLocalAI) = try await WisdomGraphService.mergeSimilarTags(highlights: scopedHighlights, claudeService: claudeService)
                 await MainActor.run {
                     isMerging = false
-                    withAnimation(.easeInOut(duration: 0.25)) {
-                        WisdomGraphService.buildGraph(highlights: highlights, modelContext: modelContext)
+                    do {
+                        try withAnimation(.easeInOut(duration: 0.25)) {
+                            try WisdomGraphService.buildGraph(highlights: highlights, modelContext: modelContext)
+                        }
+                    } catch {
+                        // Distinct message from the merge-failure `catch` below --
+                        // the merge itself already succeeded at this point, only
+                        // the rebuild-with-the-merged-tags step failed. `return`
+                        // here so the merge-success messaging right below can't
+                        // silently overwrite this with "Merged N tag(s)..." after
+                        // the graph that was supposed to reflect that merge failed
+                        // to save.
+                        mergeResultMessage = "Tags merged, but rebuilding the graph failed: \(error.localizedDescription)"
+                        showMergeResult = true
+                        return
                     }
                     if usedLocalAI {
                         mergeResultMessage = mapping.isEmpty
@@ -154,6 +318,25 @@ struct WisdomGraphView: View {
         }
     }
 
+    /// Distinct from "you haven't built a graph yet" — the graph exists, every
+    /// book feeding it is just switched off. The fix is a switch, not a
+    /// rebuild, so the button goes straight to the switch.
+    private var allBooksExcludedState: some View {
+        CobuxEmptyStateView(
+            icon: "line.3.horizontal.decrease.circle",
+            title: "No books switched on",
+            message: "Every book in your library is currently switched off for Flow and the Wisdom Graph, so there are no themes to show."
+        ) {
+            CobuxEmptyStateButton("Choose Books", systemImage: "line.3.horizontal.decrease.circle") {
+                showingSourcePicker = true
+            }
+            .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal)
+        .padding(.bottom, 40)
+    }
+
     private var noSearchResultsState: some View {
         VStack(spacing: 12) {
             Image(systemName: "magnifyingglass")
@@ -168,6 +351,45 @@ struct WisdomGraphView: View {
         .padding(.horizontal)
     }
 
+    /// The entry into the Flow feed — deliberately the most inviting thing on
+    /// this screen. Gradient, not a plain row: it's advertising a full-screen
+    /// experience, and it should look like one.
+    private var flowHeroCard: some View {
+        Button {
+            showingFlow = true
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: "water.waves")
+                    .font(.title2)
+                    .foregroundStyle(.white)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Flow")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Text("Swipe through your library — quotes, lessons, quick checks")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer()
+                Image(systemName: "chevron.up.2")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+            .padding(16)
+            .background(
+                LinearGradient(
+                    colors: [Color.cobuxAccent, Color.cobuxAccent.opacity(0.72)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                in: RoundedRectangle(cornerRadius: CobuxRadius.card)
+            )
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal)
+    }
+
     private var emptyState: some View {
         CobuxEmptyStateView(
             icon: "point.3.connected.trianglepath.dotted",
@@ -175,9 +397,7 @@ struct WisdomGraphView: View {
             message: "Group your highlights by theme across every book in your library — instant, and free."
         ) {
             CobuxEmptyStateButton("Build Wisdom Graph", systemImage: "sparkles") {
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    WisdomGraphService.buildGraph(highlights: highlights, modelContext: modelContext)
-                }
+                rebuildGraph()
             }
             .padding(.top, 4)
         }
@@ -190,6 +410,9 @@ struct WisdomGraphView: View {
 
 private struct ThemeCard: View {
     let theme: Theme
+    /// Passed in rather than read off `theme.highlights`, so the count matches
+    /// the list you actually get when you tap through once books are scoped.
+    let highlightCount: Int
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -205,7 +428,7 @@ private struct ThemeCard: View {
 
             Spacer(minLength: 0)
 
-            Text("\(theme.highlights.count) highlight\(theme.highlights.count == 1 ? "" : "s")")
+            Text("\(highlightCount) highlight\(highlightCount == 1 ? "" : "s")")
                 .font(.caption2)
                 .fontWeight(.medium)
                 .padding(.horizontal, 8)
@@ -224,27 +447,49 @@ private struct ThemeCard: View {
 struct WisdomThemeDetailView: View {
     let theme: Theme
     let allThemes: [Theme]
+    /// Carried down rather than re-derived from `@AppStorage`, so this screen
+    /// and the card that pushed it can never disagree about what's in scope.
+    let excludedBookIDs: Set<UUID>
+
+    private var visibleHighlights: [Highlight] {
+        excludedBookIDs.isEmpty
+            ? theme.highlights
+            : theme.highlights.filter { BookSourceFilter.isVisible($0, excluding: excludedBookIDs) }
+    }
+
+    /// A related theme built entirely out of switched-off books is dropped
+    /// rather than shown greyed out — it isn't unavailable, it doesn't apply.
+    private var visibleRelatedNames: [String] {
+        guard !excludedBookIDs.isEmpty else { return theme.relatedThemeNames }
+        return theme.relatedThemeNames.filter { name in
+            allThemes.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+        }
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if theme.highlights.isEmpty {
+                if visibleHighlights.isEmpty {
                     Text("No highlights in this theme.")
                         .foregroundStyle(.secondary)
                         .padding(.top, 24)
                 } else {
-                    ForEach(theme.highlights.sorted(by: { $0.dateAdded > $1.dateAdded })) { highlight in
+                    ForEach(visibleHighlights.sorted(by: { $0.dateAdded > $1.dateAdded })) { highlight in
                         HighlightCitationCard(highlight: highlight)
                     }
                 }
 
-                if !theme.relatedThemeNames.isEmpty {
+                if !visibleRelatedNames.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Related Themes")
                             .font(.headline)
                             .padding(.top, 8)
 
-                        RelatedThemeChips(names: theme.relatedThemeNames, allThemes: allThemes)
+                        RelatedThemeChips(
+                            names: visibleRelatedNames,
+                            allThemes: allThemes,
+                            excludedBookIDs: excludedBookIDs
+                        )
                     }
                 }
             }
@@ -301,6 +546,7 @@ private struct HighlightCitationCard: View {
 private struct RelatedThemeChips: View {
     let names: [String]
     let allThemes: [Theme]
+    let excludedBookIDs: Set<UUID>
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -315,7 +561,11 @@ private struct RelatedThemeChips: View {
     @ViewBuilder
     private func relatedChip(for name: String) -> some View {
         if let match = allThemes.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
-            NavigationLink(destination: WisdomThemeDetailView(theme: match, allThemes: allThemes)) {
+            NavigationLink(destination: WisdomThemeDetailView(
+                theme: match,
+                allThemes: allThemes,
+                excludedBookIDs: excludedBookIDs
+            )) {
                 TagBadge(tag: name)
             }
         } else {

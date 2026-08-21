@@ -59,7 +59,15 @@ public enum CitationResolver {
     /// from the model is dropped rather than shown as a chip — silently, not as an error,
     /// since a missing chip is a much smaller failure than a wrong or nonexistent one.
     public static func resolve(declaredTitles: [String], libraryTitles: [String]) -> [String] {
-        let libraryLower = Dictionary(uniqueKeysWithValues: libraryTitles.map { ($0.lowercased(), $0) })
+        // `uniqueKeysWithValues:` traps on a duplicate key -- and it isn't just
+        // theoretical, it already happened: a re-entrant seeding race (fixed
+        // separately) could write two `Book` rows sharing a title, and this ran
+        // on EVERY chat reply, so a device with a duplicate crashed on every
+        // single message. `uniquingKeysWith:` keeps the first occurrence and
+        // never traps, which is exactly the previously-fixed duplicate-Book
+        // scenario's correct behavior (both entries map to the same real title
+        // anyway).
+        let libraryLower = Dictionary(libraryTitles.map { ($0.lowercased(), $0) }, uniquingKeysWith: { first, _ in first })
         let resolved = declaredTitles.compactMap { libraryLower[$0.lowercased()] }
         // The runtime invariant Phase 0 promised: citedTitles ⊆ booksThatContributedToThisPrompt.
         // `libraryTitles` IS that contributing set -- callers are responsible for scoping it

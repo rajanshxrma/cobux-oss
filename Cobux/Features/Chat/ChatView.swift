@@ -5,15 +5,55 @@ import CobuxCore
 
 struct ChatView: View {
     @Bindable var claudeService: ClaudeService
+    /// Set by `ContentView.onOpenURL` when the iPhone home-screen/Lock-Screen
+    /// widget is tapped -- the widget always shows a highlight from a specific
+    /// book, but until now tapping it only ever opened the generic Chat tab
+    /// (`cobux://chat`), never the book that quote actually came from. Consumed
+    /// once (applied to `selectedBookID`, then cleared) rather than a persistent
+    /// binding this view keeps reading from.
+    @Binding var pendingDeepLinkBookID: UUID?
+    /// The specific highlight the tapped widget was showing, when the deep link
+    /// carried one. Consumed by pre-filling the composer with that quote so the
+    /// user lands ready to discuss it — pre-filled, never auto-sent, so they can
+    /// edit or add context before sending.
+    @Binding var pendingDeepLinkHighlightID: UUID?
     @Environment(\.modelContext) private var modelContext
     @Environment(\.colorScheme) private var colorScheme
     @Query private var books: [Book]
+    @Query private var personalWritingEntries: [PersonalWritingEntry]
 
-    @State private var messages: [(id: UUID, content: String, isUser: Bool, timestamp: Date, referencedBooks: [String], isError: Bool, isStreaming: Bool)] = []
+    /// Rajan explicitly asked for this feature (personal-writing context in
+    /// chat), so this defaults to on — but the content itself (health,
+    /// relationships, family, financial stress) is genuinely personal, so it
+    /// stays an explicit, visible, always-reachable setting (see
+    /// `SettingsView`'s matching toggle), not a buried flag with no UI. When
+    /// off, `SearchService.buildSplitContext`/`buildSplitContextForBook` skip
+    /// the retrieval step entirely — no query embedding, no ranking, nothing
+    /// added to any prompt — not just a UI-level hide.
+    @AppStorage("personalWritingContextEnabled") private var personalWritingContextEnabled: Bool = true
+    /// Defaults ON as of 2.5.3. Rajan had reserved the decision on whether real
+    /// names from journals may appear in replies; he has now made it. Must stay
+    /// identical to `SettingsView`'s copy of this key, or the toggle and this
+    /// retrieval gate would disagree. Existing installs are unaffected either
+    /// way -- `@AppStorage` only applies a default when the key is absent, so
+    /// anyone who already chose a value keeps it.
+    @AppStorage("useRealNamesInLifeExamples") private var useRealNamesInLifeExamples: Bool = true
+
+    @State private var messages: [(id: UUID, content: String, isUser: Bool, timestamp: Date, referencedBooks: [String], isError: Bool, isStreaming: Bool, referencedFigureID: UUID?)] = []
     @State private var inputText = ""
+    /// Bumped on every successful send purely to change the composer
+    /// `TextField`'s SwiftUI identity — see `sendMessage`.
+    @State private var composerGeneration = 0
     @State private var isStreaming = false
     @State private var conversationHistory: [AIMessage] = []
     @State private var streamTask: Task<Void, Never>?
+    /// The one stream `isStreaming`/`streamTask` are currently allowed to
+    /// speak for. Set the instant a new stream starts; only `markNetworkDone`
+    /// for THIS id may flip `isStreaming`/`streamTask` back — see its own
+    /// comment for the race this closes (switching threads mid-reply, which
+    /// cancels the old stream, then sending a new message before the old
+    /// stream's async cancellation handler actually lands).
+    @State private var activeStreamID: UUID?
 
     /// Raw text received so far per active stream — the network can deliver
     /// chunks in bursty batches, so what's actually *displayed* is paced out
@@ -23,6 +63,7 @@ struct ChatView: View {
     @State private var pendingFinalize: [UUID: (userMessage: String, referencedTitles: [String], notice: String?, wasCancelled: Bool)] = [:]
     @State private var revealTickers: [UUID: Task<Void, Never>] = [:]
     @State private var showNoAPIKeyAlert = false
+    @State private var showLibrarySyncingAlert = false
     @State private var showClearChatAlert = false
     @State private var symposiumModeEnabled = false
     @State private var showingDecisionConsultation = false
@@ -36,6 +77,20 @@ struct ChatView: View {
     @State private var showSymposiumExplanation = false
     @State private var showingBookThreadPicker = false
     @AppStorage("hasSeenSymposiumExplanation") private var hasSeenSymposiumExplanation = false
+
+    /// Tracks which messages are currently on screen (rows add themselves on
+    /// `.onAppear`, remove on `.onDisappear`) so the topmost visible one's
+    /// `timestamp` can be persisted as the resume point on `.onDisappear` of the
+    /// whole view. `loadChatHistory` had zero scroll-position persistence before
+    /// this -- chat always rendered from the natural top of history (oldest
+    /// message) with no memory of where the user last left off, however deep
+    /// they'd scrolled into a long thread. `timestamp`, not `msg.id`, is what's
+    /// persisted: `loadChatHistory` regenerates a fresh random `id` for every
+    /// message on every single load (see its own comment), so an `id` saved in
+    /// one session can never match anything in a later one -- `timestamp` comes
+    /// from the underlying `ChatMessage` model and is the one value that's
+    /// actually stable across reloads.
+    @State private var visibleMessageTimestamps: Set<Date> = []
 
     /// Soft warning threshold — Rajan's brother's key is capped around $5/mo;
     /// this isn't fetched from anywhere (Anthropic doesn't expose the cap
@@ -68,9 +123,12 @@ struct ChatView: View {
                                         referencedBooks: msg.referencedBooks,
                                         isError: msg.isError,
                                         isStreaming: msg.isStreaming,
-                                        accentColor: currentThreadAccent
+                                        accentColor: currentThreadAccent,
+                                        referencedFigureID: msg.referencedFigureID
                                     )
                                     .id(msg.id)
+                                    .onAppear { visibleMessageTimestamps.insert(msg.timestamp) }
+                                    .onDisappear { visibleMessageTimestamps.remove(msg.timestamp) }
                                 }
                             }
                         }
@@ -125,14 +183,6 @@ struct ChatView: View {
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showingVoiceMode = true
-                    } label: {
-                        Image(systemName: "mic.fill")
-                    }
-                }
-
-                ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button {
                             if symposiumModeEnabled {
@@ -167,22 +217,76 @@ struct ChatView: View {
                 }
             }
             .onAppear {
+                applyPendingDeepLinkBookID()
                 checkAPIKey()
                 loadChatHistory()
                 monthlyEstimate = UsageTracker.currentMonthEstimate()
             }
-            .onChange(of: selectedBookID) { _, _ in
+            .onDisappear {
+                persistScrollPosition(forThread: selectedBookID)
+            }
+            // The `.onDisappear` above is not enough on its own -- confirmed real
+            // bug, not a stale-build issue. `ContentView`'s `TabView` keeps every
+            // tab's content alive in the view hierarchy; switching away from the
+            // Chat tab does NOT reliably fire `.onDisappear` on it (well-documented
+            // SwiftUI TabView behavior), which is exactly how a user naturally
+            // leaves chat to go read a book or take a quiz. So in the most common
+            // real-world path, position was never actually being persisted at all.
+            // Persisting reactively on every change to the visible set, not just at
+            // a terminal disappear event, makes this correct regardless of whether
+            // the view ever actually disappears.
+            .onChange(of: visibleMessageTimestamps) { _, _ in
+                persistScrollPosition(forThread: selectedBookID)
+            }
+            .onChange(of: selectedBookID) { oldValue, _ in
                 // Switching threads mid-stream: cancel rather than let a
                 // response keep streaming into a thread the user has left.
                 // v1 deliberately keeps this simple — one active stream at a
                 // time, tied to whichever thread is open (see design notes).
                 stopStreaming()
+                // Persist the OUTGOING thread's scroll position before loading
+                // the new one -- `selectedBookID` has already changed by the
+                // time this closure runs, so `persistScrollPosition` needs the
+                // thread being LEFT passed explicitly rather than reading the
+                // now-stale-for-this-purpose `selectedBookID` itself.
+                persistScrollPosition(forThread: oldValue)
+                visibleMessageTimestamps = []
                 loadChatHistory()
+            }
+            .onChange(of: pendingDeepLinkBookID) { _, _ in
+                // Covers the widget-tap-while-already-on-the-Chat-tab case --
+                // `.onAppear` only fires when this view (re)mounts, not when a new
+                // URL arrives while it's already on screen.
+                applyPendingDeepLinkBookID()
+            }
+            .onChange(of: pendingDeepLinkHighlightID) { _, _ in
+                applyPendingDeepLinkBookID()
+            }
+            .onChange(of: books.count) { _, _ in
+                // The retry that closes the cold-launch race for the highlight
+                // prefill: the deep link can land before the store has
+                // populated, and this is the moment it has (see
+                // `applyPendingDeepLinkHighlightID`). A no-op unless a pending
+                // highlight ID is still waiting.
+                applyPendingDeepLinkHighlightID()
             }
             .alert("API Key Required", isPresented: $showNoAPIKeyAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text("Please configure your Anthropic API Key in Settings to use the chat.")
+            }
+            // Guards `sendMessage`/the mic button below against the confirmed
+            // Build-5 crash class: SwiftData asserts if a book's relationships
+            // (highlights/chapters) are faulted while the background
+            // seed/upgrade merge is still writing to them, and every retrieval
+            // path here (`SearchService.buildContext`/`buildSplitContext`/
+            // `buildSplitContextForBook`) does exactly that fault. This banner
+            // is the same "still syncing" message `BookDetailView`/
+            // `QuizHomeView` show for the same reason.
+            .alert("Still Syncing", isPresented: $showLibrarySyncingAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("Your library is still setting up. Try again in a moment.")
             }
             .alert("Clear Chat?", isPresented: $showClearChatAlert) {
                 Button("Cancel", role: .cancel) { }
@@ -256,12 +360,38 @@ struct ChatView: View {
                 .padding(12)
                 .cobuxCard()
                 .lineLimit(1...5)
+                // Identity, not styling: bumping this on each successful send
+                // makes SwiftUI tear down and rebuild the underlying text view
+                // rather than reconciling it, which is what guarantees the
+                // field is visually empty afterwards. See `sendMessage`.
+                .id(composerGeneration)
 
             if isStreaming {
                 Button(action: stopStreaming) {
                     Image(systemName: "stop.circle.fill")
                         .font(.system(size: 32))
                         .foregroundStyle(currentThreadAccent)
+                }
+            } else if inputText.isEmpty {
+                // Right next to the text field, not the top-right toolbar --
+                // reported live as effectively undiscovered up there despite
+                // an earlier pass already making it a filled accent circle
+                // (see that button's own doc comment below). This is the
+                // Claude/ChatGPT convention Rajan pointed to directly: a mic
+                // where the send arrow would go, swapping to the arrow the
+                // instant there's text to send.
+                Button {
+                    if SeedingStatus.shared.isSeeding {
+                        showLibrarySyncingAlert = true
+                    } else {
+                        showingVoiceMode = true
+                    }
+                } label: {
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(Circle().fill(Color.cobuxAccent))
                 }
             } else {
                 Button(action: sendMessage) {
@@ -334,11 +464,23 @@ struct ChatView: View {
     /// actually was (e.g. asking a pathology textbook's author "what did
     /// they say about responsibility").
     private func bookScopedSuggestions(for book: Book) -> [String] {
-        var tagCounts: [String: Int] = [:]
-        for highlight in book.highlights {
-            for tag in highlight.tags { tagCounts[tag, default: 0] += 1 }
+        // This is called straight from `body` (via `emptyStateView`), so
+        // unlike `sendMessage`'s alert-and-bail, it must degrade silently.
+        // NEVER traverse `book.highlights` while the background seed/upgrade
+        // merge is in flight -- the confirmed Build-5 crash class (see
+        // `BookCard`'s doc comment). Skipping the tag scan during that window
+        // just falls through to the topTag-less prompt variants below, which
+        // every `contentProfile` case already handles.
+        let topTag: String?
+        if SeedingStatus.shared.isSeeding {
+            topTag = nil
+        } else {
+            var tagCounts: [String: Int] = [:]
+            for highlight in book.highlights {
+                for tag in highlight.tags { tagCounts[tag, default: 0] += 1 }
+            }
+            topTag = tagCounts.max { $0.value < $1.value }?.key
         }
-        let topTag = tagCounts.max { $0.value < $1.value }?.key
 
         switch book.contentProfile {
         case .academicReference:
@@ -391,6 +533,53 @@ struct ChatView: View {
         claudeService.apiKey = KeychainManager.load(key: KeychainManager.anthropicAPIKey) ?? ""
     }
 
+    private func applyPendingDeepLinkBookID() {
+        if let target = pendingDeepLinkBookID {
+            selectedBookID = target
+            pendingDeepLinkBookID = nil
+        }
+        applyPendingDeepLinkHighlightID()
+    }
+
+    /// Pre-fills the composer with the quote the tapped widget was showing.
+    ///
+    /// This has to survive the same cold-launch race `pendingDeepLinkBookID`
+    /// already had to solve: a widget tap launches the app, `onOpenURL` fires
+    /// once with no retry, and the SwiftData store may not have anything in it
+    /// yet at that instant. The book ID could simply be trusted without a
+    /// lookup; a highlight's TEXT cannot, so this one genuinely has to read the
+    /// store and therefore genuinely can arrive too early.
+    ///
+    /// The fix is to distinguish "not loaded yet" from "really gone" instead of
+    /// treating an empty fetch as either. An empty result while the library
+    /// itself is still empty means the store hasn't populated — the pending ID
+    /// is KEPT and the `books` `.onChange` below retries once it does. An empty
+    /// result once the library is loaded means the highlight was genuinely
+    /// deleted since the widget last refreshed: clear the pending ID and
+    /// degrade to a plain book-scoped thread with an empty composer, which is
+    /// exactly the pre-existing behavior rather than an error.
+    ///
+    /// A non-empty composer is never overwritten — a half-typed message the
+    /// user cared about outranks a prefill they can trigger again by tapping
+    /// the widget a second time.
+    private func applyPendingDeepLinkHighlightID() {
+        guard let highlightID = pendingDeepLinkHighlightID else { return }
+
+        var descriptor = FetchDescriptor<Highlight>(
+            predicate: #Predicate<Highlight> { $0.id == highlightID }
+        )
+        descriptor.fetchLimit = 1
+
+        if let highlight = try? modelContext.fetch(descriptor).first {
+            if inputText.isEmpty {
+                inputText = "\"\(highlight.text)\"\n\n"
+            }
+            pendingDeepLinkHighlightID = nil
+        } else if !books.isEmpty {
+            pendingDeepLinkHighlightID = nil
+        }
+    }
+
     /// Loads the currently-selected thread's own history — a plain `bookID`
     /// filter, not a join or a separate table, since `ChatMessage.bookID` is
     /// the entire thread model (see its own doc comment). Switching threads
@@ -404,12 +593,42 @@ struct ChatView: View {
             sortBy: [SortDescriptor(\.timestamp)]
         )
         if let savedMessages = try? modelContext.fetch(fetchDescriptor) {
-            messages = savedMessages.map { (id: UUID(), content: $0.content, isUser: $0.isUser, timestamp: $0.timestamp, referencedBooks: $0.referencedBooks, isError: false, isStreaming: false) }
+            let loaded = savedMessages.map { (id: UUID(), content: $0.content, isUser: $0.isUser, timestamp: $0.timestamp, referencedBooks: $0.referencedBooks, isError: false, isStreaming: false, referencedFigureID: $0.referencedFigureID) }
+            messages = loaded
             conversationHistory = savedMessages.map { AIMessage(role: $0.isUser ? "user" : "assistant", content: $0.content) }
+            restoreScrollPosition(in: loaded, forThread: targetID)
         } else {
             messages = []
             conversationHistory = []
         }
+    }
+
+    /// Persists the topmost currently-visible message's `timestamp` as this
+    /// thread's resume point. Called on view disappear and on leaving a thread
+    /// (see the `selectedBookID` `.onChange`) -- a no-op if nothing is tracked
+    /// as visible yet (e.g. the view never actually rendered any rows).
+    private func persistScrollPosition(forThread bookID: UUID?) {
+        guard let earliestVisible = visibleMessageTimestamps.min() else { return }
+        UserDefaults.standard.set(earliestVisible.timeIntervalSince1970, forKey: scrollPositionKey(for: bookID))
+    }
+
+    /// `id` can't be the persisted key (see `visibleMessageTimestamps`'s own
+    /// comment — a fresh random one is assigned on every load), so this finds
+    /// the loaded message whose `timestamp` is closest to what was persisted
+    /// and scrolls to ITS freshly-generated `id` instead. No stored position
+    /// (a new thread, or one that predates this fix) leaves `scrollTarget` untouched,
+    /// which keeps today's default (natural top-of-content) behavior.
+    private func restoreScrollPosition(in loaded: [(id: UUID, content: String, isUser: Bool, timestamp: Date, referencedBooks: [String], isError: Bool, isStreaming: Bool, referencedFigureID: UUID?)], forThread bookID: UUID?) {
+        let key = scrollPositionKey(for: bookID)
+        guard UserDefaults.standard.object(forKey: key) != nil else { return }
+        let savedInterval = UserDefaults.standard.double(forKey: key)
+        let savedDate = Date(timeIntervalSince1970: savedInterval)
+        guard let closest = loaded.min(by: { abs($0.timestamp.timeIntervalSince(savedDate)) < abs($1.timestamp.timeIntervalSince(savedDate)) }) else { return }
+        scrollTarget = closest.id
+    }
+
+    private func scrollPositionKey(for bookID: UUID?) -> String {
+        "chatLastReadTimestamp.\(bookID?.uuidString ?? "general")"
     }
 
     /// `isInputFocused = false` alone can be flaky about actually resigning
@@ -426,12 +645,51 @@ struct ChatView: View {
             showNoAPIKeyAlert = true
             return
         }
+        // NEVER traverse a Book's relationships (highlights, chapters) while
+        // a background seed/upgrade merge is in flight -- the confirmed
+        // Build-5 crash class (see `BookCard`'s doc comment). Every branch of
+        // `ChatPromptBuilder.assemble` below routes into
+        // `SearchService.buildContext`/`buildSplitContext`/
+        // `buildSplitContextForBook`, all of which fault every relevant
+        // book's `highlights`/`chapters` synchronously on this thread. A
+        // returning user (whose `@Query`-backed `books` already has data from
+        // last session) can reach the Chat tab and tap send within seconds of
+        // a cold launch -- precisely the mutating-merge window a same-day
+        // book seed or repair pass runs on every launch, same as `FlowView`.
+        if SeedingStatus.shared.isSeeding {
+            showLibrarySyncingAlert = true
+            return
+        }
 
+        // Rajan reported the composer intermittently keeping its text after a
+        // send. Setting the bound `@State` to "" is logically correct and was
+        // already happening, so the bug is not in the state — it is in the
+        // UIKit text view behind `TextField(axis: .vertical)` not always
+        // reflecting that write. Two known mechanisms, addressed in order:
+        //
+        // 1. Uncommitted input. While autocorrect/predictive text or dictation
+        //    has marked (composing) text pending, the text view still owns
+        //    edits that haven't reached the binding. If it commits them AFTER
+        //    the clear, the committed string is written back into `inputText`
+        //    and the field repopulates. Resigning first responder BEFORE
+        //    clearing forces that commit to happen first, so the clear is last
+        //    write rather than first. `userMessage` is captured beforehand, so
+        //    a late commit can't change what actually gets sent.
+        //
+        // 2. Reconciliation not reaching the text view. Even with the binding
+        //    correctly "", SwiftUI diffing an existing multi-line text view can
+        //    leave the rendered text in place. Bumping `composerGeneration`
+        //    changes the field's identity, so SwiftUI builds a NEW text view
+        //    with no inherited editing state instead of updating the old one.
+        //
+        // Ordering matters: dismiss, then clear, then re-identify.
         let userMessage = inputText
-        inputText = ""
         dismissKeyboard()
+        inputText = ""
+        composerGeneration &+= 1
+        StreakTracker.recordActivityToday()
 
-        let newMessage = (id: UUID(), content: userMessage, isUser: true, timestamp: Date(), referencedBooks: [String](), isError: false, isStreaming: false)
+        let newMessage = (id: UUID(), content: userMessage, isUser: true, timestamp: Date(), referencedBooks: [String](), isError: false, isStreaming: false, referencedFigureID: nil as UUID?)
         withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) {
             messages.append(newMessage)
         }
@@ -445,8 +703,9 @@ struct ChatView: View {
 
         isStreaming = true
         let streamingID = UUID()
+        activeStreamID = streamingID
         withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) {
-            messages.append((id: streamingID, content: "", isUser: false, timestamp: Date(), referencedBooks: [], isError: false, isStreaming: true))
+            messages.append((id: streamingID, content: "", isUser: false, timestamp: Date(), referencedBooks: [], isError: false, isStreaming: true, referencedFigureID: nil))
         }
 
         streamBuffers[streamingID] = ""
@@ -457,7 +716,15 @@ struct ChatView: View {
         // per session.
         let referencedTitles: [String]
         let stream: AsyncThrowingStream<String, Error>
-        let assembled = ChatPromptBuilder.assemble(userMessage: userMessage, books: books, selectedBookID: selectedBookID, symposiumModeEnabled: symposiumModeEnabled)
+        let assembled = ChatPromptBuilder.assemble(
+            userMessage: userMessage,
+            books: books,
+            selectedBookID: selectedBookID,
+            symposiumModeEnabled: symposiumModeEnabled,
+            personalWritingEntries: personalWritingEntries,
+            personalWritingContextEnabled: personalWritingContextEnabled,
+            useRealNamesInLifeExamples: useRealNamesInLifeExamples
+        )
         switch assembled {
         case .symposium(let systemPrompt, let titles):
             referencedTitles = titles
@@ -516,7 +783,19 @@ struct ChatView: View {
     @MainActor
     @discardableResult
     private func revealTick(id: UUID) -> Bool {
-        guard let idx = messages.firstIndex(where: { $0.id == id }) else { return true }
+        guard let idx = messages.firstIndex(where: { $0.id == id }) else {
+            // The thread was switched away from mid-stream (see
+            // `selectedBookID`'s `.onChange`) -- `loadChatHistory` replaced
+            // `messages` wholesale, so this id's row is gone for good.
+            // `completeReveal` is normally the only place that cleans up
+            // `streamBuffers`/`streamNetworkDone`/`pendingFinalize`/this
+            // ticker's own `Task`, but it's only ever reached by way of THIS
+            // guard passing -- so without cleaning up here directly, all of
+            // that state (and this ticker's `Task`) leaked forever every time
+            // a user switched threads before a reply finished.
+            cleanupStream(id: id)
+            return true
+        }
         let full = streamBuffers[id] ?? ""
         // Never type out the trailing `<sources>...</sources>` tag character by
         // character — it's citation metadata, not part of the visible reply.
@@ -558,8 +837,21 @@ struct ChatView: View {
     private func markNetworkDone(id: UUID, userMessage: String, referencedTitles: [String], notice: String?, wasCancelled: Bool) {
         pendingFinalize[id] = (userMessage, referencedTitles, notice, wasCancelled)
         streamNetworkDone.insert(id)
-        isStreaming = false
-        streamTask = nil
+        // Only the stream `activeStreamID` currently names may flip
+        // `isStreaming`/`streamTask` -- switching threads mid-reply cancels
+        // the old stream via `stopStreaming()`, but that cancellation is
+        // cooperative: this completion handler can still land AFTER a brand
+        // new stream has already started (`sendMessage` in the newly-opened
+        // thread). Without this guard, the old stream's late arrival here
+        // would incorrectly declare the NEW stream finished -- the Stop
+        // button would vanish mid-reply, and a later tap of it would be a
+        // no-op because `streamTask` had already been nilled out from under
+        // the stream actually still running.
+        if id == activeStreamID {
+            isStreaming = false
+            streamTask = nil
+            activeStreamID = nil
+        }
         // `ClaudeService` already persisted this turn's usage before its
         // stream finished; just re-read the running total so the banner
         // above reflects it without needing its own separate plumbing.
@@ -584,10 +876,18 @@ struct ChatView: View {
     /// actually used — not from `pending.referencedTitles` (the old retrieval-
     /// derived guess, which could diverge from the answer once prompt caching
     /// made every book's chapter summaries always available; that was the
-    /// wrong-citation-chip bug). Book-scoped threads never had the sources
-    /// instruction added to their prompt, so parsing one just yields no
-    /// declared titles — the existing "no chip in a book thread" behavior
-    /// falls out naturally rather than needing a special case here.
+    /// wrong-citation-chip bug).
+    ///
+    /// Book-scoped threads now request that declaration too, because a
+    /// book-scoped reply can genuinely draw on a second book (see
+    /// `SearchService.buildSplitContextForBook`). The thread's OWN book is
+    /// filtered out of the resulting chips: labelling every reply in the
+    /// "12 Rules for Life" thread with a "12 Rules for Life" chip is noise —
+    /// the user picked that thread. What's left is a chip only when the reply
+    /// actually reached beyond this thread's book, which is exactly the case
+    /// worth surfacing, so `Assembled.bookScoped`'s old "never needs citation
+    /// chips" premise now holds for the ordinary turn and correctly stops
+    /// holding for a cross-book one.
     @MainActor
     private func completeReveal(id: UUID) {
         defer { cleanupStream(id: id) }
@@ -598,7 +898,11 @@ struct ChatView: View {
         let rawText = streamBuffers[id] ?? messages[idx].content
         let parsed = CitationResolver.parse(rawReply: rawText)
         let finalText = parsed.displayText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedTitles = CitationResolver.resolve(declaredTitles: parsed.declaredTitles, libraryTitles: books.map(\.title))
+        let resolvedTitles = ChatPromptBuilder.displayableCitations(
+            resolvedTitles: CitationResolver.resolve(declaredTitles: parsed.declaredTitles, libraryTitles: books.map(\.title)),
+            selectedBookID: selectedBookID,
+            books: books
+        )
 
         if !finalText.isEmpty {
             messages[idx].content = finalText
@@ -607,6 +911,19 @@ struct ChatView: View {
 
             let aiChatModel = ChatMessage(content: finalText, isUser: false, timestamp: messages[idx].timestamp, referencedBooks: resolvedTitles, bookID: selectedBookID)
             modelContext.insert(aiChatModel)
+
+            // Figure lookup is a completely separate, ADDITIVE step that only
+            // runs now — after this reply has already streamed back and been
+            // finalized — never as part of `ChatPromptBuilder`/`buildContext`/
+            // `buildSplitContext`/`CitationResolver` above. See
+            // `SearchService.relevantFigure`'s own doc comment.
+            if !resolvedTitles.isEmpty {
+                let citedBookObjects = books.filter { resolvedTitles.contains($0.title) }
+                if let figure = SearchService.relevantFigure(query: pending.userMessage, citedBooks: citedBookObjects, modelContext: modelContext) {
+                    aiChatModel.referencedFigureID = figure.id
+                    messages[idx].referencedFigureID = figure.id
+                }
+            }
 
             conversationHistory.append(AIMessage(role: "user", content: pending.userMessage))
             conversationHistory.append(AIMessage(role: "assistant", content: finalText))
@@ -631,7 +948,7 @@ struct ChatView: View {
         if let noticeText {
             // Error/notice bubbles are transient — shown now, not persisted.
             withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) {
-                messages.append((id: UUID(), content: noticeText, isUser: false, timestamp: Date(), referencedBooks: [], isError: true, isStreaming: false))
+                messages.append((id: UUID(), content: noticeText, isUser: false, timestamp: Date(), referencedBooks: [], isError: true, isStreaming: false, referencedFigureID: nil))
             }
         }
     }

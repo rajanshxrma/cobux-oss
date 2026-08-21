@@ -1,4 +1,6 @@
 import SwiftUI
+import SwiftData
+import UIKit
 
 struct MessageBubbleView: View {
     let content: String
@@ -13,6 +15,16 @@ struct MessageBubbleView: View {
     /// detail, chat thread, quiz session, and mastery ring") but only ever reached
     /// Library/BookDetail.
     var accentColor: Color = .cobuxAccent
+    /// Set by `ChatView` once `SearchService.relevantFigure` (an independent,
+    /// ADDITIVE lookup that runs AFTER a reply has already streamed back and
+    /// been finalized) resolves a figure for this reply — nil most of the
+    /// time. Default nil so this bubble compiles/renders unchanged at any
+    /// call site that doesn't pass it.
+    var referencedFigureID: UUID? = nil
+
+    @Environment(\.modelContext) private var modelContext
+    @State private var resolvedFigure: Figure?
+    @State private var figureImage: UIImage?
 
     private struct ContentBlock: Identifiable {
         let id: Int
@@ -76,7 +88,7 @@ struct MessageBubbleView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     if isError {
                         Label(content, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Color.cobuxDanger)
                             .font(.subheadline)
                     } else if isStreaming && content.isEmpty {
                         TypingIndicatorView()
@@ -108,10 +120,25 @@ struct MessageBubbleView: View {
                 .clipShape(ChatBubbleShape(direction: isUser ? .right : .left))
                 .overlay(
                     ChatBubbleShape(direction: isUser ? .right : .left)
-                        .stroke(isError ? .red.opacity(0.4) : (isUser ? .clear : .secondary.opacity(0.15)), lineWidth: 1)
+                        .stroke(isError ? Color.cobuxDanger.opacity(0.4) : (isUser ? .clear : .secondary.opacity(0.15)), lineWidth: 1)
                 )
 
                 if !isUser { Spacer() }
+            }
+
+            // Additive, post-reply figure attachment (see `SearchService.relevantFigure`
+            // and `ChatView.completeReveal`) — rendered below the bubble itself, never
+            // blocking the message text, which is why resolution happens in `.task`
+            // rather than synchronously in `body`. Keyed off `figureImage` (whether it
+            // actually resolved), not `referencedFigureID` (whether one was assigned) --
+            // an id that's still loading, or that never resolves to a real image, would
+            // otherwise still insert this HStack as a present sibling, adding stray
+            // vertical spacing for nothing.
+            if !isUser, figureImage != nil {
+                HStack {
+                    figureCard
+                    Spacer()
+                }
             }
 
             Text(timestamp.formatted(date: .omitted, time: .shortened))
@@ -125,6 +152,50 @@ struct MessageBubbleView: View {
                 .animation(.spring(response: 0.38, dampingFraction: 0.78)),
             removal: .opacity.animation(.easeIn(duration: 0.12))
         ))
+        .task(id: referencedFigureID) {
+            await loadFigure()
+        }
+    }
+
+    /// A single-row-by-`id` fetch, mirroring the exact safe pattern in
+    /// `BookCard.loadHighlightCount()` — cheap, not a full table scan — run
+    /// from `.task` so it never blocks this bubble's text from rendering.
+    @MainActor
+    private func loadFigure() async {
+        guard let referencedFigureID else {
+            resolvedFigure = nil
+            figureImage = nil
+            return
+        }
+        let targetFigureID = referencedFigureID
+        var descriptor = FetchDescriptor<Figure>(
+            predicate: #Predicate<Figure> { $0.id == targetFigureID }
+        )
+        descriptor.fetchLimit = 1
+        guard let figure = try? modelContext.fetch(descriptor).first else { return }
+        resolvedFigure = figure
+        figureImage = await FigureImageLoader.image(for: figure)
+    }
+
+    @ViewBuilder
+    private var figureCard: some View {
+        if let figureImage {
+            VStack(alignment: .leading, spacing: CobuxSpacing.xs) {
+                Image(uiImage: figureImage)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: 220)
+                    .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.card))
+
+                if let resolvedFigure, !resolvedFigure.caption.isEmpty {
+                    Text(resolvedFigure.caption)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(CobuxSpacing.sm)
+            .cobuxCard()
+        }
     }
 
     @ViewBuilder

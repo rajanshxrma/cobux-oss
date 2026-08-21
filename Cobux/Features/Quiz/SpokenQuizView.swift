@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import UIKit
+import WidgetKit
 import CobuxCore
 
 /// Eyes-free quizzing -- listens to the question read aloud, listens for a spoken answer,
@@ -19,6 +20,17 @@ struct SpokenQuizView: View {
     @State private var controller: SpokenQuizController?
     @State private var showPermissionAlert = false
     @State private var isEnding = false
+    /// `SpokenQuizController.onError` used to be wired to a no-op closure --
+    /// every failure path in the controller (mic gone mid-call, on-device
+    /// speech recognition unavailable, audio session setup failing) returns
+    /// BEFORE advancing `state`, so silently dropping the message left the
+    /// screen frozen on whatever icon was showing with no explanation and no
+    /// way forward except the "End" button the user had no reason to know to
+    /// tap. Surfacing it and ending the session (progress-so-far still
+    /// saved, same as a manual End) turns a silent hang into a clear,
+    /// recoverable failure.
+    @State private var voiceErrorMessage: String?
+    @State private var showVoiceErrorAlert = false
 
     var body: some View {
         ZStack {
@@ -71,6 +83,11 @@ struct SpokenQuizView: View {
             Button("Cancel", role: .cancel) { dismiss() }
         } message: {
             Text("Spoken quiz needs microphone and speech recognition access. Enable them in Settings to continue.")
+        }
+        .alert("Spoken Quiz Interrupted", isPresented: $showVoiceErrorAlert) {
+            Button("OK", role: .cancel) { endSession() }
+        } message: {
+            Text(voiceErrorMessage ?? "Something interrupted the spoken quiz. Your progress so far is saved.")
         }
     }
 
@@ -143,7 +160,15 @@ struct SpokenQuizView: View {
         let sessionController = SpokenQuizController(questions: questions) { question, isCorrect, spokenAnswer in
             recordAnswer(question: question, isCorrect: isCorrect, spokenAnswer: spokenAnswer)
         }
-        sessionController.onError = { _ in }
+        sessionController.onError = { message in
+            // Same isEnding guard `requestPermissions`'s own completion uses
+            // just below -- a trailing error callback racing an already
+            // user-initiated end (or one this same closure just triggered)
+            // must not resurrect the alert on a view that's on its way out.
+            guard !isEnding else { return }
+            voiceErrorMessage = message
+            showVoiceErrorAlert = true
+        }
         sessionController.onFinished = {
             finishAttempt()
         }
@@ -195,8 +220,14 @@ struct SpokenQuizView: View {
         // every other quiz mode.
         if !attempt.answers.isEmpty {
             StreakTracker.recordActivityToday()
+            // Spoken Quiz dismisses straight back to Quiz Home (no results
+            // screen), so milestones ride ContentView's celebration overlay.
+            StreakCelebrationCenter.shared.checkForPendingMilestone()
         }
         WatchSyncService.sync(books: books)
+        // Same stale-card guard as QuizResultsView -- this session's grades
+        // must reach the Quick Check widget.
+        WidgetCenter.shared.reloadTimelines(ofKind: "CobuxQuickCheckWidget")
         isEnding = true
         onDone()
         dismiss()

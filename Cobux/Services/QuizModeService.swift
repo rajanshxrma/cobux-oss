@@ -16,7 +16,14 @@ enum QuizModeService {
     static let rapidRecallLimit = 15
 
     static func rapidRecallPool(books: [Book], now: Date = .now) -> [QuizQuestion] {
-        let allQuestions = books.flatMap(\.chapters).flatMap(\.quizQuestions)
+        rapidRecallPool(among: books.allQuizQuestions, now: now)
+    }
+
+    /// Question-list overloads for every pool below, so a caller that needs
+    /// several pools at once pays for `allQuizQuestions` a single time instead
+    /// of once per pool. The `books:` entry points are unchanged and simply
+    /// forward, so single-pool callers read exactly as they did.
+    static func rapidRecallPool(among allQuestions: [QuizQuestion], now: Date = .now) -> [QuizQuestion] {
         let dueReviews = allQuestions.filter { question -> Bool in
             guard !question.isSuspended, question.fsrsReps > 0, let due = question.dueDate else { return false }
             return due <= now
@@ -38,15 +45,29 @@ enum QuizModeService {
     }
 
     static func weakestThemes(themes: [Theme], answerRecords: [QuizAnswerRecord]) -> [WeakTheme] {
-        themes.compactMap { theme -> WeakTheme? in
-            let highlightIDs = Set(theme.highlights.map(\.id))
-            let records = answerRecords.filter { record in
-                guard let question = record.question else { return false }
-                return !Set(question.sourceHighlights.map(\.id)).isDisjoint(with: highlightIDs)
+        // Each record's source-highlight IDs, resolved exactly once. This used
+        // to be rebuilt inside the per-theme loop, so every record's
+        // `question` relationship and its whole `sourceHighlights` list was
+        // faulted again for each theme — O(themes × records × highlights) of
+        // pure repeat work, on the main thread, from a SwiftUI computed
+        // property. Records whose `question` has gone away are dropped here,
+        // matching the old `guard let question ... else { return false }`.
+        let scoredRecords = answerRecords.compactMap { record in
+            record.question.map {
+                (isCorrect: record.isCorrect, highlightIDs: Set($0.sourceHighlights.map(\.id)))
             }
-            guard records.count >= minSampleSizeForWeakTopic else { return nil }
-            let wrongCount = records.filter { !$0.isCorrect }.count
-            return WeakTheme(theme: theme, wrongRate: Double(wrongCount) / Double(records.count))
+        }
+
+        return themes.compactMap { theme -> WeakTheme? in
+            let highlightIDs = Set(theme.highlights.map(\.id))
+            var matched = 0
+            var wrongCount = 0
+            for record in scoredRecords where !record.highlightIDs.isDisjoint(with: highlightIDs) {
+                matched += 1
+                if !record.isCorrect { wrongCount += 1 }
+            }
+            guard matched >= minSampleSizeForWeakTopic else { return nil }
+            return WeakTheme(theme: theme, wrongRate: Double(wrongCount) / Double(matched))
         }
         .sorted { $0.wrongRate > $1.wrongRate }
     }
@@ -55,15 +76,16 @@ enum QuizModeService {
     /// deliberately not FSRS-due-gated, since the whole point is targeted extra practice on
     /// a known-weak spot, not waiting for the scheduler to bring it back around.
     static func weakSpotsPool(books: [Book], themes: [Theme], answerRecords: [QuizAnswerRecord]) -> [QuizQuestion] {
+        weakSpotsPool(among: books.allQuizQuestions, themes: themes, answerRecords: answerRecords)
+    }
+
+    static func weakSpotsPool(among allQuestions: [QuizQuestion], themes: [Theme], answerRecords: [QuizAnswerRecord]) -> [QuizQuestion] {
         let weakest = weakestThemes(themes: themes, answerRecords: answerRecords).prefix(weakestThemeLimit)
         guard !weakest.isEmpty else { return [] }
         let weakHighlightIDs = Set(weakest.flatMap { $0.theme.highlights.map(\.id) })
-        return books
-            .flatMap(\.chapters)
-            .flatMap(\.quizQuestions)
-            .filter { question in
-                !question.isSuspended && !Set(question.sourceHighlights.map(\.id)).isDisjoint(with: weakHighlightIDs)
-            }
+        return allQuestions.filter { question in
+            !question.isSuspended && !Set(question.sourceHighlights.map(\.id)).isDisjoint(with: weakHighlightIDs)
+        }
     }
 
     /// "Assembled from a confusion matrix built out of wrong-answer tag pairs" (the plan's own
@@ -73,6 +95,10 @@ enum QuizModeService {
     /// Free (assembled from data already collected, no generation call), matching the plan's
     /// own description of this mode.
     static func discriminationDrillPool(books: [Book], answerRecords: [QuizAnswerRecord]) -> [QuizQuestion] {
+        discriminationDrillPool(among: books.allQuizQuestions, answerRecords: answerRecords)
+    }
+
+    static func discriminationDrillPool(among allQuestions: [QuizQuestion], answerRecords: [QuizAnswerRecord]) -> [QuizQuestion] {
         let missedTags = Set(
             answerRecords
                 .filter { !$0.isCorrect }
@@ -80,14 +106,11 @@ enum QuizModeService {
                 .flatMap(\.topicTags)
         )
         guard !missedTags.isEmpty else { return [] }
-        return books
-            .flatMap(\.chapters)
-            .flatMap(\.quizQuestions)
-            .filter { question in
-                !question.isSuspended
-                    && question.questionType != .application
-                    && !question.choices.isEmpty
-                    && !Set(question.topicTags).isDisjoint(with: missedTags)
-            }
+        return allQuestions.filter { question in
+            !question.isSuspended
+                && question.questionType != .application
+                && !question.choices.isEmpty
+                && !Set(question.topicTags).isDisjoint(with: missedTags)
+        }
     }
 }

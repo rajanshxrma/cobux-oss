@@ -86,7 +86,13 @@ struct EmbeddingService {
                 if sum.isEmpty {
                     sum = [Float](repeating: 0, count: vector.count)
                 }
-                for i in 0..<vector.count {
+                // `sum` is sized from the FIRST token vector; every real
+                // `NLContextualEmbedding` model should emit a fixed dimensionality
+                // per call, but nothing here actually guarantees a later vector
+                // can't come back longer -- `min(...)` makes that an ignored
+                // trailing component instead of an index-out-of-range crash,
+                // which is what a bare `0..<vector.count` would do.
+                for i in 0..<min(vector.count, sum.count) {
                     sum[i] += Float(vector[i])
                 }
                 tokenCount += 1

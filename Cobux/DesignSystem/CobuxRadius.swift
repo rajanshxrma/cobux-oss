@@ -19,4 +19,16 @@ enum CobuxRadius {
     static let card: CGFloat = 14
     /// Fully round — chips, tags, pill buttons.
     static let pill: CGFloat = 100
+    /// Glass surfaces specifically (2.2.0) — `card`'s 14pt reads cramped once
+    /// wrapped in `.glassEffect`, which visually wants a softer, more
+    /// continuous curve than a flat solid card does at the same radius.
+    /// Deliberately its own token rather than bumping `card` itself, since
+    /// `card`'s 14pt is still correct for every existing flat-card call site
+    /// this redesign isn't touching.
+    static let glassCard: CGFloat = 20
+    /// A small icon badge (`CobuxSettingsRow`'s leading glyph square) — too
+    /// small a surface for `card`'s 14pt to read as anything but a circle;
+    /// this is the standard "squircle-ish app icon glyph" radius at 28pt box
+    /// size, distinct from `pill` (fully round, for chips/tags, not icons).
+    static let iconBadge: CGFloat = 8
 }

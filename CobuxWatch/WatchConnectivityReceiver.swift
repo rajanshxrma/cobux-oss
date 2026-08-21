@@ -22,11 +22,27 @@ final class WatchConnectivityReceiver: NSObject, WCSessionDelegate {
         let session = WCSession.default
         session.delegate = self
         session.activate()
+
+        // `didReceiveApplicationContext` only fires for a NEW push delivered while
+        // this delegate is attached -- it does nothing for context the phone
+        // already delivered to the session before this watch process activated
+        // (e.g. the watch app was killed and relaunched, or this is the first
+        // activation since the phone's last sync). `receivedApplicationContext`
+        // is WatchConnectivity's own durable record of the last-delivered
+        // context regardless of process lifetime -- reading it here is what
+        // makes a freshly (re)launched watch app show real data on its very
+        // first screen instead of the App-Group disk cache's possibly-stale
+        // snapshot (or nothing, on a device that's never synced to disk yet).
+        applyContext(session.receivedApplicationContext)
     }
 
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {}
 
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
+        applyContext(applicationContext)
+    }
+
+    private func applyContext(_ applicationContext: [String: Any]) {
         guard let data = applicationContext[WatchPayloadKeys.payloadData] as? Data,
               let payload = try? JSONDecoder().decode(WatchPayload.self, from: data) else { return }
 

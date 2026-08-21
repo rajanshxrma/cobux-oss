@@ -18,8 +18,13 @@ extension View {
     /// One cell inside a structural grid/list (a stat tile, a book row) —
     /// zero radius, a real hairline border. Use `cobuxCard()` instead for a
     /// card that stands alone rather than sitting inside a grid.
+    ///
+    /// Was just `.background(Color.cobuxSurface2)` -- no radius, no border --
+    /// silently contradicting this doc comment since it was written. Found
+    /// while touching this file for the 2.2.0 glass work; fixed to actually
+    /// match what it claims (real pre-existing bug, unrelated to glass).
     func cobuxStructuralCell() -> some View {
-        background(Color.cobuxSurface2)
+        modifier(CobuxStructuralCellModifier())
     }
 }
 
@@ -30,6 +35,18 @@ private struct CobuxCardModifier: ViewModifier {
             .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.card))
             .overlay(
                 RoundedRectangle(cornerRadius: CobuxRadius.card)
+                    .stroke(Color.cobuxLine, lineWidth: 1)
+            )
+    }
+}
+
+private struct CobuxStructuralCellModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .background(Color.cobuxSurface2)
+            .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.structural))
+            .overlay(
+                RoundedRectangle(cornerRadius: CobuxRadius.structural)
                     .stroke(Color.cobuxLine, lineWidth: 1)
             )
     }

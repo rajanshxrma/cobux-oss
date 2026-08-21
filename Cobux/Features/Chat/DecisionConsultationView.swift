@@ -133,7 +133,7 @@ struct DecisionConsultationView: View {
             if let errorText {
                 Section {
                     Label(errorText, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Color.cobuxDanger)
                         .font(.subheadline)
                 }
             }
@@ -211,6 +211,17 @@ struct DecisionConsultationView: View {
         guard canSubmit else { return }
         if claudeService.apiKey.isEmpty {
             showNoAPIKeyAlert = true
+            return
+        }
+        // NEVER traverse a Book's relationships while a background
+        // seed/upgrade merge is in flight -- the confirmed Build-5 crash
+        // class (see `BookCard`'s doc comment). `SearchService.buildContext`
+        // below faults every book's `highlights`/`chapters` synchronously on
+        // this thread, and Decision Consultation is reachable from Chat's
+        // overflow menu within seconds of a cold launch, same as `ChatView`'s
+        // own guard on `sendMessage`.
+        if SeedingStatus.shared.isSeeding {
+            errorText = "Your library is still setting up. Try again in a moment."
             return
         }
 

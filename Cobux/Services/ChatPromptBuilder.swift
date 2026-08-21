@@ -11,8 +11,13 @@ enum ChatPromptBuilder {
         /// Symposium mode always uses the full, unsplit library context regardless of any
         /// selected book — "a debate among authors" scoped to one book is degenerate.
         case symposium(systemPrompt: String, referencedTitles: [String])
-        /// A book-scoped thread never needs citation chips — every reply is about this one
-        /// book by construction — so there are no `referencedTitles` to carry.
+        /// Carries no `referencedTitles` — not because a book-scoped reply can't cite
+        /// anything (it can now draw on a second book; see
+        /// `SearchService.buildSplitContextForBook`), but because chips are derived from
+        /// the model's own `<sources>` declaration rather than from retrieval, for every
+        /// thread type. `ChatView.completeReveal` parses that declaration and suppresses
+        /// the chip for this thread's own book, so a chip appears here exactly when a
+        /// reply genuinely reached beyond the book the thread is about.
         case bookScoped(stableSystemPrompt: String, dynamicContext: String)
         case general(stableSystemPrompt: String, dynamicContext: String, referencedTitles: [String])
     }
@@ -22,12 +27,30 @@ enum ChatPromptBuilder {
     /// byte-identical between text and voice so both channels share one Anthropic prompt-cache
     /// entry. `.general`/`.symposium` already have `PromptTemplates.sourcesInstruction` baked
     /// into their (stable) template, so their spoken variant reminds the model to still emit
-    /// it; `.bookScoped` never asks for a `<sources>` tag at all, so its spoken variant omits
-    /// that reminder rather than reference an instruction that was never given.
+    /// it. `.bookScoped` now carries that instruction too — it gained it once a book-scoped
+    /// reply could genuinely draw on a second book — so its spoken variant appends the same
+    /// reminder rather than omitting it as it did while the tag was never requested there.
     private static let spokenStyleCore = "\n\nThis reply will be read aloud by text-to-speech, not displayed as text. Answer in 2-4 short, plain sentences — no markdown, no bullet points, no headers. Spell out numbers as words."
     private static let spokenStyleSourcesReminder = " Still end with the <sources> line exactly as instructed above."
 
-    static func assemble(userMessage: String, books: [Book], selectedBookID: UUID?, symposiumModeEnabled: Bool, isVoice: Bool = false) -> Assembled {
+    /// `personalWritingEntries`/`personalWritingContextEnabled` default to
+    /// empty/false so every existing call site (voice mode included) is
+    /// unaffected unless it opts in explicitly — only `ChatView`'s main
+    /// chat flow (general + book-scoped threads) does today. Deliberately
+    /// never threaded into the `symposiumModeEnabled` branch below, which
+    /// stays on `SearchService.buildContext` — out of scope per this
+    /// feature's own design (Symposium/Decision Consultation/Ask Intent all
+    /// keep using the older, uncached, one-shot path unchanged).
+    static func assemble(
+        userMessage: String,
+        books: [Book],
+        selectedBookID: UUID?,
+        symposiumModeEnabled: Bool,
+        isVoice: Bool = false,
+        personalWritingEntries: [PersonalWritingEntry] = [],
+        personalWritingContextEnabled: Bool = false,
+        useRealNamesInLifeExamples: Bool = false
+    ) -> Assembled {
         if symposiumModeEnabled {
             let (contextString, titles) = SearchService.buildContext(query: userMessage, books: books)
             var systemPrompt = String(format: PromptTemplates.symposium, contextString)
@@ -36,15 +59,54 @@ enum ChatPromptBuilder {
         }
 
         if let scopedBook = selectedBookID.flatMap({ id in books.first(where: { $0.id == id }) }) {
-            let (stableContext, dynamicContext) = SearchService.buildSplitContextForBook(query: userMessage, book: scopedBook)
+            let (stableContext, dynamicContext) = SearchService.buildSplitContextForBook(
+                query: userMessage,
+                book: scopedBook,
+                libraryBooks: books,
+                personalWritingEntries: personalWritingEntries,
+                includePersonalWriting: personalWritingContextEnabled,
+                useRealNamesInLifeExamples: useRealNamesInLifeExamples
+            )
             let stableSystemPrompt = String(format: PromptTemplates.bookScoped, scopedBook.title, scopedBook.author, scopedBook.title, stableContext)
-            let finalDynamicContext = isVoice ? dynamicContext + spokenStyleCore : dynamicContext
+            let finalDynamicContext = isVoice ? dynamicContext + spokenStyleCore + spokenStyleSourcesReminder : dynamicContext
             return .bookScoped(stableSystemPrompt: stableSystemPrompt, dynamicContext: finalDynamicContext)
         }
 
-        let (stableContext, dynamicContext, titles) = SearchService.buildSplitContext(query: userMessage, books: books)
+        let (stableContext, dynamicContext, titles) = SearchService.buildSplitContext(
+            query: userMessage,
+            books: books,
+            personalWritingEntries: personalWritingEntries,
+            includePersonalWriting: personalWritingContextEnabled,
+            useRealNamesInLifeExamples: useRealNamesInLifeExamples
+        )
         let stableSystemPrompt = String(format: PromptTemplates.base, stableContext)
         let finalDynamicContext = isVoice ? dynamicContext + spokenStyleCore + spokenStyleSourcesReminder : dynamicContext
         return .general(stableSystemPrompt: stableSystemPrompt, dynamicContext: finalDynamicContext, referencedTitles: titles)
+    }
+
+    /// Which of a reply's declared source titles are worth showing as chips.
+    ///
+    /// Lives here, next to `assemble`, for the same reason `assemble` does:
+    /// text chat and voice both finish a turn by resolving citations, and a
+    /// rule implemented separately in each is a rule that drifts. Both channels
+    /// call this instead of filtering their own copy.
+    ///
+    /// The rule: in a book-scoped thread, drop the thread's OWN book. Now that
+    /// such a thread can genuinely draw on a second book, its replies do
+    /// declare sources — but tagging every reply in the "Beyond Order" thread
+    /// with a "Beyond Order" chip tells the user something they already chose.
+    /// A chip survives here only when the reply actually reached past the book
+    /// the thread is about, which is the case worth surfacing. The general
+    /// thread is unaffected.
+    static func displayableCitations(
+        resolvedTitles: [String],
+        selectedBookID: UUID?,
+        books: [Book]
+    ) -> [String] {
+        guard let selectedBookID,
+              let focusBook = books.first(where: { $0.id == selectedBookID }) else {
+            return resolvedTitles
+        }
+        return resolvedTitles.filter { $0 != focusBook.title }
     }
 }

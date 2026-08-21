@@ -7,6 +7,14 @@ struct WatchGlanceEntry: TimelineEntry {
     let dueCount: Int
     let quoteText: String?
     let quoteBook: String?
+    /// False only for the "iPhone has never once synced to this watch" fallback --
+    /// distinct from `placeholder(in:)`'s widget-gallery example content. Without this,
+    /// a freshly-paired watch (Gulab's TestFlight install, or any watch before its first
+    /// sync) shows the placeholder's fabricated "3 day streak, 12 due" as if it were real
+    /// data -- the exact zero-vs-never-synced ambiguity `CobuxWatchContentView` already
+    /// fixed once with its own em-dash treatment. Defaults to `true` so every real-data
+    /// call site below is unaffected.
+    var hasSyncedData: Bool = true
 }
 
 /// No `ModelContainer` here — per Fable's Watch companion ruling, this widget extension reads
@@ -21,13 +29,23 @@ struct CobuxWatchProvider: TimelineProvider {
         WatchGlanceEntry(date: .now, streakCount: 3, dueCount: 12, quoteText: "Small changes compound over time.", quoteBook: "Atomic Habits")
     }
 
+    /// The honest "iPhone hasn't synced yet" entry -- real zeros, not a fabricated example.
+    /// See `WatchGlanceEntry.hasSyncedData`'s doc comment for why this exists as its own thing
+    /// separate from `placeholder(in:)`.
+    private func unsyncedEntry(date: Date = .now) -> WatchGlanceEntry {
+        WatchGlanceEntry(date: date, streakCount: 0, dueCount: 0, quoteText: nil, quoteBook: nil, hasSyncedData: false)
+    }
+
     func getSnapshot(in context: Context, completion: @escaping (WatchGlanceEntry) -> Void) {
         completion(currentEntry(fallback: context))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<WatchGlanceEntry>) -> Void) {
         guard let payload = WatchPayload.loadCached(from: defaults) else {
-            let timeline = Timeline(entries: [placeholder(in: context)], policy: .after(Date().addingTimeInterval(Self.refreshInterval)))
+            // Only the widget-gallery preview gets the fabricated example numbers --
+            // a real, never-synced watch gets the honest empty state instead.
+            let entry = context.isPreview ? placeholder(in: context) : unsyncedEntry()
+            let timeline = Timeline(entries: [entry], policy: .after(Date().addingTimeInterval(Self.refreshInterval)))
             completion(timeline)
             return
         }
@@ -55,7 +73,7 @@ struct CobuxWatchProvider: TimelineProvider {
 
     private func currentEntry(fallback context: Context) -> WatchGlanceEntry {
         guard let payload = WatchPayload.loadCached(from: defaults) else {
-            return placeholder(in: context)
+            return context.isPreview ? placeholder(in: context) : unsyncedEntry()
         }
         let now = Date()
         let risingCount = payload.dueCount + payload.upcomingDueDates.filter { $0 <= now }.count

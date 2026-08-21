@@ -126,4 +126,29 @@ final class FSRSTests: XCTestCase {
             XCTAssertLessThanOrEqual(state.difficulty, 10)
         }
     }
+
+    // MARK: Regression — a degenerate stability used to trap `Int(Double.nan)`
+
+    /// `stability == 0` with `reps > 0` can't arise through normal scheduling (a
+    /// genuinely new card is `.new`, stability 0 with reps 0), but IS reachable via an
+    /// unvalidated backup JSON import (fixed separately in `BackupService`). Feeding
+    /// that into `nextStabilityOnSuccess`'s `pow(S, -w[9])` sends the result to +inf,
+    /// which becomes NaN downstream in `interval(forRetention:stability:)` -- and
+    /// `fuzzed`'s `rawDays >= 2.5` guard doesn't catch it, since NaN comparisons are
+    /// always false. `Int(Double.nan)` traps. This must not crash, regardless of
+    /// which upstream computation produced the non-finite value -- the assertion is
+    /// simply that scheduling completes and returns a sane, clamped interval.
+    func testScheduleWithDegenerateZeroStabilityDoesNotCrash() {
+        let degenerateState = FSRSCardState(stability: 0, difficulty: 5, reps: 3, lapses: 0)
+        let result = FSRS.schedule(
+            state: degenerateState,
+            grade: .good,
+            elapsedDays: 1,
+            minIntervalDays: 1,
+            maxIntervalDays: 36500,
+            cardSeed: 1
+        )
+        XCTAssertGreaterThanOrEqual(result.intervalDays, 1, "must clamp to at least minIntervalDays, never a non-finite or negative interval")
+        XCTAssertLessThanOrEqual(result.intervalDays, 36500, "must clamp to at most maxIntervalDays")
+    }
 }

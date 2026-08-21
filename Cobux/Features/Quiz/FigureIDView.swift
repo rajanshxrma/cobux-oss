@@ -17,6 +17,14 @@ struct FigureIDView: View {
     @State private var hasSubmitted = false
     @State private var isCorrect = false
     @State private var correctCount = 0
+    @State private var currentImage: UIImage?
+    /// `FigureImageLoader.image(for:)` is a genuine disk-read + JPEG-decode `Task.detached`,
+    /// not instant -- without this, `currentImage == nil` was treated as "load failed" for
+    /// the entire time the very first decode of each figure was still in flight, so every
+    /// single figure flashed the alarming "Image unavailable" empty state before its real
+    /// image popped in, on every device, every time. Distinguishes "still loading" from
+    /// "actually failed to load" so only a genuine decode failure shows the error state.
+    @State private var isLoadingImage = true
 
     private var currentFigure: Figure? {
         figures.indices.contains(currentIndex) ? figures[currentIndex] : nil
@@ -31,10 +39,13 @@ struct FigureIDView: View {
                         .foregroundStyle(.secondary)
 
                     Group {
-                        if let uiImage = FigureImageLoader.image(for: figure) {
-                            Image(uiImage: uiImage)
+                        if let currentImage {
+                            Image(uiImage: currentImage)
                                 .resizable()
                                 .aspectRatio(contentMode: .fit)
+                        } else if isLoadingImage {
+                            ProgressView()
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
                         } else {
                             CobuxEmptyStateView(
                                 icon: "photo",
@@ -45,6 +56,11 @@ struct FigureIDView: View {
                     }
                     .frame(maxHeight: 320)
                     .cobuxCard()
+                    .task(id: figure.id) {
+                        isLoadingImage = true
+                        currentImage = await FigureImageLoader.image(for: figure)
+                        isLoadingImage = false
+                    }
 
                     TextField("What is this?", text: $typedAnswer)
                         .textFieldStyle(.roundedBorder)

@@ -187,7 +187,14 @@ enum QuizGenerationService {
         }
 
         chapter.quizGenerationHash = contentHash(for: chapter, in: book)
-        try? modelContext.save()
+        // Was `try?` -- this function already wipes the chapter's existing
+        // question bank (and their FSRS review history) a few lines above,
+        // then silently swallowed a failure to save the replacement. Callers
+        // already report `inserted` as a success count with no way to know
+        // the save never actually landed; propagating lets them show a real
+        // error instead of "Applied N question(s)" after quietly destroying
+        // the old ones and keeping none of the new ones.
+        try modelContext.save()
         return inserted
     }
 

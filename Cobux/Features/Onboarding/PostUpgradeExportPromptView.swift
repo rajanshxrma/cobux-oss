@@ -16,42 +16,56 @@ struct PostUpgradeExportPromptView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                Image(systemName: "externaldrive.badge.checkmark")
-                    .font(.system(size: 44))
-                    .foregroundStyle(Color.cobuxAccent)
-                    .padding(.top, 24)
+            // `GeometryReader` + `ScrollView` + `minHeight: proxy.size.height`
+            // instead of a bare `VStack` -- with the `Spacer()` below, a plain
+            // VStack that doesn't fit the screen (small phone, large Dynamic
+            // Type on the description text) clips at the bottom instead of
+            // scrolling, and "Skip for Now" is the only way this sheet is
+            // guaranteed dismissable without going through with an export.
+            // This keeps the original centered/pinned-to-bottom layout intact
+            // whenever content fits, and makes it scrollable instead of
+            // clipped whenever it doesn't.
+            GeometryReader { proxy in
+                ScrollView {
+                    VStack(spacing: 20) {
+                        Image(systemName: "externaldrive.badge.checkmark")
+                            .font(.system(size: 44))
+                            .foregroundStyle(Color.cobuxAccent)
+                            .padding(.top, 24)
 
-                Text("Back Up Before You Continue")
-                    .font(.title2.weight(.bold))
-                    .multilineTextAlignment(.center)
+                        Text("Back Up Before You Continue")
+                            .font(.title2.weight(.bold))
+                            .multilineTextAlignment(.center)
 
-                Text("This update changes how Cobux stores your books, chat history, and quiz progress. As a precaution, you can save a backup file now -- it takes one tap and costs nothing to skip.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
+                        Text("This update changes how Cobux stores your books, chat history, and quiz progress. As a precaution, you can save a backup file now -- it takes one tap and costs nothing to skip.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
 
-                Spacer()
+                        Spacer()
 
-                Button {
-                    exportNow()
-                } label: {
-                    Text("Export Backup")
-                        .frame(maxWidth: .infinity)
+                        Button {
+                            exportNow()
+                        } label: {
+                            Text("Export Backup")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.cobuxAccent)
+                        .padding(.horizontal, 24)
+
+                        if let exportMessage {
+                            Text(exportMessage)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Button("Skip for Now") { dismiss() }
+                            .padding(.bottom, 24)
+                    }
+                    .frame(minWidth: proxy.size.width, minHeight: proxy.size.height)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(Color.cobuxAccent)
-                .padding(.horizontal, 24)
-
-                if let exportMessage {
-                    Text(exportMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Button("Skip for Now") { dismiss() }
-                    .padding(.bottom, 24)
             }
             .background(Color.cobuxBackground)
             .navigationBarTitleDisplayMode(.inline)

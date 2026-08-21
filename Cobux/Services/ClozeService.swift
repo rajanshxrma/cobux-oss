@@ -52,13 +52,21 @@ enum ClozeService {
             )
 
             for card in cards {
+                // Was calling `shuffledChoices` twice -- once for `.choices`, once for
+                // `.answerIndex` -- each call does its own independent `Int.random`
+                // shuffle, so `correctAnswerIndex` pointed into a DIFFERENT arrangement
+                // than the one actually stored in `choices`. On a book with real
+                // distractor variety this mis-grades most on-device cloze MCQs, and the
+                // wrong grade feeds straight into FSRS scheduling. One call, same result
+                // used for both fields.
+                let shuffled = card.isFreeRecall ? nil : shuffledChoices(answer: card.answer, distractors: card.distractors)
                 let question = QuizQuestion(
                     book: book,
                     chapter: chapter,
                     questionType: card.isFreeRecall ? .application : .recallMCQ,
                     prompt: card.stem,
-                    choices: card.isFreeRecall ? [] : shuffledChoices(answer: card.answer, distractors: card.distractors).choices,
-                    correctAnswerIndex: card.isFreeRecall ? nil : shuffledChoices(answer: card.answer, distractors: card.distractors).answerIndex,
+                    choices: shuffled?.choices ?? [],
+                    correctAnswerIndex: shuffled?.answerIndex,
                     explanation: "Answer: \(card.answer)",
                     difficulty: 2,
                     topicTags: highlight.tags

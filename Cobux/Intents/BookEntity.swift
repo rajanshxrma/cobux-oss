@@ -16,10 +16,7 @@ struct BookEntity: AppEntity {
 
 struct BookEntityQuery: EntityQuery {
     func entities(for identifiers: [UUID]) async throws -> [BookEntity] {
-        guard let container = try? ModelContainer(
-            for: Book.self, Highlight.self, Chapter.self, ChatMessage.self, Theme.self,
-            configurations: ModelConfiguration(groupContainer: .identifier("group.com.rajansharma.Cobux"))
-        ) else { return [] }
+        guard let container = CobuxSchema.makeAppGroupContainer() else { return [] }
 
         let context = ModelContext(container)
         var descriptor = FetchDescriptor<Book>()
@@ -31,10 +28,7 @@ struct BookEntityQuery: EntityQuery {
     }
 
     func suggestedEntities() async throws -> [BookEntity] {
-        guard let container = try? ModelContainer(
-            for: Book.self, Highlight.self, Chapter.self, ChatMessage.self, Theme.self,
-            configurations: ModelConfiguration(groupContainer: .identifier("group.com.rajansharma.Cobux"))
-        ) else { return [] }
+        guard let container = CobuxSchema.makeAppGroupContainer() else { return [] }
 
         let context = ModelContext(container)
         var descriptor = FetchDescriptor<Book>()
@@ -43,6 +37,12 @@ struct BookEntityQuery: EntityQuery {
         // ceiling and an unbounded fetch shouldn't be the thing that finds that out.
         descriptor.fetchLimit = 200
         let allBooks = (try? context.fetch(descriptor)) ?? []
-        return allBooks.map { BookEntity(id: $0.id, title: $0.title, author: $0.author) }
+        // Sorted by title because this list is now also the Book Wisdom
+        // widget's "Edit Widget" picker (`SelectBookIntent`), where store
+        // order reads as no order at all. Shortcuts' own picker gets the same
+        // improvement for free.
+        return allBooks
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+            .map { BookEntity(id: $0.id, title: $0.title, author: $0.author) }
     }
 }

@@ -4,25 +4,23 @@ import WidgetKit
 
 @main
 struct CobuxApp: App {
+    init() {
+        // Register for MetricKit crash diagnostics as early as possible —
+        // iOS delivers a crash's diagnostic payload on the launch AFTER the
+        // crash, so the subscriber must exist before anything else can fail.
+        CrashReportCollector.shared.start()
+    }
+
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
     @AppStorage("themePreference") private var themeRaw: String = ThemePreference.system.rawValue
 
     var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            Book.self, Highlight.self, Chapter.self, ChatMessage.self, Theme.self, Figure.self,
-            QuizQuestion.self, HighlightMemory.self, QuizAttempt.self, QuizAnswerRecord.self
-        ])
-        let modelConfiguration = ModelConfiguration(
-            schema: schema,
-            isStoredInMemoryOnly: false,
-            groupContainer: .identifier("group.com.rajansharma.Cobux")
-        )
-
-        do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+        let (container, isDegraded) = ModelContainerFactory.make()
+        if isDegraded {
+            DiagnosticLog.log("store degraded: falling back to in-memory container")
+            Task { @MainActor in StoreHealthStatus.shared.isDegraded = true }
         }
+        return container
     }()
 
     var body: some Scene {
@@ -30,11 +28,17 @@ struct CobuxApp: App {
             Group {
                 if hasCompletedOnboarding {
                     ContentView()
-                        .onAppear {
-                            let container = sharedModelContainer
-                            Task.detached(priority: .userInitiated) {
-                                await Self.seedDatabase(container: container)
-                            }
+                        // `.onAppear` can fire more than once for the same view instance
+                        // (SwiftUI re-diffing, tab/transition edge cases) with no built-in
+                        // dedup -- that let two `seedDatabase` passes run concurrently,
+                        // each on its own background `ModelContext`, both inserting the
+                        // same seed books ("duplicate Book rows with identical titles").
+                        // `.task` only (re)starts when its identity changes and SwiftUI
+                        // itself won't double-invoke it for an unchanged view, and
+                        // `SeedGate` below is a second, explicit belt-and-braces guard so
+                        // this can't recur even if some future edge case re-triggers it.
+                        .task {
+                            await Self.seedDatabase(container: sharedModelContainer)
                         }
                 } else {
                     OnboardingView()
@@ -43,6 +47,25 @@ struct CobuxApp: App {
             .preferredColorScheme(ThemePreference(rawValue: themeRaw)?.colorScheme)
         }
         .modelContainer(sharedModelContainer)
+    }
+
+    /// Explicit single-flight guard for `seedDatabase`. `.task` above already makes
+    /// re-entrancy unlikely, but this makes it structurally impossible: a second call
+    /// while one is in flight returns immediately instead of racing a second background
+    /// `ModelContext` against the first's in-flight inserts/repairs.
+    private actor SeedGate {
+        static let shared = SeedGate()
+        private var isSeeding = false
+
+        func begin() -> Bool {
+            guard !isSeeding else { return false }
+            isSeeding = true
+            return true
+        }
+
+        func end() {
+            isSeeding = false
+        }
     }
 
     // Seeding used to run synchronously on the main thread via `mainContext`
@@ -56,16 +79,34 @@ struct CobuxApp: App {
     // a background context; `ContentView`'s `@Query` picks up the results
     // automatically once they land, same as any other store mutation.
     private static func seedDatabase(container: ModelContainer) async {
+        guard await SeedGate.shared.begin() else { return }
+        defer { Task { await SeedGate.shared.end() } }
+
         let context = ModelContext(container)
 
-        // Only surface the "setting up your library" banner on a genuine
-        // first run -- every other launch also calls this function (it's
-        // the safety net that re-seeds anything missing), but is a fast
-        // no-op against an already-populated store and shouldn't flash a
-        // banner the user has no reason to see.
         let isFirstRun = ((try? context.fetch(FetchDescriptor<Book>())) ?? []).isEmpty
-        if isFirstRun {
-            await MainActor.run { SeedingStatus.shared.isSeeding = true }
+
+        // `isSeeding` now gates EVERY launch's mutating pass below, not just a
+        // genuine first run. It used to be first-run-only on the theory that
+        // every other launch is "a fast no-op against an already-populated
+        // store" -- true for row counts, but false for whether the pass
+        // MUTATES anything. Build 5's launch crash was exactly this: on an
+        // upgrade (not a fresh install), `FigureSeedLoader` inserted 1,597
+        // `Figure` rows and `repairDuplicateIDs`/`backfillChapterRefs`
+        // rewrote fields across 8 model types -- a real mutating merge that
+        // landed on the main context while `LibraryView` was already
+        // rendering live against the store. Showing this banner during any
+        // launch that might mutate is the cheap half of the fix (the other
+        // half is `BookCard` no longer faulting a live relationship read
+        // during that window at all -- see its `.task`-based `fetchCount`).
+        // On a normal quiescent launch every seed/repair function below is a
+        // guarded no-op, so the banner is on-screen only as long as those
+        // full-table scans take -- brief, not the multi-second "populate
+        // 1,300 highlights" case a fresh install actually needs.
+        DiagnosticLog.log("seed started, isFirstRun=\(isFirstRun)")
+        await MainActor.run {
+            SeedingStatus.shared.message = isFirstRun ? "Setting up your library…" : "Syncing your library…"
+            SeedingStatus.shared.isSeeding = true
         }
 
         // The two large medical reference books stay as hand-written Swift —
@@ -94,6 +135,14 @@ struct CobuxApp: App {
             SeedData.seedRobbins(modelContext: context)
         }
 
+        // Devices that already ran the re-entrant-seeding bug (fixed by `SeedGate`
+        // above) may already carry duplicate `Book` rows sharing a title -- most
+        // urgently because `CitationResolver.resolve`'s `Dictionary(uniqueKeysWithValues:)`
+        // traps on a duplicate title, crashing chat on every single message. This
+        // repairs devices build 5 already affected, not just future launches.
+        dedupeDuplicateBooks(context: context)
+        repairClozeAnswerIndices(context: context)
+
         // `Book.id`/`Highlight.id`/`Theme.id` used to rely on a `= UUID()` property
         // default, which SwiftData evaluates once at schema-definition time rather
         // than per instance — every existing row ended up sharing the same UUID,
@@ -114,9 +163,39 @@ struct CobuxApp: App {
             #endif
         }
 
-        if isFirstRun {
-            await MainActor.run { SeedingStatus.shared.isSeeding = false }
+        // `context.save()` only guarantees the write landed in `container`'s
+        // SQLite store -- it says NOTHING about whether `container.mainContext`
+        // (the context every `@Query` and every `!SeedingStatus.isSeeding` gate
+        // in the app is actually trusting) has finished merging that write in.
+        // Every gate downstream (`BookDetailView`, `QuizHomeView`,
+        // `ContentView`'s WatchSync/nudges pass) was written as if
+        // `isSeeding == false` means "safe to fault a relationship now" -- but
+        // until this fix, nothing here ever confirmed the merge had actually
+        // landed before flipping the flag. That's the SAME crash class as the
+        // documented build-5 incident (see `BookCard`'s doc comment), just one
+        // layer removed: this build's seed pass is far larger (10 new books,
+        // ~2000+ highlights, on top of the existing repair/migration passes
+        // above) than build 5's, which widened a previously-rare race into a
+        // reliably-every-launch crash. Forcing a fetch through `mainContext`
+        // is a real synchronization point -- unlike a relationship fault, a
+        // fetch talks to the persistent store directly -- and the two yields
+        // give SwiftData's own cross-context merge notification a turn to
+        // fully settle before any gated view is allowed to trust the flag.
+        await MainActor.run {
+            _ = try? container.mainContext.fetch(FetchDescriptor<Book>())
         }
+        await Task.yield()
+        await Task.yield()
+
+        // Was still gated on `isFirstRun` after the set above became
+        // unconditional -- meaning on every non-first-run launch (every
+        // returning user, Utkarsh's very first run of THIS build included,
+        // since his store already has books) `isSeeding` was set true and
+        // never reset, leaving the "Syncing your library…" banner stuck on
+        // screen for the entire session, every session. The set and the reset
+        // must be symmetric.
+        await MainActor.run { SeedingStatus.shared.isSeeding = false }
+        DiagnosticLog.log("seed finished")
 
         #if DEBUG
         let finalBooks = (try? context.fetch(FetchDescriptor<Book>())) ?? []
@@ -137,6 +216,46 @@ struct CobuxApp: App {
         Task.detached(priority: .background) {
             await Self.backfillEmbeddingsAndReindex(container: container)
         }
+        Task.detached(priority: .background) {
+            await Self.backfillPersonalWritingEmbeddings(container: container)
+        }
+        Task.detached(priority: .background) {
+            await Self.precacheCoverImages(container: container)
+        }
+    }
+
+    // Downloads and caches every book's cover image to disk right after
+    // seeding, instead of waiting for `BookCard`/`BookDetailView` to
+    // lazily trigger it on first render -- see `CoverImageCache`'s doc
+    // comment. Skips anything already cached (idempotent across every
+    // non-first-run launch, not just a true first run) and anything with
+    // no `coverImageURL` at all (nothing to fetch, gradient fallback is
+    // already correct for those). Also skips anything with a bundled
+    // `Cover-<slug>` asset that actually resolves -- BOTH render paths
+    // (`BookCard.swift`, `BookDetailView.swift`) check `coverAssetName`
+    // before ever falling back to the remote URL, so most of this app's
+    // ~26 books with a bundled cover were downloading and caching a remote
+    // image on every fresh install that would never once be read. Uses the
+    // exact same `UIImage(named: "Cover-" + assetName) != nil` check those
+    // render paths use, not just `coverAssetName != nil` -- a mismatched
+    // asset name must still fall through to the remote fetch, same as it
+    // falls through to it at render time. Book count here is small enough
+    // (a handful of seeded books) that a plain sequential loop is fine --
+    // no batching/throttling needed the way the embedding backfill above
+    // needs it at highlight scale.
+    private static func precacheCoverImages(container: ModelContainer) async {
+        let context = ModelContext(container)
+        let books = (try? context.fetch(FetchDescriptor<Book>())) ?? []
+        CoverImageCache.pruneOrphans(validBookIDs: Set(books.map(\.id)))
+        for book in books {
+            if let assetName = book.coverAssetName, UIImage(named: "Cover-" + assetName) != nil {
+                continue
+            }
+            guard CoverImageCache.cachedImage(for: book.id) == nil,
+                  let urlString = book.coverImageURL,
+                  let url = URL(string: urlString) else { continue }
+            await CoverImageCache.downloadAndCache(bookID: book.id, remoteURL: url)
+        }
     }
 
     // `NLContextualEmbedding` inference is genuinely CPU-heavy per call — fine
@@ -148,7 +267,12 @@ struct CobuxApp: App {
     // a lower `.background` task priority, gives the scheduler far more
     // frequent chances to service UI work in between embedding calls, at the
     // cost of the backfill itself taking a bit longer to finish overall.
-    private static func backfillEmbeddingsAndReindex(container: ModelContainer) async {
+    // Not `private` -- `AutoRestoreService` calls this directly after a
+    // successful restore, since a restore produces exactly the "rows with a
+    // nil embedding" case this already exists to handle, and there's no
+    // reason to make a just-recovered library wait for the next cold launch
+    // to become fully searchable again.
+    static func backfillEmbeddingsAndReindex(container: ModelContainer) async {
         let backgroundContext = ModelContext(container)
 
         let pending = (try? backgroundContext.fetch(
@@ -172,6 +296,114 @@ struct CobuxApp: App {
 
         let allHighlights = (try? backgroundContext.fetch(FetchDescriptor<Highlight>())) ?? []
         SpotlightIndexer.reindexAll(allHighlights)
+    }
+
+    /// Same shape as `backfillEmbeddingsAndReindex` above, scoped to
+    /// `PersonalWritingEntry` instead of `Highlight`. `PersonalWritingImportService`
+    /// already embeds every entry it inserts directly, so in the common case this
+    /// is a no-op fast pass over an already-fully-embedded table — the real target
+    /// is a `PersonalWritingEntry` restored via `BackupService`, whose DTO
+    /// deliberately omits the embedding vector (see its own doc comment) and so
+    /// needs it filled in lazily, exactly like a restored `Highlight` does.
+    // Not `private` -- same reasoning as `backfillEmbeddingsAndReindex`
+    // above, called directly by `AutoRestoreService` after a restore.
+    static func backfillPersonalWritingEmbeddings(container: ModelContainer) async {
+        let backgroundContext = ModelContext(container)
+
+        let pending = (try? backgroundContext.fetch(
+            FetchDescriptor<PersonalWritingEntry>(predicate: #Predicate { $0.embeddingData == nil })
+        )) ?? []
+
+        let batchSize = 25
+        var start = 0
+        while start < pending.count {
+            let end = min(start + batchSize, pending.count)
+            for entry in pending[start..<end] {
+                if let vector = EmbeddingService.embed(entry.text) {
+                    entry.embedding = vector
+                }
+                await Task.yield()
+            }
+            try? backgroundContext.save()
+            await Task.yield()
+            start = end
+        }
+    }
+
+    /// Repairs the specific data corruption the re-entrant-seeding bug (fixed by
+    /// `SeedGate`) already wrote to some devices: two `Book` rows sharing the same
+    /// title, from two concurrent `seedDatabase` passes each independently seeding
+    /// the same book. `CitationResolver.resolve`'s `Dictionary(uniqueKeysWithValues:)`
+    /// traps on a duplicate title -- that IS the chat crash, firing on every message
+    /// once a device has a duplicate. Safe to run on every launch: a store with no
+    /// duplicates makes this a single grouped fetch and nothing else.
+    ///
+    /// The older of a duplicate pair is kept as canonical (first byte-identical
+    /// seed content should have landed first). Before deleting a loser, any
+    /// highlight carrying a `personalNote` is re-parented onto the canonical book
+    /// instead of being cascade-deleted with it -- `personalNote` is the one
+    /// field no seed path (`SeedData*.swift`, `SeedLoader.swift`) ever writes, so
+    /// a non-empty one is unambiguous evidence of real user authorship. (`isReminder`
+    /// was considered and rejected as a signal: seed content sets it explicitly,
+    /// true on most highlights, so it doesn't distinguish user content at all.)
+    /// Bare seed-duplicate content is deleted along with the loser via the
+    /// existing `.cascade` delete rule on `Book.highlights`.
+    /// `internal` (not `private`) so a test can seed two same-titled books
+    /// directly and assert this repairs them, same testability pattern as
+    /// `repairDuplicateIDs` below.
+    static func dedupeDuplicateBooks(context: ModelContext) {
+        let books = (try? context.fetch(FetchDescriptor<Book>())) ?? []
+        let grouped = Dictionary(grouping: books) { $0.title.lowercased() }
+
+        for (_, group) in grouped where group.count > 1 {
+            let sorted = group.sorted { $0.dateAdded < $1.dateAdded }
+            guard let canonical = sorted.first else { continue }
+
+            for loser in sorted.dropFirst() {
+                for highlight in loser.highlights where !(highlight.personalNote ?? "").isEmpty {
+                    highlight.book = canonical
+                }
+                context.delete(loser)
+            }
+        }
+    }
+
+    /// Repairs `QuizQuestion` rows already corrupted by the `ClozeService`
+    /// double-shuffle bug (fixed separately): `correctAnswerIndex` was computed
+    /// from an independent `Int.random` shuffle than the one actually stored in
+    /// `choices`, so most existing on-device cloze MCQs point at the wrong
+    /// answer. Recoverable without regenerating anything -- `explanation` was
+    /// always stored as `"Answer: \(card.answer)"`, so the real answer text
+    /// survives even on an already-corrupted row; this finds that text's real
+    /// position in `choices` and corrects `correctAnswerIndex` to match. Any
+    /// row that was already reviewed under the wrong answer key has its FSRS
+    /// state reset to fresh (never-reviewed, due now) rather than left with
+    /// scheduling built on possibly-wrong grades -- silently leaving that state
+    /// in place would be worse than losing the review history. Idempotent
+    /// (a row already correct is a no-op), safe on every launch. `internal` for
+    /// the same testability reason as the other repair passes.
+    static func repairClozeAnswerIndices(context: ModelContext) {
+        let descriptor = FetchDescriptor<QuizQuestion>(predicate: #Predicate { $0.generationSourceRaw == "cloze" })
+        let clozeQuestions = (try? context.fetch(descriptor)) ?? []
+        let answerPrefix = "Answer: "
+
+        for question in clozeQuestions {
+            guard let storedIndex = question.correctAnswerIndex,
+                  question.explanation.hasPrefix(answerPrefix) else { continue }
+            let answerText = String(question.explanation.dropFirst(answerPrefix.count))
+            guard let realIndex = question.choices.firstIndex(of: answerText), realIndex != storedIndex else { continue }
+
+            question.correctAnswerIndex = realIndex
+
+            if question.fsrsReps > 0 {
+                question.fsrsStability = 0
+                question.fsrsDifficulty = 0
+                question.fsrsReps = 0
+                question.fsrsLapses = 0
+                question.lastReviewedAt = nil
+                question.dueDate = .now
+            }
+        }
     }
 
     /// One-time-per-highlight backfill for the `Highlight.chapterRef` relationship
@@ -287,6 +519,38 @@ struct CobuxApp: App {
                 record.id = UUID()
             }
             seenQuizAnswerRecordIDs.insert(record.id)
+        }
+
+        // `Figure.id` is a NEW field (2.2.0, added so chat replies can reference
+        // a specific figure by stable id) with the identical schema-default-
+        // evaluated-once risk as every field above: `FigureSeedLoader` already
+        // inserted 1,597 Figure rows on devices running earlier builds, and
+        // SwiftData's lightweight migration backfills a NEW default-valued
+        // property by evaluating `= UUID()` once, not per row -- every
+        // pre-existing Figure would otherwise collide on one shared id the
+        // instant this update installs. Covered here from day one instead of
+        // waiting to discover it the way Chapter's version was (see above).
+        var seenFigureIDs = Set<UUID>()
+        for figure in (try? context.fetch(FetchDescriptor<Figure>())) ?? [] {
+            if seenFigureIDs.contains(figure.id) {
+                figure.id = UUID()
+            }
+            seenFigureIDs.insert(figure.id)
+        }
+
+        // `PersonalWritingEntry.id` is a brand-new type (2.2.0, personal-writing
+        // context feature) with the identical schema-default-evaluated-once risk
+        // as every field above. There are zero rows before this ships, but any
+        // future migration path (e.g. a device restoring an old store) would hit
+        // the same collision the instant more than one row landed under an old
+        // schema version -- covered here from day one rather than waiting to
+        // discover it later.
+        var seenPersonalWritingEntryIDs = Set<UUID>()
+        for entry in (try? context.fetch(FetchDescriptor<PersonalWritingEntry>())) ?? [] {
+            if seenPersonalWritingEntryIDs.contains(entry.id) {
+                entry.id = UUID()
+            }
+            seenPersonalWritingEntryIDs.insert(entry.id)
         }
     }
 }

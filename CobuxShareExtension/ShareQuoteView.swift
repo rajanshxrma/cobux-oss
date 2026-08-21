@@ -79,6 +79,12 @@ struct ShareQuoteView: View {
     }
 
     private func save() {
+        // Same double-tap guard as `AddBookView`/`AddChapterView`/
+        // `AddHighlightView` in the host app: the toolbar button only
+        // becomes `.disabled` once `isSaving` is read on a later render
+        // pass, so a fast second tap in that window used to be able to fire
+        // `save()` twice and insert two identical highlights.
+        guard !isSaving else { return }
         let trimmed = quoteText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard let container = ShareExtensionStore.makeContainer() else {

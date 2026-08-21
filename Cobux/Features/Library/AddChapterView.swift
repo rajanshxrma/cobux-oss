@@ -32,7 +32,7 @@ struct AddChapterView: View {
                             if keyLessons.count > 1 {
                                 Button(action: { keyLessons.remove(at: index) }) {
                                     Image(systemName: "minus.circle.fill")
-                                        .foregroundColor(.red)
+                                        .foregroundColor(Color.cobuxDanger)
                                 }
                             }
                         }
@@ -50,7 +50,7 @@ struct AddChapterView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { saveChapter() }
-                        .disabled(title.isEmpty || summary.isEmpty)
+                        .disabled(title.isEmpty || summary.isEmpty || didSave)
                 }
             }
         }
@@ -58,6 +58,11 @@ struct AddChapterView: View {
     }
 
     private func saveChapter() {
+        // Same double-tap guard as `AddHighlightView`/`AddBookView` -- the
+        // sheet takes a moment to actually dismiss, and this button had no
+        // guard at all against a second tap landing in that window and
+        // appending a second, identical chapter.
+        guard !didSave else { return }
         let number = Int(chapterNumberString)
         let filteredLessons = keyLessons.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
 

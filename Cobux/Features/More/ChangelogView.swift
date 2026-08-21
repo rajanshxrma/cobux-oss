@@ -5,9 +5,13 @@ import SwiftUI
 /// in `BuildInfo.changelog`, updated alongside `uploadDate` as part of
 /// shipping each new build.
 struct ChangelogView: View {
+    // Defaults to the full history for the existing More -> What's New push
+    // destination; `WhatsNewSheet` passes a filtered slice instead.
+    var entries: [ChangelogEntry] = BuildInfo.changelog
+
     var body: some View {
         List {
-            ForEach(BuildInfo.changelog) { entry in
+            ForEach(entries) { entry in
                 Section {
                     ForEach(entry.changes, id: \.self) { change in
                         Label(change, systemImage: "checkmark.circle.fill")

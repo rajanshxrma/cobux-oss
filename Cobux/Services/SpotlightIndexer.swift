@@ -18,8 +18,14 @@ struct SpotlightIndexer {
     /// Batch re-index: clears every item under `domainIdentifier`, then indexes
     /// all provided highlights in a single `indexSearchableItems` call.
     static func reindexAll(_ highlights: [Highlight]) {
+        // Build the items BEFORE hopping into Spotlight's completion handler:
+        // that closure runs on Spotlight's own callback queue, and touching
+        // SwiftData models (`highlight.text`, `.book?.title`) off the thread
+        // of the context that fetched them is undefined behavior that can
+        // intermittently EXC_BAD_ACCESS. `CSSearchableItem`s are plain values
+        // and cross threads fine.
+        let items = highlights.map(makeItem(for:))
         CSSearchableIndex.default().deleteSearchableItems(withDomainIdentifiers: [domainIdentifier]) { _ in
-            let items = highlights.map(makeItem(for:))
             CSSearchableIndex.default().indexSearchableItems(items, completionHandler: nil)
         }
     }

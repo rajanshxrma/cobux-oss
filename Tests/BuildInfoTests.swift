@@ -12,8 +12,8 @@ final class BuildInfoTests: XCTestCase {
     func testNewestChangelogEntryMatchesCurrentShippedVersion() {
         // Mirrors project.yml's MARKETING_VERSION/CURRENT_PROJECT_VERSION —
         // update both together when bumping either.
-        let expectedVersion = "2.1.0"
-        let expectedBuild = "5"
+        let expectedVersion = "2.5.13"
+        let expectedBuild = "26"
 
         guard let newest = BuildInfo.changelog.first else {
             XCTFail("BuildInfo.changelog is empty")

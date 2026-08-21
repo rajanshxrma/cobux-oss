@@ -142,6 +142,21 @@ struct DiagnosticsView: View {
                 diagnosticRow("Version", "\(appVersion) (\(appBuild))", isHealthy: true)
                 diagnosticRow("TestFlight renews in", "\(BuildInfo.daysUntilExpiry) day(s)", isHealthy: BuildInfo.daysUntilExpiry > 14)
             }
+
+            // Always present, never gated on a crash existing first -- unlike
+            // `CrashReportCollector`'s reports (which only ever appear after
+            // something has already gone wrong), this log exists precisely so
+            // there's real evidence to share BEFORE a bug reaches the point of
+            // crashing, e.g. a seed that hangs instead of finishing.
+            Section("Diagnostic Log") {
+                let entries = DiagnosticLog.recentEntries()
+                diagnosticRow("Entries", "\(entries.count)", isHealthy: true)
+                if !entries.isEmpty {
+                    ShareLink(item: DiagnosticLog.fileURL) {
+                        Label("Share Diagnostic Log", systemImage: "doc.text.magnifyingglass")
+                    }
+                }
+            }
         }
         .navigationTitle("Diagnostics")
     }

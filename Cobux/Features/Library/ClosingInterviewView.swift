@@ -18,6 +18,7 @@ struct ClosingInterviewView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var resultText: String?
+    @State private var didSaveReflection = false
 
     private var hasAnyAnswer: Bool {
         !whatChangedMind.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -84,7 +85,7 @@ struct ClosingInterviewView: View {
                 Section {
                     Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
                         .font(.subheadline)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Color.cobuxDanger)
                 }
             }
 
@@ -134,10 +135,11 @@ struct ClosingInterviewView: View {
                         .fontWeight(.semibold)
                         .frame(maxWidth: .infinity)
                         .padding()
-                        .background(Color.cobuxAccent)
-                        .foregroundStyle(.white)
+                        .background(didSaveReflection ? Color.secondary.opacity(0.15) : Color.cobuxAccent)
+                        .foregroundStyle(didSaveReflection ? Color.secondary : .white)
                         .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.card))
                 }
+                .disabled(didSaveReflection)
             }
             .padding()
         }
@@ -180,7 +182,12 @@ struct ClosingInterviewView: View {
     }
 
     private func saveReflection() {
-        guard let resultText else { return }
+        // This button had no reentry guard at all -- a fast double-tap before
+        // the sheet's dismiss animation finished appended two identical
+        // "Closing Reflection" chapters. Same guard shape as the other Add*
+        // sheets in Library.
+        guard let resultText, !didSaveReflection else { return }
+        didSaveReflection = true
         let chapter = Chapter(title: "\u{1F4DD} Closing Reflection", summary: resultText, keyLessons: [], chapterNumber: nil)
         chapter.book = book
         book.chapters.append(chapter)

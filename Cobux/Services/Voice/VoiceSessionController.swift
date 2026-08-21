@@ -21,6 +21,13 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
     private(set) var state: VoiceState = .idle
     private(set) var liveTranscript = ""
     private(set) var spokenCaption = ""
+    /// Same content as `spokenCaption`, split into the individual sentence
+    /// chunks as they're spoken -- `VoiceModeView`'s caption area renders
+    /// this as a small append-only stack (one spring-in transition per
+    /// sentence, mirroring `MessageBubbleView`'s own insertion animation)
+    /// instead of silently growing one static block of text, per Rajan's
+    /// own ask for voice mode's captions to feel like chat.
+    private(set) var spokenSentences: [String] = []
     private(set) var statusMessage: String?
     private(set) var conversationHistory: [AIMessage]
 
@@ -184,6 +191,16 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
 
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
+        // A 0 Hz / 0-channel format means the session's input is gone (phone
+        // call, Siri, alarm, or a Bluetooth route change yanked it) --
+        // `installTap` with such a format raises an UNCATCHABLE NSException
+        // (IsFormatSampleRateAndChannelCountValid) and hard-crashes the app.
+        // Swift try/catch can't protect the tap, so validate first and take
+        // the same graceful failure path as an engine-start error.
+        guard recordingFormat.sampleRate > 0, recordingFormat.channelCount > 0 else {
+            onError?("The microphone isn't available right now.")
+            return
+        }
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
             self?.recognitionRequest?.append(buffer)
@@ -303,6 +320,7 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
             failTurn("Add your Anthropic API key in Settings to use voice mode.")
             return
         }
+        StreakTracker.recordActivityToday()
 
         let assembled = ChatPromptBuilder.assemble(userMessage: question, books: books, selectedBookID: selectedBookID, symposiumModeEnabled: symposiumModeEnabled, isVoice: true)
 
@@ -340,6 +358,7 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
         state = .thinking
         currentTurnUserMessage = question
         spokenCaption = ""
+        spokenSentences = []
 
         let historySnapshot = conversationHistory
         let turnStartSpend = UsageTracker.currentMonthEstimate()
@@ -405,7 +424,14 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
             failTurn("No response received. Please try again.")
             return
         }
-        let resolvedTitles = CitationResolver.resolve(declaredTitles: parsed.declaredTitles, libraryTitles: books.map(\.title))
+        // Same citation rule as text chat, via the one shared implementation —
+        // a book-scoped thread's replies don't get chipped with the book the
+        // user already chose, only with a book they genuinely reached out to.
+        let resolvedTitles = ChatPromptBuilder.displayableCitations(
+            resolvedTitles: CitationResolver.resolve(declaredTitles: parsed.declaredTitles, libraryTitles: books.map(\.title)),
+            selectedBookID: selectedBookID,
+            books: books
+        )
 
         conversationHistory.append(AIMessage(role: "user", content: userMessage))
         conversationHistory.append(AIMessage(role: "assistant", content: finalText))
@@ -450,6 +476,7 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
         isSpeakingQueue = true
         let next = utteranceQueue.removeFirst()
         spokenCaption += (spokenCaption.isEmpty ? "" : " ") + next
+        spokenSentences.append(next)
         let utterance = AVSpeechUtterance(string: next)
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
         utterance.pitchMultiplier = 1.0

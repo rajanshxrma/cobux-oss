@@ -154,6 +154,16 @@ final class SpokenQuizController: NSObject, AVSpeechSynthesizerDelegate {
 
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
+        // A 0 Hz / 0-channel format means the session's input is gone (phone
+        // call, Siri, alarm, or a Bluetooth route change yanked it) --
+        // `installTap` with such a format raises an UNCATCHABLE NSException
+        // (IsFormatSampleRateAndChannelCountValid) and hard-crashes the app.
+        // Swift try/catch can't protect the tap, so validate first and take
+        // the same graceful failure path as an engine-start error.
+        guard recordingFormat.sampleRate > 0, recordingFormat.channelCount > 0 else {
+            onError?("The microphone isn't available right now.")
+            return
+        }
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
             self?.recognitionRequest?.append(buffer)
@@ -213,11 +223,23 @@ final class SpokenQuizController: NSObject, AVSpeechSynthesizerDelegate {
 
     private func stopListening() {
         stopListeningInternal()
-        silenceTimer?.invalidate()
-        silenceTimer = nil
     }
 
     private func stopListeningInternal() {
+        // Was only invalidated by the OUTER `stopListening()` -- but the silence
+        // timer's own fire callback calls this inner function directly (line ~207)
+        // after grading, never the outer one. Since grading freezes
+        // `lastChangeDate`/`lastTranscript`, the timer's guard (`elapsed >=
+        // silenceThreshold, wordCount >= minimumAnswerWords`) kept passing on every
+        // subsequent 0.3s tick too, re-invoking `gradeAndAdvance` with the same
+        // spoken answer repeatedly until something else happened to call the outer
+        // function -- duplicate `QuizAnswerRecord` inserts and duplicate FSRS
+        // reviews from a single answer. Invalidating here, in the function every
+        // stop path actually goes through, closes that regardless of which caller
+        // triggered the stop.
+        silenceTimer?.invalidate()
+        silenceTimer = nil
+
         isIntentionallyStoppingRecognition = true
         if audioEngine.isRunning {
             audioEngine.stop()

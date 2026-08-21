@@ -3,10 +3,23 @@ import Foundation
 enum ClaudeError: LocalizedError {
     case networkError(Error)
     case apiError(String)
+    /// A real numeric HTTP status attached, unlike plain `.apiError` (used for
+    /// business-logic failures with no status code, e.g. "Claude declined to
+    /// generate questions"). Both `mapAPIError`/`mapGenerationAPIError` always
+    /// have `statusCode` on hand -- this exists so `RetryPolicy` can classify
+    /// retryability structurally (429/5xx) instead of string-matching message
+    /// text, which would be fragile against wording Anthropic doesn't guarantee.
+    case retryableAPIError(statusCode: Int, message: String)
     case invalidResponse
     case missingAPIKey
     case invalidAPIKey
     case truncated
+    /// Raised by an early `NetworkMonitor.shared.isConnected` check before a request is even
+    /// attempted, so an offline user gets an immediate, honest failure instead of waiting
+    /// through the intentional 120s idle timeout on `session` above. Deliberately a distinct
+    /// case from `.networkError` -- that one wraps a real `URLError` that came back from a
+    /// request that was actually attempted; this one means no request was attempted at all.
+    case offline
 
     var errorDescription: String? {
         switch self {
@@ -14,6 +27,8 @@ enum ClaudeError: LocalizedError {
             return "Network error: \(error.localizedDescription)"
         case .apiError(let message):
             return "API error: \(message)"
+        case .retryableAPIError(let statusCode, let message):
+            return "API error (\(statusCode)): \(message)"
         case .invalidResponse:
             return "Invalid response from Claude API"
         case .missingAPIKey:
@@ -22,6 +37,8 @@ enum ClaudeError: LocalizedError {
             return "Your API key was rejected. Please check it in Settings."
         case .truncated:
             return "The response was cut short."
+        case .offline:
+            return "You're offline. Check your connection and try again."
         }
     }
 }
@@ -76,6 +93,9 @@ class ClaudeService: AIService {
     func sendMessage(userMessage: String, conversationHistory: [AIMessage], systemPrompt: String) async throws -> String {
         guard !apiKey.isEmpty else {
             throw ClaudeError.missingAPIKey
+        }
+        guard await NetworkMonitor.shared.isConnected else {
+            throw ClaudeError.offline
         }
 
         let request = try buildRequest(
@@ -145,6 +165,10 @@ class ClaudeService: AIService {
                 do {
                     guard !apiKey.isEmpty else {
                         continuation.finish(throwing: ClaudeError.missingAPIKey)
+                        return
+                    }
+                    guard await NetworkMonitor.shared.isConnected else {
+                        continuation.finish(throwing: ClaudeError.offline)
                         return
                     }
 
@@ -219,6 +243,10 @@ class ClaudeService: AIService {
                 do {
                     guard !apiKey.isEmpty else {
                         continuation.finish(throwing: ClaudeError.missingAPIKey)
+                        return
+                    }
+                    guard await NetworkMonitor.shared.isConnected else {
+                        continuation.finish(throwing: ClaudeError.offline)
                         return
                     }
 
@@ -424,9 +452,9 @@ class ClaudeService: AIService {
                 return .invalidAPIKey
             }
             if let message = error["message"] as? String {
-                return .apiError(message)
+                return .retryableAPIError(statusCode: statusCode, message: message)
             }
         }
-        return .apiError("HTTP \(statusCode)")
+        return .retryableAPIError(statusCode: statusCode, message: "HTTP \(statusCode)")
     }
 }

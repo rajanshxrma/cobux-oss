@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import WidgetKit
+import UIKit
 
 struct BookDetailView: View {
     @Bindable var book: Book
@@ -15,6 +16,7 @@ struct BookDetailView: View {
     @State private var showingAddChapter = false
     @State private var showingClosingInterview = false
     @State private var chapterToggleFeedback = false
+    @State private var coverImage: UIImage?
 
     /// Grows to fit a 2-line title (bounded by `BookTitleText`'s
     /// `lineLimit: 2` + `minimumScaleFactor`) plus the "Finished" badge when
@@ -25,6 +27,30 @@ struct BookDetailView: View {
     }
 
     var body: some View {
+        Group {
+            if SeedingStatus.shared.isSeeding {
+                // Same seed-merge guard as `BookCard`/`QuizHomeView` -- this
+                // screen's stats row, chapterProgress, highlightsList, and
+                // chaptersList all fault this book's `highlights`/`chapters`
+                // relationships synchronously in `body`. Landing that fault
+                // mid seed/upgrade merge is the confirmed Build-5 crash
+                // class (see `BookCard`'s doc comment). `LibraryView` never
+                // shows a book row you can tap until it renders (and
+                // `BookCard` itself defers its own relationship read to
+                // `.task`), but the seed/upgrade merge can still be running
+                // for an *existing* user re-opening an already-populated
+                // library after a content update, so this guard matters even
+                // when it isn't the very first launch.
+                ProgressView("Syncing your library…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .navigationBarTitleDisplayMode(.inline)
+            } else {
+                detailContent
+            }
+        }
+    }
+
+    private var detailContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 // Hero Header — bounded so a long title (e.g. "Robbins & Cotran
@@ -156,24 +182,51 @@ struct BookDetailView: View {
         .ignoresSafeArea(edges: .top)
         .sensoryFeedback(.selection, trigger: chapterToggleFeedback)
         .cobuxZoomTransitionDestination(id: book.id, in: heroTransitionNamespace)
+        .task(id: book.id) {
+            await loadCoverImage()
+        }
     }
 
+    // Same resolution order as `BookCard.coverBackground`: bundled asset ->
+    // on-device remote-fetch cache -> gradient. See its doc comment.
+    //
+    // `"Cover-" + assetName`, not the bare `assetName` -- the imageset's real
+    // name is `Cover-<slug>` (`Book.coverAssetName`'s own doc comment), and
+    // the bare slug returned nil from `UIImage(named:)` for all 26 seed books
+    // until this was caught.
     @ViewBuilder
     private var heroBackground: some View {
-        if let urlString = book.coverImageURL, let url = URL(string: urlString) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                default:
-                    CoverGradientView(colorHex: book.coverColorHex)
-                }
-            }
+        if let assetName = book.coverAssetName, let bundled = UIImage(named: "Cover-" + assetName) {
+            Image(uiImage: bundled)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else if let coverImage {
+            Image(uiImage: coverImage)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
         } else {
             CoverGradientView(colorHex: book.coverColorHex)
         }
+    }
+
+    // On-device cache, not `AsyncImage` -- see `CoverImageCache`'s doc comment
+    // and `BookCard`'s matching conversion (2.2.0 offline resilience).
+    //
+    // Skipped only when the bundled asset genuinely resolves, not merely when
+    // `coverAssetName` is set -- see `BookCard.loadCoverImage`'s matching fix
+    // and doc comment for why that distinction matters: a `coverAssetName`
+    // that fails to resolve must fall through here instead of dead-ending.
+    @MainActor
+    private func loadCoverImage() async {
+        if let assetName = book.coverAssetName, UIImage(named: "Cover-" + assetName) != nil {
+            return
+        }
+        if let cached = CoverImageCache.cachedImage(for: book.id) {
+            coverImage = cached
+            return
+        }
+        guard let urlString = book.coverImageURL, let url = URL(string: urlString) else { return }
+        coverImage = await CoverImageCache.downloadAndCache(bookID: book.id, remoteURL: url)
     }
 
     private var highlightsList: some View {

@@ -106,6 +106,25 @@ struct QuizAnalyticsView: View {
     }
 
     var body: some View {
+        Group {
+            if SeedingStatus.shared.isSeeding {
+                // Same seed-merge guard as `BookCard`/`BookDetailView`/`QuizHomeView` --
+                // `masteryByBook` faults every `QuizQuestion.book` relationship and
+                // `weakestTopics` faults every `Theme.highlights` relationship,
+                // both synchronously in `body`. Landing that fault mid seed/upgrade
+                // merge is the confirmed Build-5 crash class. Reached only through
+                // `QuizHomeView`'s own gated list today, but that's a fragile
+                // guarantee to lean on from here -- a local guard costs nothing.
+                ProgressView("Syncing your library…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .navigationTitle("Quiz Analytics")
+            } else {
+                analyticsList
+            }
+        }
+    }
+
+    private var analyticsList: some View {
         List {
             Section("Retention") {
                 if let rate = retentionRate30Days {

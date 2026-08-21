@@ -1,15 +1,14 @@
 import SwiftUI
 import SwiftData
 
-/// This is the open-source Cobux repo — the actual book content (highlights, chapter
-/// summaries) that ships in the private/production build lives in a separate, non-public
-/// file and is intentionally not included here, since it's derived from commercially
-/// published books. `seedMicrobiology`/`seedRobbins` are stubbed as no-ops so the app
-/// still builds and runs cleanly with an empty library on first launch — see the README
-/// for `SeedBookDocument`'s JSON schema (`SeedLoader.swift`) if you want to author and
-/// bundle your own book content, including public-domain titles.
-struct SeedData {
+/// The private build seeds two hand-written medical-textbook chapters (Robbins & Cotran
+/// Pathologic Basis of Disease, Sherris Medical Microbiology) authored from books the
+/// developer owns -- real, copyrighted textbook content that can't be redistributed in a
+/// public repo. Stubbed as a no-op here; the app builds and runs correctly with an empty
+/// library on first launch (verified before publishing, not assumed). See this repo's
+/// README "Content" section for how to add your own book content instead.
+extension SeedData {
     static func seedMicrobiology(modelContext: ModelContext) {
-        // No-op in the public repo -- see the doc comment above.
+        // No-op in the public repo.
     }
 }
