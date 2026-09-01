@@ -17,4 +17,11 @@ enum CobuxDeepLink {
     static func bookURL(bookID: UUID) -> URL {
         URL(string: "cobux://book/\(bookID.uuidString)")!
     }
+
+    /// Journal. `newEntry: true` opens the compose sheet on arrival rather
+    /// than the list -- what the Journal widget's tap uses, so writing is one
+    /// tap from the home screen instead of app → More → Journal → compose.
+    static func journalURL(newEntry: Bool = false) -> URL {
+        URL(string: newEntry ? "cobux://journal/new" : "cobux://journal")!
+    }
 }

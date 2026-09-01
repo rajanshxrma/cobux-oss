@@ -109,6 +109,19 @@ final class StreakTrackerTests: XCTestCase {
         XCTAssertEqual(StreakTracker.pendingMilestone, 0)
     }
 
+    func testClockMovedBackwardIsTreatedAsSameDay() {
+        // `daysAgo: -1` plants `lastActiveDate` one day in the *future* --
+        // simulating a device clock (or timezone data) that moved backward
+        // since the last recorded activity. Before the fix this fell into
+        // the missed-day `default` branch with a negative `daysBetween`,
+        // which always passed the `missedDays <= bank` check and both
+        // inflated `freezeBank` past its cap and regressed `lastActiveDate`
+        // to a date earlier than what was already stored.
+        plantState(daysAgo: -1, streak: 5, freezeBank: 1)
+        XCTAssertEqual(StreakTracker.recordActivityToday(), 5, "a lastActiveDate in the future must not be treated as a multi-day gap")
+        XCTAssertEqual(StreakTracker.freezeBank, 1, "the freeze bank must not be touched, let alone inflated past its cap")
+    }
+
     func testLongestStreakTracksHighWaterMark() {
         plantState(daysAgo: 1, streak: 5)
         StreakTracker.recordActivityToday()

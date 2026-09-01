@@ -7,7 +7,24 @@ import Foundation
 /// prompts to before.
 enum ChatPromptBuilder {
 
+    /// Sentinel thread id for the pinned "My Journal" chat thread -- a fixed
+    /// UUID (never a real `Book.id`, which are all random v4s minted at seed/
+    /// import time) so the existing `selectedBookID`/`ChatMessage.bookID`
+    /// thread plumbing carries the journal thread with zero schema change:
+    /// its history persists and scopes exactly like a book thread's. Must
+    /// never change once shipped -- persisted `ChatMessage.bookID` rows and
+    /// the restored-thread key both point at it.
+    static let journalThreadID = UUID(uuidString: "4A4F5552-4E41-4C00-8000-000000000001")!
+
     enum Assembled {
+        /// The "My Journal" thread -- grounded in the user's own
+        /// `PersonalWritingEntry` rows, not book content, via
+        /// `PromptTemplates.journalGrounded` + `SearchService.buildJournalContext`.
+        /// Uncached like `.symposium`: the relevant-entries block changes with
+        /// every question, so there is no stable prefix worth paying cache
+        /// writes for. Carries no `referencedTitles` -- replies cite entries
+        /// by date inline, and no `<sources>` declaration is requested.
+        case journal(systemPrompt: String)
         /// Symposium mode always uses the full, unsplit library context regardless of any
         /// selected book — "a debate among authors" scoped to one book is degenerate.
         case symposium(systemPrompt: String, referencedTitles: [String])
@@ -51,6 +68,22 @@ enum ChatPromptBuilder {
         personalWritingContextEnabled: Bool = false,
         useRealNamesInLifeExamples: Bool = false
     ) -> Assembled {
+        // Checked before symposium on purpose: symposium is "a debate among
+        // the authors in the library," which has no coherent meaning inside
+        // the journal thread, so the journal always wins while it's the
+        // selected thread. The privacy toggles are NOT consulted here -- they
+        // gate journal excerpts leaking into book answers as asides, whereas
+        // this branch runs only for the thread whose whole purpose is the
+        // journal, gated behind the journal's own Face ID lock in `ChatView`.
+        if selectedBookID == journalThreadID {
+            var systemPrompt = String(
+                format: PromptTemplates.journalGrounded,
+                SearchService.buildJournalContext(query: userMessage, entries: personalWritingEntries)
+            )
+            if isVoice { systemPrompt += spokenStyleCore }
+            return .journal(systemPrompt: systemPrompt)
+        }
+
         if symposiumModeEnabled {
             let (contextString, titles) = SearchService.buildContext(query: userMessage, books: books)
             var systemPrompt = String(format: PromptTemplates.symposium, contextString)

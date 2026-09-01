@@ -20,12 +20,16 @@ enum AutoRestoreService {
     /// Settings, so a deliberate in-app cleanup can't accidentally
     /// re-trigger a restore.
     private static let completedKey = "cobux.autoRestore.completed"
-    /// Set by `AutoBackupService` the moment THIS install writes its own
-    /// first snapshot -- absence of this key is the strongest available
-    /// "this install has never actually run before" signal, since seed
-    /// content alone means row counts can't tell a fresh install apart from
-    /// a real one.
-    private static let lastBackupDateKey = "cobux.autoBackup.lastBackupDate"
+    /// Written once, durably, by `CobuxApp.seedDatabase` the very first time
+    /// THIS install is ever seeded -- true only if the store was genuinely
+    /// empty at that moment. This used to be inferred from the ABSENCE of
+    /// `AutoBackupService`'s own throttle key, on the theory that a key only
+    /// automatic backup ever writes is a good fresh-install proxy -- it
+    /// isn't: that key is equally absent on every EXISTING install's first
+    /// launch of a build that ships automatic backup for the first time
+    /// (this exact cycle), and the two services also race each other
+    /// writing/reading it. This flag is the real signal and can't drift.
+    private static let wasFreshInstallKey = "cobux.install.wasFreshOnFirstSeed"
 
     /// Call from the same seed-aware trigger points `WatchSyncService.sync`/
     /// `resolveLaunchSheets` already use in `ContentView` -- the cold-launch
@@ -38,7 +42,11 @@ enum AutoRestoreService {
     static func restoreIfNeeded(modelContext: ModelContext) async {
         guard !SeedingStatus.shared.isSeeding, !StoreHealthStatus.shared.isDegraded else { return }
         guard !defaults.bool(forKey: completedKey) else { return }
-        guard defaults.object(forKey: lastBackupDateKey) == nil else { return }
+        // `wasFreshInstallKey` is nil only if `seedDatabase` hasn't run even
+        // once yet this launch (shouldn't happen given the `isSeeding` guard
+        // above, but fail closed rather than open if it somehow does) --
+        // `== true` is the only value that means "genuinely fresh."
+        guard defaults.object(forKey: wasFreshInstallKey) as? Bool == true else { return }
 
         // The real guard against restoring over a deliberately-cleared local
         // state: zero personal-writing entries, zero chat messages, and no
@@ -50,8 +58,14 @@ enum AutoRestoreService {
         guard personalWritingCount == 0 else { return }
         let chatCount = (try? modelContext.fetchCount(FetchDescriptor<ChatMessage>())) ?? 0
         guard chatCount == 0 else { return }
+        // Plain `!= nil` + `!=` rather than `($0.personalNote ?? "") != ""` --
+        // this codebase's other `#Predicate` uses (BookCard.swift,
+        // WidgetHighlightPool.swift) all avoid nil-coalescing inside the
+        // macro for the same documented reason: unverified whether `??`
+        // converts cleanly to `NSPredicate` or traps at fetch time. Optional
+        // chaining/comparison (`?.`, `!= nil`) is the proven-safe form here.
         let notedHighlightCount = (try? modelContext.fetchCount(
-            FetchDescriptor<Highlight>(predicate: #Predicate { ($0.personalNote ?? "") != "" })
+            FetchDescriptor<Highlight>(predicate: #Predicate { $0.personalNote != nil && $0.personalNote != "" })
         )) ?? 0
         guard notedHighlightCount == 0 else { return }
 

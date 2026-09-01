@@ -8,12 +8,19 @@ import ImageIO
 /// will ever have; losing it to a Caches purge under disk pressure would be
 /// real, unrecoverable data loss, not a minor inconvenience.
 enum JournalAttachmentStore {
-    private static var directory: URL {
+    // `static let` with a closure initializer runs exactly once per process,
+    // lazily, thread-safely -- same fix already applied to `CoverImageCache`.
+    // This directory is now on the automatic-restore launch path
+    // (`AutoRestoreService.downloadPendingAttachments` calls `fileURL(for:)`
+    // once per pending attachment row), where a `static var` computed
+    // property re-running `createDirectory` -- a real filesystem syscall --
+    // on every single access would mean one syscall per row at launch.
+    private static let directory: URL = {
         let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let dir = base.appendingPathComponent("JournalAttachments", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
-    }
+    }()
 
     private static func localFileURL(for id: UUID) -> URL {
         directory.appendingPathComponent(id.uuidString + ".jpg")

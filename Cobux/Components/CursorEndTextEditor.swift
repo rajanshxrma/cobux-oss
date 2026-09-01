@@ -22,12 +22,23 @@ struct CursorEndTextEditor: UIViewRepresentable {
     var font: UIFont = .preferredFont(forTextStyle: .body)
 
     func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView()
+        let textView = CaretTrackingTextView()
         textView.font = font
         textView.adjustsFontForContentSizeCategory = true
         textView.backgroundColor = .clear
         textView.text = text
         textView.delegate = context.coordinator
+        // Notes-like feel: the text view IS the page. It owns all scrolling
+        // (it must never be nested inside another scroll view -- that nesting
+        // is exactly what made journal typing near the bottom judder), it
+        // bounces even when short, and dragging down over it tucks the
+        // keyboard away interactively, the same gesture Notes has.
+        textView.alwaysBounceVertical = true
+        textView.keyboardDismissMode = .interactive
+        // Editorial margins for a full-bleed page. `lineFragmentPadding` is
+        // 5pt on each side already; this brings the text ~20pt off the edges,
+        // matching the compose screen's other content.
+        textView.textContainerInset = UIEdgeInsets(top: 14, left: 15, bottom: 14, right: 15)
         attemptFocus(textView, coordinator: context.coordinator)
         return textView
     }
@@ -49,7 +60,19 @@ struct CursorEndTextEditor: UIViewRepresentable {
         // position on every keystroke, since typing already round-trips
         // through `textViewDidChange` below.
         if uiView.text != text {
+            // Preserve the caret. Assigning `.text` resets `selectedRange` to
+            // the end of the document, so any external push -- which
+            // `updateUIView` can fire for reasons that have nothing to do with
+            // typing (a re-render while the sheet animates, a parent state
+            // change) -- would silently yank the cursor away from wherever the
+            // user actually was. Clamped, since the new text can be shorter.
+            let caret = uiView.selectedRange
             uiView.text = text
+            let limit = (text as NSString).length
+            uiView.selectedRange = NSRange(
+                location: min(caret.location, limit),
+                length: min(caret.length, max(0, limit - min(caret.location, limit)))
+            )
         }
 
         // `updateUIView` fires repeatedly as SwiftUI's own lifecycle
@@ -83,6 +106,48 @@ struct CursorEndTextEditor: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             parent.text = textView.text
+            // Keep the line you're typing on visible. This used to scroll on
+            // EVERY keystroke from an async hop; each call forced a layout
+            // pass that raced other scrolling machinery, which read as the
+            // reported shake ("when it gets to the bottom of textbox it
+            // shakes and is weird with the iPhone keyboard open").
+            //
+            // Checking first means the common case -- typing on a line that is
+            // already on screen -- does no scrolling and no extra layout at
+            // all, so there is nothing for keyboard avoidance to fight.
+            CursorEndTextEditor.scrollCaretIntoViewIfNeeded(textView)
         }
+    }
+
+    /// Scrolls only when the caret has actually left the visible box --
+    /// shared by the per-keystroke path above and the height-change path in
+    /// `CaretTrackingTextView` below.
+    static func scrollCaretIntoViewIfNeeded(_ textView: UITextView) {
+        guard let selectedRange = textView.selectedTextRange else { return }
+        let caretRect = textView.caretRect(for: selectedRange.end)
+        guard !caretRect.isNull, caretRect.origin.y.isFinite, caretRect.height.isFinite else { return }
+        let visible = textView.bounds.inset(by: textView.adjustedContentInset)
+            .offsetBy(dx: textView.contentOffset.x, dy: textView.contentOffset.y)
+        guard !visible.contains(caretRect) else { return }
+        textView.scrollRangeToVisible(textView.selectedRange)
+    }
+}
+
+/// Keeps the line being written visible when the editor's HEIGHT changes --
+/// which is what happens the moment the keyboard slides up and SwiftUI's
+/// keyboard avoidance shrinks this view's frame. Without this, a caret that
+/// was near the bottom of the screen ends up hidden under the keyboard until
+/// the next keystroke ("sometimes the keyboard hides it"). Guarded to height
+/// changes only: normal scrolling moves `bounds.origin`, not the height, so
+/// this never runs mid-scroll and cannot reintroduce a correction loop.
+private final class CaretTrackingTextView: UITextView {
+    private var lastBoundsHeight: CGFloat = 0
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.height != lastBoundsHeight else { return }
+        lastBoundsHeight = bounds.height
+        guard isFirstResponder else { return }
+        CursorEndTextEditor.scrollCaretIntoViewIfNeeded(self)
     }
 }

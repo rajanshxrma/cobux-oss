@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import WidgetKit
 
 /// The Flow feed — a full-screen, vertically-paging stream of cards from the
 /// user's own library (quotes, chapter lessons, quick self-tests, weak-topic
@@ -96,7 +97,12 @@ struct FlowView: View {
                 .kerning(3)
                 .foregroundStyle(.white.opacity(0.55))
                 .padding(16)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+                // Centered, not top-leading: it's the page's own wordmark, and
+                // the top-left corner also sat directly above each card's
+                // kicker, reading as a second stray label rather than a title.
+                // The filter/close controls keep the trailing corner, so the
+                // center is genuinely free.
+                .frame(maxWidth: .infinity, alignment: .top)
 
             HStack(spacing: 0) {
                 Button {
@@ -122,40 +128,48 @@ struct FlowView: View {
                 .accessibilityLabel("Close Flow")
             }
 
-            // Flow is the front door now (opens on every launch) -- without an
-            // explicit way deeper into the app, it would be a dead end rather
-            // than an entry point. Reuses the same `cobux://chat` self-link
-            // `ContentView.onOpenURL` already routes on the widget's cold-launch
-            // path, instead of inventing a second app-to-app coupling for the
-            // same "go to the Chat tab" action.
-            //
-            // Sized and labeled as a real doorway out of Flow, not a small
-            // utility action: "Open Cobux" names what's on the other side of
-            // the tap (the whole app) rather than just one of its features,
-            // and the accent-tinted capsule (`cobuxAccent`, the one fixed
-            // brand color -- see `CobuxColor`) matches the same pill-button
-            // language the cards' own Go Deeper/Share use, instead of a flat
-            // gray material that read as disconnected from everything else
-            // on screen while the cards' own colors change underneath it.
-            //
-            // `.frame(maxWidth: .infinity, maxHeight: .infinity, alignment:
-            // .bottom)` overrides this ZStack's own `.topTrailing` default for
-            // just this one element -- without it, a plain child sizes to its
-            // own content (the button) and the outer alignment would pin it to
-            // the top-trailing corner instead of bottom-center.
+        }
+        // "Open Cobux" lives in a safeAreaInset, NOT as another bottom-anchored
+        // ZStack sibling. Both it and each card's Go Deeper/Share footer used to
+        // be independently pinned to the bottom, so neither participated in the
+        // other's layout and they simply drew on top of each other -- Go Deeper
+        // truncated to "Go de..." and the like button completely buried, visible
+        // in his TestFlight screenshot. A first attempt at fixing it by hand-
+        // computing clearance (108pt) still failed, because the arithmetic
+        // missed the ~34pt home-indicator safe area the button also sits above.
+        //
+        // safeAreaInset removes the arithmetic entirely: SwiftUI reserves this
+        // button's real measured height at the bottom, and the cards above lay
+        // out inside what's left. They cannot overlap, at any size, on any
+        // device, regardless of Dynamic Type.
+        .safeAreaInset(edge: .bottom) {
             Button {
                 dismiss()
                 openURL(URL(string: "cobux://chat")!)
             } label: {
+                // Sized against Go deeper / Share, which he confirmed are right
+                // for what they do: caption weight, 14x7 padding. This is the
+                // primary action so it must read as bigger, but `.headline` at
+                // 26x16 overshot -- roughly double the secondary buttons, which
+                // is why it went from too small to too big rather than landing.
+                // Subheadline at 20x12 is about 1.5x them: unmistakably primary,
+                // not chunky.
+                //
+                // `.dynamicTypeSize(...(.accessibility1))` is the small-phone
+                // guard he asked about. The capsule sizes to its label, so on a
+                // narrow device at large text settings it would otherwise grow
+                // until it crowded the card; this caps how far the label scales
+                // while still honouring the user's setting up to that point.
                 Label("Open Cobux", systemImage: "message.fill")
-                    .font(.headline)
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 26)
-                    .padding(.vertical, 16)
+                    .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
                     .background(Color.cobuxAccent, in: Capsule())
             }
-            .padding(.bottom, 40)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
         }
         .overlay {
             if let milestone = celebrationCenter.milestone {
@@ -178,6 +192,11 @@ struct FlowView: View {
         }
         .onAppear {
             if items.isEmpty {
+                // BEFORE `appendBatch()`, not after. The batch builds the daily
+                // opener card from the streak, so recording the day afterwards
+                // meant the card was rendered from yesterday's count and
+                // disagreed with More and Quiz by one.
+                StreakTracker.recordActivityToday()
                 appendBatch()
                 // Opening Flow -- now the very first thing a launch shows --
                 // is itself real engagement: seeing a highlight and reflecting
@@ -186,8 +205,17 @@ struct FlowView: View {
                 // quiz/highlight/journal triggers elsewhere -- this removes
                 // the felt PRESSURE to quiz for a streak without taking any
                 // existing path to one away.
-                StreakTracker.recordActivityToday()
             }
+        }
+        // Closing Flow mid-celebration used to leave the milestone pending --
+        // StreakCelebrationCenter.dismiss() only ran from the overlay's own
+        // "Keep Going" tap, so a fresh FlowView built on the next open re-read
+        // the still-set milestone and showed the exact same celebration
+        // again. Leaving Flow now always finalizes an in-progress one; a
+        // no-op when nothing's pending (clearPendingMilestone on an absent
+        // key is a plain removeObject).
+        .onDisappear {
+            celebrationCenter.dismiss()
         }
         // Changing which books Flow draws from mid-session has to re-deal the
         // feed: cards from a just-excluded book are already built and sitting
@@ -195,6 +223,16 @@ struct FlowView: View {
         // broken.
         .onChange(of: sourceSignature) { _, _ in
             redealFeed()
+            // Keep the widget's copy honest -- it runs in its own process and
+            // can't see `UserDefaults.standard`, which is why books switched
+            // off here kept showing up there.
+            BookSourceSharing.publish(excludedBookIDs)
+            WidgetCenter.shared.reloadAllTimelines()
+        }
+        .task {
+            // Seed it once per launch too, so an install that set its filter
+            // before this shipped doesn't wait for the next toggle to sync.
+            BookSourceSharing.publish(excludedBookIDs)
         }
         // `appendBatch`/`computeResonancePairs` both no-op while seeding --
         // retry the instant it ends, or a Flow opened mid-merge would sit on
@@ -383,6 +421,11 @@ struct FlowView: View {
         // race a background merge. The `seedingStatus.isSeeding` onChange
         // above retries this the moment it's safe.
         guard !seedingStatus.isSeeding else { return }
+        // The daily opener is a once-a-DAY greeting. Reading the flag here
+        // (rather than inside the builder) keeps `buildBatch` pure and
+        // deterministic for its tests; `markDailyOpenerShown()` below closes
+        // the loop so a later reopen today deals a feed without it.
+        let showOpener = !StreakTracker.hasShownDailyOpenerToday
         let batch = FlowQueueBuilder.buildBatch(
             books: books,
             batch: nextBatch,
@@ -390,8 +433,13 @@ struct FlowView: View {
             resonancePairs: resonanceReady ? resonancePairs : [],
             excludedBookIDs: excludedBookIDs,
             continuation: &batchContinuation,
-            recentlyShownIDs: FlowRecentlyShownStore.recentIDs()
+            recentlyShownIDs: FlowRecentlyShownStore.recentIDs(),
+            includeDailyOpener: showOpener
         )
+        // Only the first batch can carry the opener, so only that one marks it.
+        if nextBatch == 0 && showOpener && !batch.isEmpty {
+            StreakTracker.markDailyOpenerShown()
+        }
         guard !batch.isEmpty else { return }
         let positioned = batch.enumerated().map { offset, card in
             FeedItem(id: "\(nextBatch)-\(offset)-\(card.id)", card: card)

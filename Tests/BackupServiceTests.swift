@@ -22,11 +22,39 @@ import SwiftData
 @MainActor
 final class BackupServiceTests: XCTestCase {
 
+    /// Widened to match `CobuxSchema.all` in full -- it used to omit
+    /// `JournalAttachment`/`Figure`/`Theme`, which meant the `.sidecar`/
+    /// `attachmentIDs` import branch (the one automatic backup actually
+    /// uses) was never exercised by a single test in this suite. A schema
+    /// that doesn't declare a model type used elsewhere in a fixture would
+    /// trap on insert, not throw -- so this omission wasn't just a coverage
+    /// gap, it was silently steering every test away from that code path.
     private func makeContext() throws -> ModelContext {
-        let schema = Schema([Book.self, Chapter.self, Highlight.self, HighlightMemory.self, QuizQuestion.self, ChatMessage.self, PersonalWritingEntry.self, QuizAttempt.self, QuizAnswerRecord.self])
+        let schema = Schema(CobuxSchema.all)
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: config)
         return ModelContext(container)
+    }
+
+    /// Genuinely persists to a temporary on-disk store and reopens it in a
+    /// fresh `ModelContext` -- unlike `makeContext()`, an unsaved in-memory
+    /// context keeps cascade-deleted objects registered as if nothing
+    /// happened, which is exactly what let `testUndoImportRemovesExactlyWhatWasInserted`
+    /// pass despite the real `model(for:)`/`registeredModel(for:)` divergence
+    /// this suite's own history flagged as "unverifiable without a saved
+    /// store." This closes that gap for real.
+    private func makeSavedContext() throws -> (context: ModelContext, reload: () throws -> ModelContext) {
+        let schema = Schema(CobuxSchema.all)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cobux-backup-test-\(UUID().uuidString).sqlite")
+        let config = ModelConfiguration(schema: schema, url: url)
+        let container = try ModelContainer(for: schema, configurations: config)
+        let context = ModelContext(container)
+        let reload: () throws -> ModelContext = {
+            let reopened = try ModelContainer(for: schema, configurations: config)
+            return ModelContext(reopened)
+        }
+        return (context, reload)
     }
 
     func testQuizQuestionFSRSStateRoundTripsThroughExportAndImport() throws {
@@ -330,6 +358,135 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertEqual(try targetContext.fetch(FetchDescriptor<Book>()).count, 0, "the restored book should be gone")
         XCTAssertEqual(try targetContext.fetch(FetchDescriptor<Highlight>()).count, 0, "cascaded away with its book")
         let remainingEntries = try targetContext.fetch(FetchDescriptor<PersonalWritingEntry>())
+        XCTAssertEqual(remainingEntries.count, 1, "the pre-existing entry must survive an undo of an unrelated import")
+        XCTAssertEqual(remainingEntries.first?.title, "Mine")
+    }
+
+    /// The `.sidecar` branch is what `AutoBackupService` actually uses in
+    /// production (photo bytes sync as separate immutable files, never
+    /// inlined into the JSON) -- and until now it had zero coverage,
+    /// because `makeContext()`'s schema didn't even declare `JournalAttachment`.
+    /// Confirms a sidecar-policy export restores `JournalAttachment` rows
+    /// under the SAME id the DTO carried, which is the one thing
+    /// `AutoRestoreService.downloadPendingAttachments` depends on to find
+    /// the matching file later.
+    func testSidecarAttachmentImportRestoresJournalAttachmentRowsWithMatchingIDs() throws {
+        let sourceContext = try makeContext()
+        let entry = PersonalWritingEntry(source: "journal", title: "Morning pages", text: "Real entry text.")
+        sourceContext.insert(entry)
+        let attachment = JournalAttachment(entry: entry)
+        sourceContext.insert(attachment)
+        entry.attachments.append(attachment)
+        try sourceContext.save()
+        let originalAttachmentID = attachment.id
+
+        let data = try BackupService.exportData(
+            books: [], personalWritingEntries: [entry], attachmentPolicy: .sidecar
+        )
+
+        let targetContext = try makeContext()
+        let result = try BackupService.importData(data, existingBooks: [], modelContext: targetContext)
+
+        XCTAssertEqual(result.personalWritingEntriesImported, 1)
+        let restoredAttachments = try targetContext.fetch(FetchDescriptor<JournalAttachment>())
+        XCTAssertEqual(restoredAttachments.count, 1, "sidecar policy must still create the row, just no inline bytes")
+        XCTAssertEqual(restoredAttachments.first?.id, originalAttachmentID, "AutoRestoreService's resumable download matches sidecar files by this id")
+        XCTAssertEqual(result.insertedIdentifiers.journalAttachments.count, 1)
+    }
+
+    /// Both quadratic paths this session found (`titleToBookID` resolution
+    /// and the per-answer question lookup) were invisible to every existing
+    /// fixture here, all of which top out at one book / one attempt / one
+    /// answer. This exercises multiple books each with their own attempts
+    /// and multiple answers per attempt, and just asserts the restored data
+    /// is still exactly right at that scale -- a regression back to the
+    /// O(n^2) form wouldn't fail this on correctness, but it's the shape of
+    /// fixture that would have caught the actual bugs, and a future
+    /// performance regression here is now visible to anyone reading the test.
+    func testMultiBookMultiAttemptImportStaysCorrectAtScale() throws {
+        let sourceContext = try makeContext()
+        var books: [Book] = []
+        var attempts: [QuizAttempt] = []
+        for bookIndex in 0..<4 {
+            let book = Book(title: "Book \(bookIndex)", author: "Author")
+            sourceContext.insert(book)
+            let chapter = Chapter(title: "Ch 1", summary: "s")
+            chapter.book = book
+            book.chapters.append(chapter)
+            var questions: [QuizQuestion] = []
+            for q in 0..<5 {
+                let question = QuizQuestion(book: book, chapter: chapter, questionType: .recallMCQ, prompt: "Book \(bookIndex) Q\(q)", choices: ["A", "B"], correctAnswerIndex: 0, explanation: "e")
+                sourceContext.insert(question)
+                chapter.quizQuestions.append(question)
+                questions.append(question)
+            }
+            let attempt = QuizAttempt(book: book, scopeDescription: "Ch 1", mode: .practice, startedAt: Date(timeIntervalSince1970: 1_750_000_000 + Double(bookIndex)))
+            sourceContext.insert(attempt)
+            for question in questions {
+                let answer = QuizAnswerRecord(attempt: attempt, question: question)
+                answer.answerText = question.prompt
+                sourceContext.insert(answer)
+                attempt.answers.append(answer)
+            }
+            books.append(book)
+            attempts.append(attempt)
+        }
+        try sourceContext.save()
+
+        let data = try BackupService.exportData(books: books, quizAttempts: attempts)
+        let targetContext = try makeContext()
+        let result = try BackupService.importData(data, existingBooks: [], modelContext: targetContext)
+
+        XCTAssertEqual(result.quizAttemptsImported, 4)
+        let restoredAttempts = try targetContext.fetch(FetchDescriptor<QuizAttempt>())
+        for attempt in restoredAttempts {
+            let bookTitle = try XCTUnwrap(attempt.book?.title)
+            XCTAssertEqual(attempt.answers.count, 5)
+            for answer in attempt.answers {
+                // Each answer's question must resolve against ITS OWN attempt's
+                // book, never a different one -- exactly the class of bug the
+                // per-answer question lookup rewrite guards against.
+                XCTAssertEqual(answer.question?.prompt, answer.answerText)
+                XCTAssertTrue(answer.question?.prompt.hasPrefix(bookTitle) ?? false)
+            }
+        }
+    }
+
+    /// `makeContext()` is in-memory and unsaved, which lets a cascade-deleted
+    /// child stay registered as if nothing happened -- masking exactly the
+    /// divergence this session found between `ModelContext.model(for:)`
+    /// (non-throwing, traps on failure) and `registeredModel(for:)` (the
+    /// actual safe check `undoImport` now uses). This runs the same undo
+    /// against a genuinely saved-and-reopened SQLite store instead.
+    func testUndoImportRemovesExactlyWhatWasInsertedOnASavedStore() throws {
+        let (sourceContext, _) = try makeSavedContext()
+        let book = Book(title: "Meditations", author: "Marcus Aurelius")
+        sourceContext.insert(book)
+        let highlight = Highlight(text: "You have power over your mind.")
+        highlight.book = book
+        book.highlights.append(highlight)
+        try sourceContext.save()
+        let data = try BackupService.exportData(books: [book])
+
+        let (targetContext, reload) = try makeSavedContext()
+        let survivor = PersonalWritingEntry(source: "journal", title: "Mine", text: "Untouched.")
+        targetContext.insert(survivor)
+        try targetContext.save()
+
+        let result = try BackupService.importData(data, existingBooks: [], modelContext: targetContext)
+        try targetContext.save()
+        XCTAssertEqual(result.booksImported, 1)
+
+        // Reopen against the same on-disk store -- a fresh context, exactly
+        // like undo happening on a later launch, not the same in-memory
+        // session the import just ran in.
+        let reopenedContext = try reload()
+        BackupService.undoImport(result.insertedIdentifiers, modelContext: reopenedContext)
+        try reopenedContext.save()
+
+        XCTAssertEqual(try reopenedContext.fetch(FetchDescriptor<Book>()).count, 0, "the restored book should be gone")
+        XCTAssertEqual(try reopenedContext.fetch(FetchDescriptor<Highlight>()).count, 0, "cascaded away with its book")
+        let remainingEntries = try reopenedContext.fetch(FetchDescriptor<PersonalWritingEntry>())
         XCTAssertEqual(remainingEntries.count, 1, "the pre-existing entry must survive an undo of an unrelated import")
         XCTAssertEqual(remainingEntries.first?.title, "Mine")
     }

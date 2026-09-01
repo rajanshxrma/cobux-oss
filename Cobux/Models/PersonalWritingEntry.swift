@@ -1,7 +1,7 @@
 import SwiftData
 import Foundation
 
-/// Rajan's own personal writing (Apple Notes "21writing"/"Journal" folders,
+/// Rajan's own personal writing (Apple Notes the user's own writing folders,
 /// plus reflective notes from his general Notes), imported once via
 /// `PersonalWritingImportService` from a JSON export produced outside the
 /// app. Lets chat draw on his own past reflections the same way it already
@@ -17,8 +17,8 @@ final class PersonalWritingEntry {
     /// moment more than one gets migrated in under an old schema version.
     /// See `CobuxApp.repairDuplicateIDs`, which this type is also covered by.
     var id: UUID = UUID()
-    /// Which Apple Notes folder this came from — "21writing", "Journal", or
-    /// "Notes(reflective)" in the real export, but stored as a plain string
+    /// Which Apple Notes folder this came from — a folder name, or
+    /// "a Notes folder" in the real export, but stored as a plain string
     /// (not an enum) so a future export with a differently-named folder never
     /// fails to import.
     var source: String
@@ -31,6 +31,14 @@ final class PersonalWritingEntry {
     /// error.
     var modifiedDate: Date?
     var dateImported: Date
+    /// Accumulated seconds the compose sheet was open across every writing
+    /// session that saved into this entry -- what the detail view's stats bar
+    /// reads as "writing time," mirroring Apple Journal's own per-entry
+    /// stats. Optional (not `= 0`) so existing rows migrate untouched and an
+    /// imported entry -- whose writing time is genuinely unknown -- shows no
+    /// number rather than a fake zero. Lightweight migration only: adding an
+    /// optional attribute is the one schema change SwiftData handles in place.
+    var writingSeconds: Int?
     var embeddingData: Data?
     /// Photos attached to this entry -- see `JournalAttachment`'s own doc
     /// comment for why the image bytes live on disk (`JournalAttachmentStore`)

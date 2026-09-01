@@ -1,6 +1,9 @@
 import SwiftUI
 import SwiftData
 import WidgetKit
+#if canImport(UIKit)
+import UIKit
+#endif
 import CobuxCore
 
 /// Renders one Flow card, full-screen. Every card type shares the same bones
@@ -47,32 +50,51 @@ private struct FlowCardScaffold<Header: View, Content: View, Footer: View>: View
     private var accent: Color { Color(hex: accentHex) }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // `header` sits right under the kicker, both pinned by the same
-            // top padding -- literally the top of the card, not just "above
-            // the quote" inside the vertically-centered content block below.
-            // Direct feedback on the first placement: it read as sitting
-            // right above the highlight rather than at the top of the screen.
-            VStack(spacing: 6) {
-                Label(kicker, systemImage: kickerIcon)
-                    .font(.caption.weight(.semibold))
-                    .kerning(1.2)
-                    .textCase(.uppercase)
-                    .foregroundStyle(accent)
-                header
-            }
-            .padding(.top, 68)
-
-            Spacer()
-            content
-                .padding(.horizontal, 28)
-                .scrollTransition(.interactive) { view, phase in
-                    view.offset(y: phase.value * -40)
+        // Three independently anchored layers rather than one VStack.
+        //
+        // As a VStack the header's own 68pt top padding sat *inside* the same
+        // stack the two Spacers were balancing, so "Spacer, content, Spacer"
+        // never actually centered anything -- it put the quote a few percent
+        // BELOW true center, which is exactly what he was seeing. Trying to
+        // correct that by adding a fixed spacer underneath just trades one
+        // magic number for another, and the right value would still depend on
+        // how tall this particular card's header and footer happened to be.
+        //
+        // Anchoring each layer separately removes the coupling: the quote is
+        // placed at a stated fraction of the card, and the header and footer
+        // can be any height without moving it.
+        GeometryReader { geo in
+            ZStack(alignment: .top) {
+                VStack(spacing: 6) {
+                    Label(kicker, systemImage: kickerIcon)
+                        .font(.caption.weight(.semibold))
+                        .kerning(1.2)
+                        .textCase(.uppercase)
+                        .foregroundStyle(accent)
+                    header
                 }
-            Spacer()
+                .padding(.top, 68)
+                .frame(maxWidth: .infinity, alignment: .top)
 
-            footer
-                .padding(.bottom, 48)
+                // 0.455, not 0.5: the eye reads the true midpoint as sitting
+                // slightly low, which is why macOS alerts and well-set title
+                // pages are nudged up rather than centered. His words: "the
+                // human eye reads a little over the middle."
+                content
+                    .padding(.horizontal, 28)
+                    .scrollTransition(.interactive) { view, phase in
+                        view.offset(y: phase.value * -40)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .position(x: geo.size.width / 2, y: geo.size.height * 0.455)
+
+                footer
+                    // Clearance is no longer this view's problem: "Open Cobux"
+                    // is a safeAreaInset on FlowView now, so the space it needs
+                    // is already reserved before this lays out at all.
+                    .padding(.bottom, 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .scrollTransition(.interactive) { view, phase in
@@ -83,9 +105,11 @@ private struct FlowCardScaffold<Header: View, Content: View, Footer: View>: View
     }
 }
 
-/// Convenience initializer for every card type that has no top header --
-/// all but `HighlightFlowCard`, which is the only one with a book/chapter
-/// to name up there.
+/// Convenience initializer for the card types with nothing to name at the top.
+/// The quote, key-lesson and quick-check cards all carry a book (and sometimes a
+/// chapter) in their header instead -- this used to say the quote card was the only
+/// one, which is exactly why the other two kept printing it at the bottom long after
+/// he asked for it to move up.
 extension FlowCardScaffold where Header == EmptyView {
     init(
         accentHex: String,
@@ -101,7 +125,40 @@ extension FlowCardScaffold where Header == EmptyView {
 private struct HighlightFlowCard: View {
     let highlight: Highlight
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.openURL) private var openURL
     @State private var showingContext = false
+    /// Drives the double-tap heart burst. Instagram/TikTok's whole trick is
+    /// that the gesture is invisible until you use it and then unmistakably
+    /// confirms itself -- a burst that overshoots and fades, never a state the
+    /// user has to dismiss.
+    @State private var burstScale: CGFloat = 0.2
+    @State private var burstOpacity: Double = 0
+
+    /// Double-tap anywhere on the card. Deliberately LIKE-only, never a
+    /// toggle: on Instagram a double-tap can only ever like, because the
+    /// gesture is imprecise and accidentally un-liking something you meant to
+    /// keep is the one outcome that would make people distrust it. Unliking
+    /// stays deliberate -- the heart button, or swipe in More > Saved > Liked.
+    private func handleDoubleTap() {
+        let alreadyLiked = highlight.isLiked
+        highlight.isLiked = true
+        // Burst even when it was already liked: the gesture should always
+        // acknowledge itself, or a double-tap on something you liked
+        // yesterday reads as broken.
+        burstScale = 0.2
+        burstOpacity = 0
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.55)) {
+            burstScale = 1.0
+            burstOpacity = 1
+        }
+        withAnimation(.easeOut(duration: 0.45).delay(0.28)) {
+            burstOpacity = 0
+            burstScale = 1.35
+        }
+        #if canImport(UIKit)
+        UIImpactFeedbackGenerator(style: alreadyLiked ? .light : .medium).impactOccurred()
+        #endif
+    }
 
     // `CobuxTypography.display` takes a raw point size -- it's built for the
     // fixed-size COBUX wordmark (ChatView's nav title), the one place a size
@@ -157,8 +214,20 @@ private struct HighlightFlowCard: View {
             // the same reasoning as that first move: the book/chapter is
             // what orients a quote seen out of context.
             VStack(spacing: 2) {
-                Text(highlight.book?.title ?? "Unknown")
-                    .font(.subheadline.weight(.medium))
+                HStack(spacing: 6) {
+                    Text(highlight.book?.title ?? "Unknown")
+                        .font(.subheadline.weight(.medium))
+                    // Liked state still needs to be *visible* now that the button is gone,
+                    // otherwise double-tap is a gesture with no feedback once the burst
+                    // animation ends. Small and at the top, away from the footer he asked
+                    // to keep clear.
+                    if highlight.isLiked {
+                        Image(systemName: "heart.fill")
+                            .font(.caption2)
+                            .foregroundStyle(Color.cobuxWarning)
+                            .accessibilityLabel("Liked")
+                    }
+                }
                 if monthsAgo >= 3 {
                     Text("Saved \(monthsAgo) month\(monthsAgo == 1 ? "" : "s") ago")
                         .font(.caption)
@@ -220,6 +289,33 @@ private struct HighlightFlowCard: View {
                     }
                     .buttonStyle(.plain)
 
+                    // Take THIS highlight into chat -- his ask verbatim:
+                    // "there still should be an option from flow so that a
+                    // highlight a user can go in the chat, taking that
+                    // highlight, the way we have the things set up in the iOS
+                    // widget where it essentially does the same thing." So it
+                    // literally IS the widget's mechanism: the same
+                    // `cobux://book/<id>/highlight/<id>` deep link, opened on
+                    // ourselves -- `ContentView.onOpenURL` routes it into the
+                    // book's chat thread with the quote pre-filled, identical
+                    // to a widget tap, with zero new plumbing to drift apart.
+                    // An Unsorted highlight (no book) still gets to chat, just
+                    // without the book scope, same degradation Share makes.
+                    Button {
+                        if let book = highlight.book {
+                            openURL(CobuxDeepLink.highlightURL(bookID: book.id, highlightID: highlight.id))
+                        } else {
+                            openURL(URL(string: "cobux://chat")!)
+                        }
+                    } label: {
+                        Label("Chat", systemImage: "bubble.left.and.text.bubble.right")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(Color(hex: accentHex).opacity(0.15), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+
                     Group {
                         if let book = highlight.book {
                             // Backend-free by design: shares the same
@@ -228,12 +324,24 @@ private struct HighlightFlowCard: View {
                             // recipient has Cobux, it opens straight to this
                             // highlight; if not, the quote text alongside
                             // the link still reads fine on its own.
+                            // One tap to keep a highlight while scrolling --
+                            // the only interaction light enough to actually
+                            // happen mid-feed. Collected under More > Liked.
                             ShareLink(
                                 item: CobuxDeepLink.highlightURL(bookID: book.id, highlightID: highlight.id),
                                 message: Text("\u{201C}\(highlight.text)\u{201D} — \(book.title), via Cobux")
                             ) {
                                 Label("Share", systemImage: "square.and.arrow.up")
                             }
+
+                            // No Like button here. Reordering it rightmost was a workaround
+                            // for a control he never wanted at the bottom: "i dont like the
+                            // like to down at bottom in the first place." That statement is
+                            // unconditional, where the ordering request was conditional on
+                            // the button existing at all. Liking survives as double-tap
+                            // (with the heart burst) -- Instagram's gesture without
+                            // Instagram's right-hand rail, which he ruled out for a reading
+                            // app. Footer is now two quiet capsules under one prominent pill.
                         } else {
                             ShareLink(item: "\u{201C}\(highlight.text)\u{201D} — via Cobux") {
                                 Label("Share", systemImage: "square.and.arrow.up")
@@ -246,6 +354,22 @@ private struct HighlightFlowCard: View {
                     .background(Color(hex: accentHex).opacity(0.15), in: Capsule())
                 }
             }
+        }
+        // Double-tap to like, the gesture people already have muscle memory
+        // for. Attached here (outside the scaffold) so the whole card is the
+        // target, and `count: 2` before any single-tap handler so it can't be
+        // swallowed. Paging still works: a vertical drag is never a tap.
+        .onTapGesture(count: 2) { handleDoubleTap() }
+        .overlay {
+            // The burst itself -- non-interactive so it can never eat a tap or
+            // block a swipe mid-animation.
+            Image(systemName: "heart.fill")
+                .font(.system(size: 96))
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.25), radius: 12)
+                .scaleEffect(burstScale)
+                .opacity(burstOpacity)
+                .allowsHitTesting(false)
         }
         .sheet(isPresented: $showingContext) {
             FlowContextSheet(highlight: highlight)
@@ -366,6 +490,7 @@ private struct FlowContextSheet: View {
 private struct KeyLessonFlowCard: View {
     let chapter: Chapter
     let lessonIndex: Int
+    @Environment(\.openURL) private var openURL
 
     private var lesson: String {
         guard chapter.keyLessons.indices.contains(lessonIndex) else { return "" }
@@ -378,17 +503,56 @@ private struct KeyLessonFlowCard: View {
             kicker: "Key lesson",
             kickerIcon: "lightbulb.fill"
         ) {
-            Text(lesson)
-                .font(.title3.weight(.medium))
-                .multilineTextAlignment(.center)
-                .minimumScaleFactor(0.6)
-        } footer: {
+            // Same move the quote card already got: the book and chapter orient a
+            // card seen out of context, so they belong at the top where the eye
+            // starts, not under the content. The scaffold's own doc comment used to
+            // claim the quote card was "the only one with a book/chapter to name up
+            // there", which is why these two were left behind.
             VStack(spacing: 2) {
                 Text(chapter.book?.title ?? "Unknown")
                     .font(.subheadline.weight(.medium))
                 Text(chapter.title)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+        } content: {
+            Text(lesson)
+                .font(.title3.weight(.medium))
+                .multilineTextAlignment(.center)
+                .minimumScaleFactor(0.6)
+        } footer: {
+            // This card type had NO actions at all -- its footer was literally
+            // `EmptyView()`. So part of "go deeper and share disappear on some
+            // highlights" was never the nil-book bug: a whole card type simply
+            // never had them, and there was no way to act on a key lesson.
+            HStack(spacing: 10) {
+                // Chat rather than Go deeper: `FlowContextSheet` is built around
+                // a Highlight (its siblings, its chapter position) and a key
+                // lesson has none of that. Taking the lesson into the book's own
+                // thread is the useful move anyway -- a lesson is exactly the
+                // kind of thing worth arguing with.
+                Button {
+                    if let book = chapter.book {
+                        openURL(CobuxDeepLink.bookURL(bookID: book.id))
+                    } else {
+                        openURL(URL(string: "cobux://chat")!)
+                    }
+                } label: {
+                    Label("Chat", systemImage: "bubble.left.and.text.bubble.right")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(Color(hex: chapter.book?.coverColorHex ?? "#6366F1").opacity(0.15), in: Capsule())
+                }
+                .buttonStyle(.plain)
+
+                ShareLink(item: "\(lesson)\n\n— \(chapter.book?.title ?? "Cobux"), \(chapter.title)") {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(Color(hex: chapter.book?.coverColorHex ?? "#6366F1").opacity(0.15), in: Capsule())
+                }
             }
         }
     }
@@ -449,6 +613,10 @@ private struct ClozeTeaserFlowCard: View {
             kicker: isSlipping ? "Slipping away" : "Quick check",
             kickerIcon: isSlipping ? "hourglass" : "brain.head.profile"
         ) {
+            // Moved up from the footer, same as the quote and key-lesson cards.
+            Text(question.book?.title ?? "Unknown")
+                .font(.subheadline.weight(.medium))
+        } content: {
             VStack(spacing: 20) {
                 Text(question.prompt)
                     .font(.title3.weight(.medium))
@@ -513,9 +681,6 @@ private struct ClozeTeaserFlowCard: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Text(question.book?.title ?? "Unknown")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
             .sensoryFeedback(.success, trigger: graded)
         }
@@ -586,6 +751,9 @@ private struct WeakTopicFlowCard: View {
 private struct DailyOpenerFlowCard: View {
     let streak: Int
     let dueCount: Int
+    /// Drives the flame's entrance animation (see the `.onAppear` below).
+    @State private var flameScale: CGFloat = 0.4
+    @State private var flameGlow: Double = 0
 
     var body: some View {
         FlowCardScaffold(
@@ -595,9 +763,33 @@ private struct DailyOpenerFlowCard: View {
         ) {
             VStack(spacing: 16) {
                 if streak > 0 {
-                    Label("\(streak)-day streak", systemImage: "flame.fill")
-                        .font(.title.bold())
-                        .foregroundStyle(Color.cobuxWarning)
+                    Label {
+                        Text("\(streak)-day streak")
+                    } icon: {
+                        // Duolingo-style: the flame should feel alive the
+                        // moment the card lands, not sit as static chrome.
+                        // `.symbolEffect(.pulse)` alone was far too subtle to
+                        // read as an animation at all (Rajan: "I don't see an
+                        // animation"). This is a real entrance -- the flame
+                        // scales up and settles on a spring, with a warm glow
+                        // behind it, then keeps a slow ambient pulse.
+                        Image(systemName: "flame.fill")
+                            .scaleEffect(flameScale)
+                            .shadow(color: Color.cobuxWarning.opacity(flameGlow), radius: 14)
+                            .symbolEffect(.pulse)
+                    }
+                    .font(.title.bold())
+                    .foregroundStyle(Color.cobuxWarning)
+                    .onAppear {
+                        flameScale = 0.4
+                        flameGlow = 0
+                        withAnimation(.spring(response: 0.55, dampingFraction: 0.5)) {
+                            flameScale = 1.0
+                        }
+                        withAnimation(.easeOut(duration: 0.8)) {
+                            flameGlow = 0.85
+                        }
+                    }
                 } else {
                     Text("A fresh start")
                         .font(.title.bold())
@@ -679,6 +871,7 @@ private struct SessionRecapFlowCard: View {
 private struct ResonanceFlowCard: View {
     let first: Highlight
     let second: Highlight
+    @Environment(\.openURL) private var openURL
 
     private let accentHex = "#EAB308"
 
@@ -739,6 +932,18 @@ private struct ResonanceFlowCard: View {
                     contextHighlight = highlight
                 } label: {
                     Image(systemName: "chevron.up.circle")
+                }
+                // Same chat route `HighlightFlowCard`'s footer capsule takes
+                // (the widget's own deep link), in this card's compact
+                // icon-only voice.
+                Button {
+                    if let book = highlight.book {
+                        openURL(CobuxDeepLink.highlightURL(bookID: book.id, highlightID: highlight.id))
+                    } else {
+                        openURL(URL(string: "cobux://chat")!)
+                    }
+                } label: {
+                    Image(systemName: "bubble.left.circle")
                 }
                 if let book = highlight.book {
                     ShareLink(

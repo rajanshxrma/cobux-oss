@@ -15,7 +15,7 @@ enum BuildInfo {
         var components = DateComponents()
         components.year = 2026
         components.month = 8
-        components.day = 20
+        components.day = 25
         return Calendar.current.date(from: components) ?? .now
     }()
 
@@ -30,6 +30,99 @@ enum BuildInfo {
     /// `uploadDate`: add one entry here as part of shipping each new build,
     /// so testers can actually see what changed instead of guessing.
     static let changelog: [ChangelogEntry] = [
+        ChangelogEntry(
+            version: "2.5.21",
+            build: "34",
+            date: "Aug 25, 2026",
+            changes: [
+                // Deliberately generic. The original named the archive's size and
+                // its exact sources, and What's New is shown to EVERY tester -- so it
+                // described Rajan's private writing to Utkarsh and Gulab. The entries
+                // themselves never leave his Apple ID, but a changelog does, and a
+                // description of someone's journal is still information about it.
+                "Your writing archive now arrives on its own -- dated and in order, with no file picker to hunt down, and it keeps itself up to date"
+            ]
+        ),
+        ChangelogEntry(
+            version: "2.5.20",
+            build: "33",
+            date: "Aug 24, 2026",
+            changes: [
+                "Fixed the \"Open Cobux\" button sitting on top of Go Deeper and Share in Flow -- they were overlapping outright",
+                "New: double-tap any highlight in Flow to like it, with the heart burst and haptic you would expect. Double-tap only ever likes, never un-likes, so a stray tap can't lose something you wanted to keep",
+                "Fixed the Journal text box: the cursor could jump away mid-sentence, and once an entry got long the line you were writing scrolled out of view",
+                "New: the Journal tab now has a month calendar with a dot on every day you wrote. Swipe it to look back through previous months"
+            ]
+        ),
+        ChangelogEntry(
+            version: "2.5.19",
+            build: "32",
+            date: "Aug 24, 2026",
+            changes: [
+                "Your streak is back. It didn't lapse because you missed days -- the app was crashing on launch, so you couldn't open it. Cobux now forgives a streak gap it can prove it caused",
+                "Flow opens immediately instead of making you wait -- it was queued behind iCloud syncing that could take several seconds",
+                "New: Like any highlight in Flow, and find them all under More > Saved > Liked",
+                "Widget highlights no longer get cut off mid-sentence -- long quotes now scale to fit",
+                "The widget only shows books you have switched on. Turned-off books were still appearing there",
+                "Tapping a highlight in the widget goes to that highlight instead of opening Flow over it",
+                "Widget share button moved to the top-right, out of the way of the quote mark",
+                "New: Extended thinking toggle in Settings (off by default) -- keeps your API costs down, turn it on for genuinely hard questions"
+            ]
+        ),
+        ChangelogEntry(
+            version: "2.5.18",
+            build: "31",
+            date: "Aug 23, 2026",
+            changes: [
+                "New Journal widget -- put it on your home screen and one tap drops you straight into writing today's entry, with your streak right there. No more app, More, Journal, compose",
+                "The streak card in Flow now greets you once a day instead of every single time you reopen Flow, and the flame springs in with a glow",
+                "Spoken Quiz finally uses the voice you picked in Settings -- it had been ignoring it and falling back to the old robotic one",
+                "FLOW is centered at the top of the feed",
+                "New: when you write a journal entry, Cobux can now show your mindful minutes and last night's sleep from Apple Health right beside it -- so your writing sits next to how your body actually was. Read-only, stays on your device, and it asks first"
+            ]
+        ),
+        ChangelogEntry(
+            version: "2.5.17",
+            build: "30",
+            date: "Aug 21, 2026",
+            changes: [
+                "Covers for all 7 newest books -- Acres of Diamonds, The Art of Money Getting, The Game of Life, A Message to Garcia, Pushing to the Front, The Science of Getting Rich, and Self-Help all shipped with no thumbnail. A test now fails the build if any book ever ships cover-less again",
+                "The streak card in Flow now greets you once a DAY, not every single time you reopen Flow",
+                "The streak flame actually animates now -- springs in with a warm glow instead of sitting still",
+                "Spoken Quiz now uses your chosen voice from Settings. It was ignoring it and falling back to the old robotic system voice, while Voice Mode used the good one",
+                "The FLOW label at the top of the feed is centered",
+                "Everything from 2.5.13-2.5.16 that never actually reached you: the book title at the top of Flow cards, the bigger \"Open Cobux\" button, automatic iCloud backup and restore, the redesigned Journal, and the widget's button moved to the right side"
+            ]
+        ),
+        ChangelogEntry(
+            version: "2.5.16",
+            build: "29",
+            date: "Aug 21, 2026",
+            changes: [
+                "THE actual launch-crash fix, confirmed from your real crash logs this time: adding iCloud file storage in a recent build silently switched the database into a CloudKit sync mode it was never built for, killing the app a tenth of a second after launch -- on every build since. CloudKit mirroring is now explicitly off",
+                "If the database ever fails to open again, the app now records exactly why instead of dying silently"
+            ]
+        ),
+        ChangelogEntry(
+            version: "2.5.15",
+            build: "28",
+            date: "Aug 21, 2026",
+            changes: [
+                "Fixed a real launch crash: the automatic journal iCloud sync was accidentally touching your library from the wrong thread on every cold launch, which could crash the app before it ever opened -- found and fixed after real-device testing surfaced it",
+                "Closed two related races around first-launch setup that could let background syncing collide with your library while it was still being prepared",
+                "Fixed the widget's fresh-data button to actually be on the right side, easier to reach one-handed"
+            ]
+        ),
+        ChangelogEntry(
+            version: "2.5.14",
+            build: "27",
+            date: "Aug 21, 2026",
+            changes: [
+                "Fixed the streak celebration popping up again if you closed Flow while it was showing and came back later -- it now stays settled",
+                "The streak flame now has a subtle pulse instead of sitting static",
+                "The journal's \"continue entry\" button now has its own icon and label instead of looking identical to starting a brand-new entry"
+            ]
+        ),
         ChangelogEntry(
             version: "2.5.13",
             build: "26",

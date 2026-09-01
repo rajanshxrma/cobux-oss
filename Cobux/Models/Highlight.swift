@@ -9,6 +9,16 @@ final class Highlight {
     var page: Int?
     var personalNote: String?
     var tags: [String]
+    /// Liked from Flow -- the lightweight "keep this one" gesture, surfaced as
+    /// its own section under More. Distinct from `isReminder` (a legacy
+    /// notification flag) and from `personalNote` (which requires actually
+    /// writing something): liking is one tap while reading, which is the only
+    /// interaction cheap enough to actually happen mid-scroll.
+    ///
+    /// Optional with a default so SwiftData's lightweight migration adds it to
+    /// every existing row without a migration plan -- the same shape every
+    /// other additive field in this schema uses.
+    var isLiked: Bool = false
     var isReminder: Bool
     var dateAdded: Date
     var embeddingData: Data?

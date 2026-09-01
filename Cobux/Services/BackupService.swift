@@ -120,6 +120,10 @@ enum BackupService {
         var text: String
         var modifiedDate: Date?
         var dateImported: Date
+        /// Lifetime compose-session seconds (`PersonalWritingEntry.writingSeconds`)
+        /// -- optional at every layer so backups from before the field existed
+        /// decode cleanly, same convention as `attachments` below.
+        var writingSeconds: Int?
         var attachments: [Data] = []
         var attachmentIDs: [String] = []
 
@@ -130,12 +134,13 @@ enum BackupService {
         /// `BackupDocument.init(from:)` above already establishes at the
         /// top level, just needed here too since this type is otherwise
         /// pure `Codable` synthesis with no forwarding compatibility.
-        init(source: String, title: String, text: String, modifiedDate: Date?, dateImported: Date, attachments: [Data] = [], attachmentIDs: [String] = []) {
+        init(source: String, title: String, text: String, modifiedDate: Date?, dateImported: Date, writingSeconds: Int? = nil, attachments: [Data] = [], attachmentIDs: [String] = []) {
             self.source = source
             self.title = title
             self.text = text
             self.modifiedDate = modifiedDate
             self.dateImported = dateImported
+            self.writingSeconds = writingSeconds
             self.attachments = attachments
             self.attachmentIDs = attachmentIDs
         }
@@ -147,6 +152,7 @@ enum BackupService {
             text = try container.decode(String.self, forKey: .text)
             modifiedDate = try container.decodeIfPresent(Date.self, forKey: .modifiedDate)
             dateImported = try container.decode(Date.self, forKey: .dateImported)
+            writingSeconds = try container.decodeIfPresent(Int.self, forKey: .writingSeconds)
             attachments = try container.decodeIfPresent([Data].self, forKey: .attachments) ?? []
             attachmentIDs = try container.decodeIfPresent([String].self, forKey: .attachmentIDs) ?? []
         }
@@ -358,7 +364,7 @@ enum BackupService {
         switch policy {
         case .inline:
             let attachmentData = entry.attachments.compactMap { JournalAttachmentStore.data(for: $0.id) }
-            return PersonalWritingEntryDTO(source: entry.source, title: entry.title, text: entry.text, modifiedDate: entry.modifiedDate, dateImported: entry.dateImported, attachments: attachmentData)
+            return PersonalWritingEntryDTO(source: entry.source, title: entry.title, text: entry.text, modifiedDate: entry.modifiedDate, dateImported: entry.dateImported, writingSeconds: entry.writingSeconds, attachments: attachmentData)
         case .sidecar:
             let ids = entry.attachments.map { $0.id.uuidString }
             return PersonalWritingEntryDTO(source: entry.source, title: entry.title, text: entry.text, modifiedDate: entry.modifiedDate, dateImported: entry.dateImported, attachmentIDs: ids)
@@ -680,12 +686,17 @@ enum BackupService {
 
         // Chat messages restore against whatever book now exists in the store --
         // either one that already existed, or one just imported above.
+        // `booksByLowercasedTitle` (built in the loop above) already maps
+        // every touched title straight to its `Book` -- the old version here
+        // re-derived the same answer by scanning ALL of `newHighlightsByKey`
+        // per book, an O(books x highlights) relationship-faulting search
+        // for something already sitting in a dictionary one line away.
         var titleToBookID: [String: UUID] = [:]
         for book in existingBooks { titleToBookID[book.title.lowercased()] = book.id }
         for bookDTO in document.books {
             let lowerTitle = bookDTO.title.lowercased()
-            if newBookTitlesByLowercased[lowerTitle] != nil, let inserted = newHighlightsByKey.values.first(where: { $0.book?.title.lowercased() == lowerTitle })?.book {
-                titleToBookID[lowerTitle] = inserted.id
+            if let book = booksByLowercasedTitle[lowerTitle] {
+                titleToBookID[lowerTitle] = book.id
             }
         }
 
@@ -718,6 +729,7 @@ enum BackupService {
             guard !existingPersonalWritingKeys.contains(key) else { continue }
             existingPersonalWritingKeys.insert(key)
             let entry = PersonalWritingEntry(source: entryDTO.source, title: entryDTO.title, text: entryDTO.text, modifiedDate: entryDTO.modifiedDate, dateImported: entryDTO.dateImported)
+            entry.writingSeconds = entryDTO.writingSeconds
             modelContext.insert(entry)
             inserted.personalWritingEntries.append(entry.persistentModelID)
             if !entryDTO.attachments.isEmpty {
@@ -785,6 +797,18 @@ enum BackupService {
             modelContext.insert(attempt)
             inserted.quizAttempts.append(attempt.persistentModelID)
 
+            // Built ONCE per attempt, not per answer -- the old version
+            // rebuilt this book's entire flattened question list (faulting
+            // every chapter relationship) inside the answers loop below, an
+            // O(answers x questions) scan for what a single dictionary
+            // lookup answers. On a real quiz history against a real
+            // question bank this was a genuine main-thread hang/jetsam risk
+            // at restore time, invisible to a test suite whose fixtures
+            // never go past one attempt with one answer.
+            let questionsByPrompt = Dictionary(
+                (book?.chapters.flatMap(\.quizQuestions) ?? []).map { ($0.prompt, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
             for answerDTO in attemptDTO.answers {
                 // `book`, the attempt's OWN resolved book -- an earlier
                 // version of this line accidentally reached for
@@ -793,11 +817,7 @@ enum BackupService {
                 // which would have resolved every restored answer's question
                 // against whichever book happened to be first in that
                 // dictionary. Caught in review before ever shipping.
-                let question = answerDTO.questionPrompt.flatMap { prompt in
-                    book?.chapters
-                        .flatMap(\.quizQuestions)
-                        .first { $0.prompt == prompt }
-                }
+                let question = answerDTO.questionPrompt.flatMap { questionsByPrompt[$0] }
                 let record = QuizAnswerRecord(attempt: attempt, question: question)
                 record.selectedAnswerIndex = answerDTO.selectedAnswerIndex
                 record.isCorrect = answerDTO.isCorrect
@@ -828,31 +848,40 @@ enum BackupService {
     /// Precise counterpart to `importData` -- deletes exactly the objects one
     /// import call inserted, nothing else. Deleting a tracked `Book` first
     /// cascades away its own tracked chapters/highlights/questions/memories,
-    /// so re-deleting those explicitly afterward is a harmless no-op (`model(for:)`
-    /// on an already-deleted identifier throws, caught and skipped) rather
-    /// than a double-delete crash.
+    /// so re-deleting those explicitly afterward must be a safe no-op, not a
+    /// double-delete crash.
+    ///
+    /// `ModelContext.model(for:)` is NOT what makes that safe -- its real SDK
+    /// signature is non-throwing and non-optional (`-> any PersistentModel`),
+    /// so a `try?`/`guard` around it is a silent no-op and any failure inside
+    /// it (e.g. resolving an identifier whose row a cascade already removed)
+    /// is an uncatchable trap, not a thrown error the old doc comment here
+    /// claimed. `ModelContext.registeredModel<T>(for:) -> T?` is the actual
+    /// safe check: it only looks at what's already registered in this
+    /// context's memory (never faults the store), and genuinely returns
+    /// `nil` -- no trap -- for an identifier that's no longer there.
     static func undoImport(_ identifiers: InsertedIdentifiers, modelContext: ModelContext) {
-        func delete(_ ids: [PersistentIdentifier]) {
+        func delete<T: PersistentModel>(_ ids: [PersistentIdentifier], as type: T.Type) {
             for id in ids {
-                guard let model = try? modelContext.model(for: id) else { continue }
+                guard let model: T = modelContext.registeredModel(for: id) else { continue }
                 modelContext.delete(model)
             }
         }
-        delete(identifiers.books)
-        delete(identifiers.chapters)
-        delete(identifiers.highlights)
-        delete(identifiers.quizQuestions)
-        delete(identifiers.highlightMemories)
-        delete(identifiers.chatMessages)
+        delete(identifiers.books, as: Book.self)
+        delete(identifiers.chapters, as: Chapter.self)
+        delete(identifiers.highlights, as: Highlight.self)
+        delete(identifiers.quizQuestions, as: QuizQuestion.self)
+        delete(identifiers.highlightMemories, as: HighlightMemory.self)
+        delete(identifiers.chatMessages, as: ChatMessage.self)
         for id in identifiers.personalWritingEntries {
-            guard let model = try? modelContext.model(for: id) as? PersonalWritingEntry else { continue }
+            guard let model: PersonalWritingEntry = modelContext.registeredModel(for: id) else { continue }
             for attachment in model.attachments {
                 JournalAttachmentStore.delete(id: attachment.id)
             }
             modelContext.delete(model)
         }
-        delete(identifiers.journalAttachments)
-        delete(identifiers.quizAttempts)
+        delete(identifiers.journalAttachments, as: JournalAttachment.self)
+        delete(identifiers.quizAttempts, as: QuizAttempt.self)
         try? modelContext.save()
     }
 }

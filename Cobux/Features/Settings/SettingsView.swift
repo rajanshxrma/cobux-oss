@@ -27,9 +27,18 @@ struct SettingsView: View {
     // has explicitly imported personal writing -- nothing is imported unasked.
     @AppStorage("useRealNamesInLifeExamples") private var useRealNamesInLifeExamples: Bool = true
     @AppStorage(JournalLockStatus.enabledKey) private var journalLockEnabled: Bool = true
+    @AppStorage(HealthContextService.enabledKey) private var healthContextEnabled: Bool = false
+    @AppStorage(ClaudeService.extendedThinkingKey) private var extendedThinking: Bool = false
     @State private var crashReports: [CrashReportCollector.StoredReport] = []
     private let updateStatus = UpdateAvailabilityStatus.shared
-    @State private var selectedVoiceIdentifier: String = VoicePreference.selectedVoice()?.identifier ?? ""
+    /// The user's EXPLICIT pick, or "" for automatic -- deliberately not
+    /// `selectedVoice()?.identifier`, which returns the *resolved* voice. Seeding from the
+    /// resolved value meant simply opening this screen showed Samantha as the selection, and
+    /// any interaction with the picker then persisted her identifier as a deliberate choice.
+    /// From that moment `selectedVoice()` returned her explicitly forever and the
+    /// best-available fallback never ran again -- so downloading a better voice would have
+    /// changed nothing, silently.
+    @State private var selectedVoiceIdentifier: String = VoicePreference.selectedVoiceIdentifier ?? ""
 
     // Read/written by `QuizGenerationService` directly via matching
     // UserDefaults keys — the same "one durable place to configure it"
@@ -49,6 +58,9 @@ struct SettingsView: View {
     @State private var backupMessage: String?
     @State private var showPersonalWritingImporter = false
     @State private var personalWritingImportMessage: String?
+    @AppStorage(FlowLaunchPreference.enabledKey) private var flowOnLaunchEnabled = true
+    @State private var isSyncingJournal = false
+    @State private var journalSyncMessage: String?
     @State private var isImportingPersonalWriting = false
     @State private var showAppleJournalImporter = false
     @State private var appleJournalImportMessage: String?
@@ -86,6 +98,37 @@ struct SettingsView: View {
                 // Same setting as Flow's own top-bar button writes -- one key,
                 // two doors, so it's configurable without having to open the
                 // feed first.
+                // Health opt-in. `HealthContextService.requestAuthorization()` existed with a
+                // doc comment saying "called when the user opts in from Settings" -- but that
+                // opt-in was never built, so it had ZERO call sites anywhere in the app.
+                // Without it HealthKit returns nil forever and the meditation/sleep row beside
+                // a journal entry can never render, which is why two separate reminders were
+                // closed on a feature that could not possibly work.
+                if HealthContextService.isAvailable {
+                    CobuxFormSection(
+                        title: "Health",
+                        footer: "Shows last night's sleep and today's mindful minutes beside a journal entry, so an entry sits next to how you actually slept. Read-only — Cobux never writes to Health, and nothing leaves your device."
+                    ) {
+                        Toggle("Use Health data in Journal", isOn: $healthContextEnabled)
+                            .onChange(of: healthContextEnabled) { _, enabled in
+                                guard enabled else { return }
+                                Task {
+                                    // iOS shows its sheet once; if he declines, the toggle
+                                    // must not sit there claiming a permission we don't have.
+                                    let granted = await HealthContextService.requestAuthorization()
+                                    if !granted { await MainActor.run { healthContextEnabled = false } }
+                                }
+                            }
+                    }
+                }
+
+                CobuxFormSection(
+                    title: "Flow",
+                    footer: "Flow opens automatically when you launch Cobux, the way a feed does. Turn this off if you'd rather land on the app itself; you can still open Flow any time from the Wisdom tab."
+                ) {
+                    Toggle("Open Flow on launch", isOn: $flowOnLaunchEnabled)
+                }
+
                 CobuxFormSection(
                     title: "Flow and Wisdom",
                     footer: "Choose which books the Flow feed and the Wisdom Graph pull from. All of them, unless you say otherwise — except reference textbooks, which start off because their sheer highlight count would crowd out the rest of your library."
@@ -103,6 +146,10 @@ struct SettingsView: View {
                 ) {
                     let voices = VoicePreference.availableVoices()
                     Picker("Voice", selection: $selectedVoiceIdentifier) {
+                        // Automatic is a real, selectable option rather than an invisible
+                        // default, so "follow the best voice installed" stays reachable after
+                        // a manual pick instead of being a one-way door.
+                        Text("Automatic (best available)").tag("")
                         ForEach(voices, id: \.identifier) { voice in
                             Text(voice.cobuxDisplayLabel).tag(voice.identifier)
                         }
@@ -110,8 +157,8 @@ struct SettingsView: View {
                     .onChange(of: selectedVoiceIdentifier) { _, newValue in
                         VoicePreference.selectedVoiceIdentifier = newValue.isEmpty ? nil : newValue
                     }
-                    if VoicePreference.onlyDefaultQualityVoicesAvailable {
-                        Text("For a more natural voice, download an Enhanced or Premium voice in iOS Settings → Accessibility → Spoken Content → Voices.")
+                    if VoicePreference.usingDefaultQualityVoice {
+                        Text(VoicePreference.upgradeRecipe)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -266,8 +313,35 @@ struct SettingsView: View {
 
                     CobuxSettingsRow(icon: "person.text.rectangle.fill", label: "Personal Writing Entries", value: "\(personalWritingEntries.count)")
 
+                    // A button, because the automatic sync is both invisible and
+                    // unpushable: it runs only at launch and silently skips when the
+                    // file's byte count is unchanged. "i want to sync earlier this
+                    // morning journal, but it hasn't synced automatically and even it's
+                    // not doing it automatically just now." There was genuinely no way
+                    // to make it happen, and no way to see why it hadn't.
+                    Button {
+                        Task { await runJournalSync() }
+                    } label: {
+                        HStack {
+                            Label("Sync Journal with iCloud", systemImage: "arrow.triangle.2.circlepath")
+                            Spacer()
+                            if isSyncingJournal { ProgressView() }
+                        }
+                    }
+                    .disabled(isSyncingJournal)
+                    if let journalSyncMessage {
+                        Text(journalSyncMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
                     Toggle("Require Face ID for Journal", isOn: $journalLockEnabled)
                     Text("Locks the Journal tab (More > Journal) behind Face ID or your device passcode. Nothing else in Cobux is affected — this is on by default since journal entries are the most personal thing stored here.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Toggle("Extended thinking in chat", isOn: $extendedThinking)
+                    Text("Lets Claude reason at length before answering. It genuinely helps on hard questions — comparing several books, or Symposium Mode — but that reasoning is billed at the most expensive rate and you never see it, so this is off by default. Turn it on for a question worth the cost, then back off.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -452,6 +526,31 @@ struct SettingsView: View {
     // content -- it doesn't remove anything already imported, so a real,
     // permanent delete matters here given how personal this content can be
     // (see `PersonalWritingImportService.deleteAll`'s own doc comment).
+    /// Pushes this device's entries out, then pulls anything new in, ignoring
+    /// both gates the automatic path uses. Newest entries import first and
+    /// embeddings are deferred to the background backfill, so today's journal is
+    /// readable in seconds rather than after several hundred model calls.
+    @MainActor
+    private func runJournalSync() async {
+        isSyncingJournal = true
+        journalSyncMessage = nil
+        defer { isSyncingJournal = false }
+
+        await JournalAutoExportService.export(modelContext: modelContext, force: true)
+        switch await PersonalWritingAutoImportService.syncNow(modelContext: modelContext) {
+        case .imported(let count):
+            journalSyncMessage = "Synced. \(count) new \(count == 1 ? "entry" : "entries") added."
+        case .alreadyUpToDate:
+            journalSyncMessage = "Already up to date. Your entries here were uploaded."
+        case .noFileInICloud:
+            journalSyncMessage = "Nothing in iCloud to import yet. Your entries here were just uploaded."
+        case .waitingForICloudDownload:
+            journalSyncMessage = "iCloud is still downloading. Try again in a moment."
+        case .failed:
+            journalSyncMessage = "Sync didn't finish. Check iCloud is signed in, then try again."
+        }
+    }
+
     private func deleteAllPersonalWriting() {
         do {
             let count = try PersonalWritingImportService.deleteAll(modelContext: modelContext)
@@ -474,7 +573,12 @@ struct SettingsView: View {
         if !author.isEmpty { bodyLines.append("Author: \(author)") }
         let body = bodyLines.joined(separator: "\n")
         let subject = "Cobux book suggestion: \(title)"
-        let recipient = "rajansharma9118@gmail.com"
+        // Public contact address, not the private one. This file is mirrored to
+        // the PUBLIC cobux-oss repo, where the private address was sitting in
+        // plain sight and scrapeable. 9218 is already published on his resume,
+        // LinkedIn and GitHub profile, so it is the correct address for anything
+        // a stranger's app can send.
+        let recipient = "rajansharma9218@gmail.com"
 
         let allowed = CharacterSet.urlQueryAllowed
         let encodedSubject = subject.addingPercentEncoding(withAllowedCharacters: allowed) ?? subject

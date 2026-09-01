@@ -28,6 +28,8 @@ enum StreakTracker {
     static let freezeProgressKey = "cobux.streak.freezeProgress"
     static let pendingMilestoneKey = "cobux.streak.pendingMilestone"
     static let longestStreakKey = "cobux.streak.longestStreak"
+    static let lastDailyOpenerShownDateKey = "cobux.flow.lastDailyOpenerShownDate"
+    static let lastJournalEntryDateKey = "cobux.journal.lastEntryDate"
 
     static let milestones = [7, 30, 100, 365]
     static let freezeEarnInterval = 7
@@ -162,6 +164,85 @@ enum StreakTracker {
     static var hasShownUpToday: Bool {
         guard let lastActive = defaults.object(forKey: lastActiveDateKey) as? Date else { return false }
         return Calendar.current.isDateInToday(lastActive)
+    }
+
+    /// Whether Flow's daily-opener card (the big "N-day streak" greeting) has
+    /// already been shown today.
+    ///
+    /// The opener is a once-a-day *greeting*, not a persistent header: it used
+    /// to be gated only on `batch == 0`, and since every Flow open starts a
+    /// fresh session at batch 0, closing Flow and reopening it re-dealt the
+    /// same "6-day streak" card every single time. Rajan's exact words: "when
+    /// you open flow the first time in the day it shows you the streak, but
+    /// just one time -- next time if flow is closed and a user reopens it, it
+    /// should not again display a streak." Day-scoped in the shared App-Group
+    /// defaults (same store as the streak itself) so it survives app restarts
+    /// rather than only session state.
+    static var hasShownDailyOpenerToday: Bool {
+        guard let last = defaults.object(forKey: lastDailyOpenerShownDateKey) as? Date else { return false }
+        return Calendar.current.isDateInToday(last)
+    }
+
+    static func markDailyOpenerShown() {
+        defaults.set(Date.now, forKey: lastDailyOpenerShownDateKey)
+    }
+
+    /// Whether a journal entry was written today. Read by the Journal widget,
+    /// which lives in a separate process and can't reach SwiftData cheaply --
+    /// this is a plain App-Group `Date`, deliberately the same store the
+    /// streak itself uses, so the widget stays a pure read of existing state
+    /// rather than opening a `ModelContainer` just to answer one question.
+    static var hasWrittenJournalToday: Bool {
+        guard let last = defaults.object(forKey: lastJournalEntryDateKey) as? Date else { return false }
+        return Calendar.current.isDateInToday(last)
+    }
+
+    /// Call after a journal entry is actually saved.
+    static func markJournalEntryWritten() {
+        defaults.set(Date.now, forKey: lastJournalEntryDateKey)
+    }
+
+    /// Don't let the app's own crashes break the user's streak.
+    ///
+    /// Builds 25-30 crashed on launch for several consecutive days. `currentStreak`
+    /// zeroes out once missed days exceed the freeze bank (cap 2), so a real,
+    /// months-long streak silently died because Cobux could not be opened at all --
+    /// Rajan noticed exactly this: "the latest build i didn't see the streak this
+    /// time." A streak is a claim about HIS consistency; charging him for our
+    /// failure makes it a lie.
+    ///
+    /// Called once per launch. If the streak is currently broken and at least one
+    /// recorded crash falls inside the missed window, the last-active date is
+    /// bridged forward so the streak survives. Deliberately conservative: it only
+    /// ever forgives days it can actually evidence a crash for, never invents
+    /// activity, and no-ops entirely when the streak is healthy or when the gap
+    /// has no crash behind it (a genuinely missed day still counts as missed).
+    static func forgiveStreakBreakFromCrashes(_ crashDates: [Date]) {
+        guard !crashDates.isEmpty else { return }
+        let calendar = Calendar.current
+        guard let lastActive = defaults.object(forKey: lastActiveDateKey) as? Date else { return }
+        guard defaults.integer(forKey: currentStreakKey) > 0 else { return }
+
+        let lastDay = calendar.startOfDay(for: lastActive)
+        let today = calendar.startOfDay(for: .now)
+        let daysBetween = calendar.dateComponents([.day], from: lastDay, to: today).day ?? 0
+        let missedDays = max(0, daysBetween - 1)
+        // Healthy, or already covered by freezes -- nothing to forgive.
+        guard missedDays > defaults.integer(forKey: freezeBankKey) else { return }
+
+        // Was the app crashing during the gap it's about to be blamed for?
+        let crashedInGap = crashDates.contains { crash in
+            let day = calendar.startOfDay(for: crash)
+            return day > lastDay && day <= today
+        }
+        guard crashedInGap else { return }
+
+        // Bridge the gap: treat yesterday as the last active day so today can
+        // still continue the streak. Not marked as activity for today -- he
+        // still has to actually show up, which is the point of a streak.
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: today) {
+            defaults.set(yesterday, forKey: lastActiveDateKey)
+        }
     }
 
     static var freezeBank: Int { defaults.integer(forKey: freezeBankKey) }

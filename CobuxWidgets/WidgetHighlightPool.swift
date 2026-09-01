@@ -117,8 +117,15 @@ enum WidgetHighlightPool {
         // so this stays well inside the widget extension's memory ceiling
         // even run once per book, the same reasoning `hasHighlights` above
         // already relies on.
+        // Books the user switched off in the app must not surface here.
+        // Read from App-Group defaults, since `@AppStorage` in the app writes
+        // to `UserDefaults.standard`, which this extension is a separate
+        // process from and cannot see -- that invisibility is precisely why
+        // turned-off books kept appearing in the widget.
+        let excluded = BookSourceSharing.excludedBookIDs()
         let eligible = books.filter { book in
-            (try? context.fetchCount(FetchDescriptor<Highlight>(predicate: bookPredicate(bookID: book.id)))).map { $0 > 0 } ?? false
+            guard !excluded.contains(book.id) else { return false }
+            return (try? context.fetchCount(FetchDescriptor<Highlight>(predicate: bookPredicate(bookID: book.id)))).map { $0 > 0 } ?? false
         }
         guard !eligible.isEmpty else { return nil }
 
@@ -175,7 +182,16 @@ enum WidgetHighlightPool {
 
             // A highlight with no book can't render (title/author/colour all
             // come from it), so it never counts as the fallback either.
-            guard candidate.book != nil else { continue }
+            guard let candidateBook = candidate.book else { continue }
+
+            // The exclusion check lives HERE, at the single point every path
+            // funnels through, not only in `randomBookID`. It was in the
+            // book-picking path alone, so the two paths that skip it -- a
+            // book-scoped pick and the final whole-pool fallback -- both went on
+            // serving books he had switched off. Reported as "I have two of the
+            // biology books turned off for my app, but I still see their
+            // highlights in my iOS widget."
+            guard !BookSourceSharing.excludedBookIDs().contains(candidateBook.id) else { continue }
             fallback = fallback ?? candidate
             if candidate.id != excludedID { return candidate }
         }
@@ -202,6 +218,13 @@ enum WidgetHighlightPool {
         guard let highlight = (try? context.fetch(descriptor))?.first,
               let book = highlight.book else { return nil }
         if let requiredBookID, book.id != requiredBookID { return nil }
+        // Every replay path — the back/forward chevrons and the hold-current
+        // rebuild — resolves through here with an id captured BEFORE the book was
+        // switched off. Without this, turning a book off stopped it being picked
+        // fresh but left it reachable in history, so it kept reappearing and stuck
+        // until the lane rotated past it. Rejecting it here makes the next build
+        // pick something eligible instead.
+        if BookSourceSharing.excludedBookIDs().contains(book.id) { return nil }
         return highlight
     }
 }

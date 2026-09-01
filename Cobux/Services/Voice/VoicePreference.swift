@@ -34,13 +34,46 @@ enum VoicePreference {
         set { defaults.set(newValue, forKey: selectedIdentifierKey) }
     }
 
-    /// True when every available voice for the user's language is `.default` quality -- the
-    /// point where Settings should nudge them to download an Enhanced/Premium voice, since
-    /// there's nothing better to pick from yet.
-    static var onlyDefaultQualityVoicesAvailable: Bool {
-        let voices = availableVoices()
-        return !voices.isEmpty && voices.allSatisfy { $0.quality == .default }
+    /// True when the voice Voice Mode will actually speak with is `.default` quality -- the
+    /// point where the user should be nudged to download an Enhanced/Premium voice.
+    ///
+    /// This used to ask whether *every* installed en-* voice was default quality, which is a
+    /// different question and quietly false in a common case: one enhanced en-GB voice
+    /// downloaded for something unrelated flipped it, while `selectedVoice()` went on speaking
+    /// with a default-quality en-US one. Ask about the voice being used, not the inventory.
+    /// Drops a stored pick that pins the user to a `.default`-quality voice once a better one
+    /// has been installed. Without this, anyone who ever touched the voice picker before
+    /// downloading an enhanced voice stayed on the basic voice permanently, with the app
+    /// giving no sign that its own "switches automatically" promise had been disabled.
+    /// Only ever releases a pin -- a deliberate pick of a good voice is left alone.
+    static func clearStalePinIfBetterVoiceAvailable() {
+        guard let identifier = defaults.string(forKey: selectedIdentifierKey),
+              let pinned = AVSpeechSynthesisVoice(identifier: identifier),
+              pinned.quality == .default,
+              availableVoices().contains(where: { $0.quality != .default })
+        else { return }
+        defaults.removeObject(forKey: selectedIdentifierKey)
     }
+
+    static var usingDefaultQualityVoice: Bool {
+        selectedVoice()?.quality == .default
+    }
+
+    /// The exact steps, naming one specific voice.
+    ///
+    /// Apple gives third-party apps no way to download, trigger, or even enumerate voices that
+    /// aren't installed, and no public deep link into Accessibility settings (`App-Prefs:` roots
+    /// are private API). So the recipe is all we can offer -- which makes it worth writing
+    /// properly: name a single voice rather than "an Enhanced or Premium one", since a user
+    /// standing in a list of thirty voices with no recommendation just leaves.
+    ///
+    /// "Switches automatically" is literally true: `selectedVoice()` falls back to the
+    /// best-quality installed voice, so downloading one is the entire action.
+    static let upgradeRecipe = """
+        Cobux is using iOS's basic system voice. For a much better one — free, one-time, and it \
+        works offline afterwards: open Settings → Accessibility → Spoken Content → Voices → \
+        English, and download Ava (Premium). Cobux switches to it automatically.
+        """
 }
 
 private extension AVSpeechSynthesisVoiceQuality {
@@ -48,24 +81,21 @@ private extension AVSpeechSynthesisVoiceQuality {
         switch self {
         case .premium: return 2
         case .enhanced: return 1
-        case .default: return 0
-        @unknown default: return 0
-        }
-    }
-
-    var label: String {
-        switch self {
-        case .premium: return "Premium"
-        case .enhanced: return "Enhanced"
-        case .default: return "Default"
-        @unknown default: return "Default"
+        default: return 0
         }
     }
 }
 
 extension AVSpeechSynthesisVoice {
-    /// Display label combining the voice's name and quality tier, for the Settings picker.
+    /// Name plus quality tier, for the picker in Settings -- the tier is the only signal a
+    /// user has for why one voice sounds better than another.
     var cobuxDisplayLabel: String {
-        "\(name) (\(quality.label))"
+        let tier: String
+        switch quality {
+        case .premium: tier = "Premium"
+        case .enhanced: tier = "Enhanced"
+        default: tier = "Default"
+        }
+        return "\(name) (\(tier))"
     }
 }

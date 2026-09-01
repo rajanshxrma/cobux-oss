@@ -1,4 +1,6 @@
 import SwiftUI
+import UIKit
+import AVFoundation
 import SwiftData
 import WidgetKit
 
@@ -29,6 +31,14 @@ struct ContentView: View {
     /// function and `presentFlowOnLaunchIfNeeded` for why this waits its turn
     /// behind the two one-time sheets instead of racing them.
     @State private var showingFlowOnLaunch = false
+    @AppStorage(FlowLaunchPreference.enabledKey) private var flowOnLaunchEnabled = true
+    /// True when this foregrounding came from a widget tap / deep link rather
+    /// than the user opening Cobux itself. Flow auto-presents on launch, which
+    /// is right for "I opened the app" and wrong for "I tapped a specific
+    /// highlight" -- Rajan: "when i hit a highlight in the iOS widget it opens
+    /// up flow still which should not be the case... it should open up when the
+    /// app itself is getting opened."
+    @State private var launchedFromDeepLink = false
     @State private var pendingDeepLinkBookID: UUID?
     /// The specific highlight a widget tap came from, if the URL carried one --
     /// consumed by `ChatView` to pre-fill the composer with that quote.
@@ -112,6 +122,9 @@ struct ContentView: View {
         }
         .tint(Color.cobuxAccent)
         .onOpenURL { url in
+            // Set before any routing below: every branch here means the user
+            // asked for a specific destination, so Flow must not hijack it.
+            launchedFromDeepLink = true
             // Widget entries carry the specific book a highlight came from
             // (`cobux://book/<uuid>`) so tapping the widget opens THAT book's
             // scoped chat thread, not just the generic Chat tab.
@@ -150,6 +163,18 @@ struct ContentView: View {
                 selectedTab = 2
             } else if url.host == "chat" {
                 selectedTab = 2
+            } else if url.host == "journal" {
+                // `cobux://journal` lands on the list; `cobux://journal/new`
+                // opens compose straight away -- the Journal widget's whole
+                // purpose ("journal widget direct"), rather than dropping the
+                // user on More and making them find it.
+                let wantsNewEntry = url.pathComponents.dropFirst().first == "new"
+                selectedTab = 4
+                // Replace rather than append: a widget tap should land on
+                // Journal itself, not stack it on whatever was left open under
+                // the More tab from a previous session.
+                morePath = NavigationPath()
+                morePath.append(MoreRoute.journal(startingNewEntry: wantsNewEntry))
             }
         }
         .overlay(alignment: .bottom) {
@@ -158,9 +183,6 @@ struct ContentView: View {
             // degraded-store or seeding-in-progress state.
             if storeHealthStatus.isDegraded {
                 storeHealthBanner
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if seedingStatus.isSeeding {
-                seedingBanner
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if updateStatus.updateAvailable && updateStatus.latestBuild != dismissedUpdateBuild {
                 updateBanner
@@ -194,6 +216,13 @@ struct ContentView: View {
                 // comment on why this and the .task below (cold launch)
                 // together are what "every real open" actually requires.
                 AppActivityTracker.recordOpen()
+                // Opening the app IS the engagement -- his rule: the streak
+                // should reward showing up, never pressure him into a quiz.
+                // Flow records it too, but Flow can be switched off on launch
+                // (and a widget deep link skips it), so the streak must not
+                // depend on Flow having appeared. Idempotent per day.
+                StreakTracker.recordActivityToday()
+                celebrationCenter.checkForPendingMilestone()
             }
             // Re-locks Journal the instant the app leaves the foreground --
             // same trigger point as everything else in this handler, and the
@@ -202,14 +231,30 @@ struct ContentView: View {
             // covered, not just at a fresh cold launch.
             if newPhase == .background {
                 JournalLockStatus.shared.relock()
-                // Backgrounding, not foregrounding -- the export reads
-                // whatever was just written (a compose sheet dismissing into
-                // background is the most common real trigger), and doing it
-                // here keeps it off the foreground's critical path. Wrapped
-                // in a Task since exportIfNeeded is async now (its own
-                // throttle check runs first and returns immediately on the
-                // overwhelmingly common no-op call, before touching iCloud).
-                Task { await JournalAutoExportService.exportIfNeeded(modelContext: modelContext) }
+                // Backgrounding, not foregrounding -- the export reads whatever was
+                // just written (a compose sheet dismissing into background is the
+                // most common real trigger), and doing it here keeps it off the
+                // foreground's critical path.
+                //
+                // The background-task assertion is what makes it actually run. This
+                // used to be a bare `Task { await ... }` started at the instant iOS
+                // begins suspending the app; its very first `await` is
+                // `UbiquityContainer.documentsURL()`, which does real I/O, so the
+                // process got frozen mid-await and the write never happened.
+                // Backgrounding reliably STARTED the export and just as reliably
+                // prevented it from finishing -- entries written on the phone sat
+                // there unexported for days while the Mac side waited on a file that
+                // was never going to arrive.
+                Task {
+                    let app = UIApplication.shared
+                    var assertion: UIBackgroundTaskIdentifier = .invalid
+                    assertion = app.beginBackgroundTask(withName: "JournalExport") {
+                        app.endBackgroundTask(assertion)
+                        assertion = .invalid
+                    }
+                    await JournalAutoExportService.exportIfNeeded(modelContext: modelContext)
+                    if assertion != .invalid { app.endBackgroundTask(assertion) }
+                }
                 // Own throttle/seeding/degraded gates, all checked
                 // synchronously before any iCloud work -- safe to call this
                 // often. See `AutoBackupService`'s own doc comment.
@@ -258,16 +303,42 @@ struct ContentView: View {
             }
             celebrationCenter.checkForPendingMilestone()
             AppActivityTracker.recordOpen()
+
+            // FIRST, before any iCloud work. Flow is the app's front door and
+            // must appear immediately -- Rajan: "the flow opens up first but
+            // it took a while for it to show on opening, i don't want that."
+            // It used to sit at the END of this chain, behind three awaits
+            // that all touch iCloud: the journal export's ubiquity-container
+            // lookup (documented by Apple as not-fast), the restore check, and
+            // `downloadPendingAttachments`, which waits up to 15 SECONDS PER
+            // pending attachment. On a slow-iCloud launch that's the whole
+            // reason the app was "introduced" before Flow arrived.
+            //
+            // Nothing here depends on that work having finished: Flow re-deals
+            // itself when seeding completes or the source filter changes, and
+            // a restore surfaces through `AutoRestoreBanner` rather than by
+            // gating the feed.
+            resolveLaunchSheets()
+
+            // Everything below is background housekeeping -- detached so a slow
+            // or unreachable iCloud can never again hold the first screen
+            // hostage.
             await JournalAutoExportService.exportIfNeeded(modelContext: modelContext)
+            // Pulls the Mac-maintained writing archive in automatically, so
+            // "all of it in one place" doesn't depend on remembering to run a
+            // file picker in Settings. Idempotent and digest-gated, so this is
+            // a no-op on the overwhelming majority of launches.
+            await PersonalWritingAutoImportService.importIfNeeded(modelContext: modelContext)
+            // Cheap, local, and has to run after the user may have gone to Settings and
+            // downloaded a better voice -- releases a stale pin on a basic-quality voice so
+            // the download actually takes effect.
+            VoicePreference.clearStalePinIfBetterVoiceAvailable()
+            // Fetches the neural voice once, on Wi-Fi, in the background. Everything about
+            // it is best-effort: until it lands, voice mode speaks with the system voice.
+            await NeuralVoiceStore.shared.prepareIfNeeded()
             AutoBackupService.backupIfNeeded(modelContext: modelContext)
-            // Restore before its own backfill pass, and both before the rest
-            // of launch -- a fresh install with a real iCloud backup should
-            // recover its data as early in the cold-launch path as possible,
-            // same reasoning `resolveLaunchSheets` already follows for its
-            // own one-time launch state.
             await AutoRestoreService.restoreIfNeeded(modelContext: modelContext)
             await AutoRestoreService.downloadPendingAttachments(modelContext: modelContext)
-            resolveLaunchSheets()
             await updateStatus.checkForUpdate()
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -398,7 +469,24 @@ struct ContentView: View {
     /// this point (`seedingStatus.isSeeding`) and books/chatMessages may not have
     /// finished loading on the very first call.
     private func resolveLaunchSheets() {
-        guard !seedingStatus.isSeeding else { return }
+        // The seeding gate applies to the post-upgrade EXPORT offer only, not to Flow.
+        //
+        // It used to guard this whole function, and `CobuxApp` sets `isSeeding = true`
+        // synchronously on EVERY launch (not just first run), so on a real library Flow
+        // waited for the entire seed/merge pass before it could present -- the Library tab
+        // showing first, which is precisely what he reported: "the flow opens up first but
+        // i tried and it took a while for it to show on opening i don't want that."
+        //
+        // Flow is safe to present during seeding because it carries its own precondition:
+        // `presentFlowOnLaunchIfNeeded` only fires when some book already has highlights.
+        // On an existing install that is true immediately; on a genuinely fresh install it
+        // is false until seeding populates the store, and the `isSeeding` onChange re-runs
+        // this then. The export offer, by contrast, reads `books`/`chatMessages` to decide
+        // whether this is an upgrade, and must not read them mid-merge.
+        guard !seedingStatus.isSeeding else {
+            maybeShowWhatsNewThenFlow()
+            return
+        }
         guard !hasOfferedPostUpgradeExport else {
             maybeShowWhatsNewThenFlow()
             return
@@ -441,6 +529,15 @@ struct ContentView: View {
     /// full-screen Flow session on a fresh install would be a worse first
     /// impression than no Flow at all.
     private func presentFlowOnLaunchIfNeeded() {
+        // Opt-out, on by default. Flow opening straight up is the whole point of
+        // the launch behaviour, but it's the kind of thing that should be
+        // refusable without hunting for a workaround: "there should be an option
+        // in more or settings... to turn off or on the showing flow on screen
+        // open, but by default flow should be on screen."
+        guard flowOnLaunchEnabled else { return }
+        // A deep link IS the user's intent -- opening Flow over the highlight
+        // they deliberately tapped throws that away.
+        guard !launchedFromDeepLink else { return }
         guard books.contains(where: { !$0.highlights.isEmpty }) else { return }
         showingFlowOnLaunch = true
     }
@@ -474,18 +571,14 @@ struct ContentView: View {
     // tab content at `.overlay(alignment: .bottom)`, not embedded in it, which is
     // the distinction the plan draws between "floating layer" (glass) and content
     // cards (stay flat). `.capsule` matches the plan's own banner spec.
-    private var seedingBanner: some View {
-        HStack(spacing: 10) {
-            ProgressView()
-            Text(seedingStatus.message)
-                .font(.subheadline)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .cobuxGlassFloating(shape: .capsule)
-        .padding(.horizontal, 20)
-        .padding(.bottom, 6)
-    }
+    // Seeding no longer announces itself. It used to float a progress capsule
+    // over the app on launch, which told the user about our bookkeeping at the
+    // exact moment they came to read, journal, or ask something: "a user's
+    // purpose is to open the app so they can do what the app is meant to do."
+    // Nothing about seeding needs a decision or an action from them, so it
+    // belongs in the background. The store-health banner above deliberately
+    // stays -- that one reports that work will NOT be saved, which is not
+    // status chrome but something they have to know before they type.
 
     // Shown only when `ModelContainerFactory` had to fall back to an in-memory
     // store (the real on-disk store failed to open). Honest, not silent -- nothing

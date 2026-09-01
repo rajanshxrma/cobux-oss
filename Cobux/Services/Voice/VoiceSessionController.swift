@@ -44,11 +44,19 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
     private let books: [Book]
     private let selectedBookID: UUID?
     private let symposiumModeEnabled: Bool
+    /// Grounding for the "My Journal" thread's voice turns -- ignored by
+    /// every other thread's assembly (voice deliberately keeps the
+    /// personal-writing ASIDE injection off, same as before; the journal
+    /// THREAD is a different thing: there the entries are the whole point).
+    private let personalWritingEntries: [PersonalWritingEntry]
 
     private let audioEngine = AVAudioEngine()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private let synthesizer = AVSpeechSynthesizer()
+    /// On-device neural voice. Tried first for every sentence; `AVSpeechSynthesizer` remains
+    /// the fallback whenever the model isn't downloaded yet or synthesis fails.
+    private let neuralSpeaker = NeuralSpeaker()
 
     private var silenceTimer: Timer?
     private var idleTimer: Timer?
@@ -95,12 +103,13 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
     static let sessionCeilingDollars: Double = 0.25
     private static let sessionWarningRatio: Double = 0.8
 
-    init(claudeService: ClaudeService, books: [Book], selectedBookID: UUID?, symposiumModeEnabled: Bool, conversationHistory: [AIMessage]) {
+    init(claudeService: ClaudeService, books: [Book], selectedBookID: UUID?, symposiumModeEnabled: Bool, conversationHistory: [AIMessage], personalWritingEntries: [PersonalWritingEntry] = []) {
         self.claudeService = claudeService
         self.books = books
         self.selectedBookID = selectedBookID
         self.symposiumModeEnabled = symposiumModeEnabled
         self.conversationHistory = conversationHistory
+        self.personalWritingEntries = personalWritingEntries
         super.init()
         synthesizer.delegate = self
     }
@@ -128,6 +137,7 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
             try session.setCategory(.playAndRecord, mode: .default, options: [.duckOthers, .defaultToSpeaker])
             try session.setActive(true, options: .notifyOthersOnDeactivation)
             sessionActive = true
+            registerAudioObservers()
         } catch {
             onError?("Couldn't set up the audio session.")
             return
@@ -143,9 +153,29 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
         streamInFlight = false
         idleTimer?.invalidate()
         idleTimer = nil
+        NotificationCenter.default.removeObserver(self)
         guard sessionActive else { return }
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        deactivateSession()
         sessionActive = false
+    }
+
+    /// `setActive(false)` throws 560030580 when audio IO hasn't fully wound down yet, and the
+    /// old `try?` swallowed it -- leaving the session active, so Cobux went on ducking every
+    /// other app's audio after the user tapped End. One retry on the next runloop pass is
+    /// enough: by then the synthesizer and engine have actually released.
+    private func deactivateSession() {
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            DiagnosticLog.log("voice: audio session deactivate failed (\(error)); retrying")
+            DispatchQueue.main.async {
+                do {
+                    try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+                } catch {
+                    DiagnosticLog.log("voice: audio session still active after retry: \(error)")
+                }
+            }
+        }
     }
 
     /// Tap-to-interrupt: the phase-one substitute for real barge-in per Fable's ruling.
@@ -303,6 +333,7 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
     private func estimatedTurnCost(question: String, assembled: ChatPromptBuilder.Assembled) -> Double {
         let promptChars: Int
         switch assembled {
+        case .journal(let systemPrompt): promptChars = systemPrompt.count
         case .symposium(let systemPrompt, _): promptChars = systemPrompt.count
         case .bookScoped(let stable, let dynamic): promptChars = stable.count + dynamic.count
         case .general(let stable, let dynamic, _): promptChars = stable.count + dynamic.count
@@ -322,7 +353,7 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
         }
         StreakTracker.recordActivityToday()
 
-        let assembled = ChatPromptBuilder.assemble(userMessage: question, books: books, selectedBookID: selectedBookID, symposiumModeEnabled: symposiumModeEnabled, isVoice: true)
+        let assembled = ChatPromptBuilder.assemble(userMessage: question, books: books, selectedBookID: selectedBookID, symposiumModeEnabled: symposiumModeEnabled, isVoice: true, personalWritingEntries: personalWritingEntries)
 
         // Cost guards, spoken not just displayed — eyes-free mode needs eyes-free errors.
         // Two layers, per Fable's ruling: a monthly BudgetGuard (reusing the same cap dollar
@@ -367,6 +398,13 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
 
         let stream: AsyncThrowingStream<String, Error>
         switch assembled {
+        case .journal(let systemPrompt):
+            // Uncached like symposium -- the relevant-entries block changes
+            // with every question, so there is no stable prefix to cache.
+            stream = claudeService.streamMessage(
+                userMessage: question, conversationHistory: historySnapshot, systemPrompt: systemPrompt,
+                options: ClaudeService.RequestOptions(maxTokens: Self.voiceMaxTokens, thinkingDisabled: true)
+            )
         case .symposium(let systemPrompt, _):
             stream = claudeService.streamMessage(
                 userMessage: question, conversationHistory: historySnapshot, systemPrompt: systemPrompt,
@@ -477,7 +515,22 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
         let next = utteranceQueue.removeFirst()
         spokenCaption += (spokenCaption.isEmpty ? "" : " ") + next
         spokenSentences.append(next)
-        let utterance = AVSpeechUtterance(string: next)
+
+        // Neural voice first, system voice if it isn't available. Both funnel into
+        // `speakNextInQueue` on completion, so the queue drains identically either way and
+        // the state machine can't tell them apart.
+        Task { [weak self] in
+            guard let self else { return }
+            let spoke = await self.neuralSpeaker.speak(next) {
+                Task { @MainActor [weak self] in self?.speakNextInQueue() }
+            }
+            guard !spoke else { return }
+            await MainActor.run { self.speakWithSystemVoice(next) }
+        }
+    }
+
+    private func speakWithSystemVoice(_ text: String) {
+        let utterance = AVSpeechUtterance(string: text)
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
         utterance.pitchMultiplier = 1.0
         utterance.voice = VoicePreference.selectedVoice()
@@ -502,6 +555,10 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
         if synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
         }
+        // The neural path plays through its own AVAudioEngine, so stopping the system
+        // synthesizer alone would leave it talking -- the same class of half-teardown that
+        // made voice mode survive being closed.
+        Task { await neuralSpeaker.stop() }
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
@@ -509,7 +566,87 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        DispatchQueue.main.async { [weak self] in self?.isSpeakingQueue = false }
+        // Clearing `isSpeakingQueue` alone stranded whatever was still queued: any cancel we
+        // didn't initiate ourselves (a phone call, Siri, a route change) left sentences in
+        // `utteranceQueue` that nothing would ever speak or drain, and the session sat showing
+        // a live waveform forever. Route it through the same drain path as a normal finish.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.utteranceQueue.removeAll()
+            self.isSpeakingQueue = false
+            self.handleSpeechQueueDrained()
+        }
+    }
+
+    // MARK: - Audio interruptions and route changes
+
+    /// Without these, two everyday events wedged the session permanently.
+    ///
+    /// A phone call or Siri pauses the synthesizer and stops the engine. A paused utterance
+    /// never delivers `didFinish`, so `isSpeakingQueue` stayed true and `handleSpeechQueueDrained`
+    /// could never pass its guard -- and the recognition error that comes with it is
+    /// deliberately swallowed by the `kAFAssistantErrorDomain` filter, so nothing else noticed
+    /// either. Disconnecting Bluetooth mid-listen changes the input format underneath the
+    /// installed tap; the engine stops and the 0 Hz guard only protects the *next*
+    /// `startListening`, so the session sat in `.listening` with a dead microphone.
+    private func registerAudioObservers() {
+        let center = NotificationCenter.default
+        center.removeObserver(self)
+        center.addObserver(
+            self, selector: #selector(handleInterruption(_:)),
+            name: AVAudioSession.interruptionNotification, object: AVAudioSession.sharedInstance()
+        )
+        center.addObserver(
+            self, selector: #selector(handleConfigurationChange(_:)),
+            name: .AVAudioEngineConfigurationChange, object: audioEngine
+        )
+    }
+
+    @objc private func handleInterruption(_ note: Notification) {
+        guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.sessionActive else { return }
+            switch type {
+            case .began:
+                self.stopSpeakingQueue()
+                self.stopListeningInternal()
+            case .ended:
+                let options = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt)
+                    .map(AVAudioSession.InterruptionOptions.init(rawValue:)) ?? []
+                guard options.contains(.shouldResume) else {
+                    // The system is telling us not to resume -- ending is honest, where
+                    // sitting in a dead `.listening` state is not.
+                    self.onIdleTimeout?()
+                    return
+                }
+                try? AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
+                self.startListening()
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    @objc private func handleConfigurationChange(_ note: Notification) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.sessionActive, self.state == .listening else { return }
+            self.stopListeningInternal()
+            self.startListening()
+        }
+    }
+
+    // MARK: - Safety net
+
+    /// A view that rebuilds its controller without ending the old one used to leave an orphan
+    /// holding a hot microphone and an active audio session for the life of the process.
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        if sessionActive {
+            audioEngine.stop()
+            synthesizer.stopSpeaking(at: .immediate)
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 
     // MARK: - Idle auto-pause

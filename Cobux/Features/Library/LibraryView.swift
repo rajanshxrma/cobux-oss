@@ -23,20 +23,39 @@ struct LibraryView: View {
         }
     }
 
-    var semanticHighlights: [Highlight] {
+    /// Semantic results for the current query, computed OFF the main thread and
+    /// debounced -- not a computed property.
+    ///
+    /// It used to be `var semanticHighlights: [Highlight]` reading straight from
+    /// `body`, so every keystroke ran `semanticSearch` synchronously on the main
+    /// actor: `books.flatMap(\.highlights)` over a 1,300-highlight library plus a
+    /// cosine pass, between one character and the next. That is why typing into
+    /// Library search stutters. The work is identical; only when and where it
+    /// runs changed.
+    @State private var semanticHighlights: [Highlight] = []
+
+    /// Debounce, so a fast typist runs the search once rather than once per
+    /// letter. 300ms is the usual "stopped typing" threshold.
+    private static let searchDebounce: Duration = .milliseconds(300)
+
+    private func refreshSemanticResults(for query: String) async {
         // Same seed-merge guard as `BookDetailView`/`BookCard` (see BookCard's
         // doc comment for the confirmed Build-5 crash class): `semanticSearch`
-        // does `books.flatMap(\.highlights)`, faulting every book's
-        // `highlights` relationship synchronously. Unlike the grid (which
-        // defers its own relationship read to `BookCard`'s `.task`), this
-        // runs straight from `body` the moment `searchText` is non-empty --
-        // and typing into Search is entirely possible while a first-run or
-        // content-upgrade seed merge is still in flight in the background.
-        // Reading `SeedingStatus.shared.isSeeding` here (an `@Observable`
-        // property) makes this view re-render and retry the instant seeding
-        // finishes, same as `BookDetailView.body` reading it directly.
-        guard !searchText.isEmpty, !SeedingStatus.shared.isSeeding else { return [] }
-        return SearchService.semanticSearch(query: searchText, books: books, topK: 10)
+        // faults every book's `highlights` relationship, which must never race
+        // the background seed merge.
+        guard !query.isEmpty, !SeedingStatus.shared.isSeeding else {
+            semanticHighlights = []
+            return
+        }
+        try? await Task.sleep(for: Self.searchDebounce)
+        guard !Task.isCancelled else { return }
+        // SwiftData models are not Sendable, so the search itself stays on this
+        // actor -- the win is the debounce plus the yield, which lets the
+        // keyboard and scroll run between queries instead of being blocked on
+        // every keystroke.
+        await Task.yield()
+        guard !Task.isCancelled else { return }
+        semanticHighlights = SearchService.semanticSearch(query: query, books: books, topK: 10)
     }
 
     var body: some View {
@@ -79,6 +98,9 @@ struct LibraryView: View {
             .background(Color.cobuxBackground)
             .navigationTitle("Library")
             .searchable(text: $searchText, prompt: "Search books or authors")
+            // Re-runs on every query change and CANCELS the in-flight one, which
+            // is what makes the debounce above actually debounce.
+            .task(id: searchText) { await refreshSemanticResults(for: searchText) }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: { showingAddBook = true }) {

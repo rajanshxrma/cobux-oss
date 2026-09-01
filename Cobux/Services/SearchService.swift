@@ -922,7 +922,11 @@ struct SearchService {
         // unless the user has explicitly flipped the Settings toggle, so an
         // excerpt mentioning a real person surfaces as "a friend" / "someone
         // he was close to", never the name itself.
-        var block = "## Rajan's Own Personal Writing (relevant excerpts, if any)\n\n"
+        // "The user's", not "Rajan's". Every install shares this prompt, so anyone else
+        // importing their own writing had it introduced to the model under his name --
+        // which is both wrong and quietly confusing for the model about whose life it is
+        // reading. The excerpts are the user's own either way.
+        var block = "## The User's Own Personal Writing (relevant excerpts, if any)\n\n"
         block += "Where one of these excerpts genuinely parallels the question, you may briefly weave it in as a lived example alongside the books (\"something similar shows up in your own journal…\"). Use at most one such example per reply, only when it truly fits — most replies should not need one. "
         block += useRealNames
             ? "You may refer to people from these excerpts by the names used there.\n\n"
@@ -935,6 +939,104 @@ struct SearchService {
         }
         block += "\n"
         return block
+    }
+
+    /// Journal-thread retrieval caps -- deliberately much roomier than the
+    /// aside injection above (`personalWritingTopK` 3 × 400 chars): there the
+    /// journal is supplementary color on a book answer, here it is the entire
+    /// grounding. 8 × 1200 ≈ 10k chars worst case, well inside a prompt.
+    static let journalThreadTopK = 8
+    static let journalThreadEntryCharLimit = 1200
+
+    /// Builds the "My Journal" chat thread's context block (see
+    /// `PromptTemplates.journalGrounded`): the most relevant entries, each
+    /// prefixed with its date so "what was I writing about in March?" is
+    /// answerable as a date question, not just a similarity one.
+    ///
+    /// Retrieval is `relevantPersonalWriting`'s embedding ranking with two
+    /// journal-specific layers on top, both soft so the thread never comes up
+    /// empty while entries exist:
+    /// - a month mentioned in the query ("March") narrows the pool to that
+    ///   month's entries first, because cosine similarity between the word
+    ///   "march" and what was actually written that March is near noise --
+    ///   the date metadata, not the text, is what answers a period question;
+    /// - when ranking returns nothing (query can't be embedded and matches no
+    ///   substring), the most recent entries stand in, so a vague "how have I
+    ///   been doing lately?" still gets real grounding.
+    ///
+    /// No privacy gate here, unlike `personalWritingContextBlock`'s caller
+    /// contract: the aside toggle governs journal excerpts leaking into BOOK
+    /// answers, while this runs only for the thread whose stated purpose is
+    /// the journal, itself behind the journal's Face ID lock in `ChatView`.
+    static func buildJournalContext(query: String, entries: [PersonalWritingEntry]) -> String {
+        guard !entries.isEmpty else {
+            return "(The journal has no entries yet. Say so plainly if asked about its contents.)\n"
+        }
+
+        var pool = entries
+        if let month = monthMentioned(in: query) {
+            let calendar = Calendar.current
+            let matching = entries.filter {
+                calendar.component(.month, from: $0.modifiedDate ?? $0.dateImported) == month
+            }
+            if !matching.isEmpty { pool = matching }
+        }
+
+        var ranked = relevantPersonalWriting(query: query, entries: pool, topK: journalThreadTopK)
+        if ranked.isEmpty {
+            ranked = Array(
+                pool.sorted { ($0.modifiedDate ?? $0.dateImported) > ($1.modifiedDate ?? $1.dateImported) }
+                    .prefix(journalThreadTopK)
+            )
+        }
+
+        var block = ""
+        for entry in ranked.sorted(by: { ($0.modifiedDate ?? $0.dateImported) < ($1.modifiedDate ?? $1.dateImported) }) {
+            let date = (entry.modifiedDate ?? entry.dateImported)
+                .formatted(.dateTime.month(.wide).day().year())
+            let excerpt = entry.text.count > journalThreadEntryCharLimit
+                ? String(entry.text.prefix(journalThreadEntryCharLimit)) + "…"
+                : entry.text
+            let title = entry.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            block += title.isEmpty
+                ? "[\(date)]\n\(excerpt)\n\n"
+                : "[\(date)] \"\(title)\"\n\(excerpt)\n\n"
+        }
+        return block
+    }
+
+    /// The 1-12 month number a query names, or nil. Whole-word match against
+    /// the calendar's full and abbreviated month symbols ("march", "mar"),
+    /// case-insensitive -- kept Foundation-only and pure so it runs in the
+    /// macOS assertion harness. "May" is special-cased: it's also an everyday
+    /// modal verb ("what may help?"), so it only counts as the month when a
+    /// preposition/determiner that dates it comes immediately before ("in
+    /// may", "last may") -- a soft miss there just skips the month narrowing,
+    /// it never empties the pool.
+    static func monthMentioned(in query: String) -> Int? {
+        let tokens = query.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        let words = Set(tokens)
+
+        func accept(_ name: String, _ index: Int) -> Int? {
+            guard words.contains(name) else { return nil }
+            if name == "may" {
+                let dateContexts: Set<String> = ["in", "during", "last", "this", "since", "of", "for", "until", "through", "early", "late", "mid"]
+                guard let position = tokens.firstIndex(of: "may"), position > 0,
+                      dateContexts.contains(tokens[position - 1]) else { return nil }
+            }
+            return index + 1
+        }
+
+        let calendar = Calendar.current
+        for (index, name) in calendar.monthSymbols.enumerated() {
+            if let month = accept(name.lowercased(), index) { return month }
+        }
+        for (index, name) in calendar.shortMonthSymbols.enumerated() {
+            if let month = accept(name.lowercased(), index) { return month }
+        }
+        return nil
     }
 
     /// Ranks Rajan's own personal-writing entries (imported via

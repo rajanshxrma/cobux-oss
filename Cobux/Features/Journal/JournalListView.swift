@@ -16,9 +16,19 @@ import SwiftData
 /// stock system type -- reusing this codebase's own existing photo-card and
 /// typography patterns rather than inventing new visual language.
 struct JournalListView: View {
+    /// Opens the compose sheet on arrival, for entry points whose whole intent
+    /// is "let me write right now" -- the Journal widget's write tap and the
+    /// `cobux://journal/new` deep link. Defaults false so the ordinary More →
+    /// Journal tap is unchanged (land on the list, browse what's there).
+    var startingNewEntry: Bool = false
+
     @Environment(\.modelContext) private var modelContext
     @Query private var entries: [PersonalWritingEntry]
     @State private var showingCompose = false
+    /// One-shot latch: `.task` can re-run (and `startingNewEntry` stays true
+    /// for this view's whole lifetime), so without this, dismissing the sheet
+    /// would immediately re-present it and trap the user in compose.
+    @State private var didAutoOpenCompose = false
     @State private var searchText = ""
     // A minimal, read-only echo of `JournalLocked`'s own lock check --
     // deliberately NOT the whole gate/auto-prompt mechanism (that stays
@@ -61,6 +71,19 @@ struct JournalListView: View {
     /// `Dictionary(grouping:)` -> sort -> map shape `BookThreadPickerView`
     /// already establishes for its own category sections, just keyed by day
     /// instead of category.
+    /// Entries per day, for the calendar's intensity bubbles. A count rather
+    /// than a set of days: the calendar shades each day by how much was
+    /// written, so presence alone isn't enough. Built off the unfiltered set on
+    /// purpose -- the calendar shows your journaling history, which shouldn't
+    /// shrink just because a search is narrowing the list.
+    private var entryCounts: [Date: Int] {
+        let calendar = Calendar.current
+        return entries.reduce(into: [:]) { counts, entry in
+            let day = calendar.startOfDay(for: entry.modifiedDate ?? entry.dateImported)
+            counts[day, default: 0] += 1
+        }
+    }
+
     private var dateSections: [DateSection] {
         let calendar = Calendar.current
         let grouped = Dictionary(grouping: filteredEntries) { entry in
@@ -138,6 +161,11 @@ struct JournalListView: View {
                 .overlay(alignment: .bottomTrailing) {
                     if !isLocked {
                         Button {
+                            // Logged because this path is only reproducible on a
+                            // real device from a widget tap, and Diagnostics now
+                            // ships in release builds -- so if it still fails, the
+                            // log says whether the tap was even received.
+                            DiagnosticLog.log("journal: new-entry tapped (locked=\(isLocked), startingNewEntry=\(startingNewEntry), autoOpened=\(didAutoOpenCompose))")
                             showingCompose = true
                         } label: {
                             Image(systemName: "square.and.pencil")
@@ -152,8 +180,25 @@ struct JournalListView: View {
                 }
         }
         .navigationTitle("Journal")
+        // Presented from the view itself, not from inside `JournalLocked`'s
+        // content. A sheet whose presenter sits under a gate that swaps its
+        // subtree on every lock/unlock transition can lose the presentation
+        // mid-flight -- the button sets the flag, the subtree rebuilds, and
+        // nothing opens. Reported as: arriving from the Journal widget, "the
+        // new entry button does not work. I have to open the app and its
+        // separate way for it to work."
         .sheet(isPresented: $showingCompose) {
             JournalEntryComposeView()
+        }
+        // Arrived from the widget / `cobux://journal/new` -- go straight to
+        // writing. Deliberately respects the lock: if Journal is locked, the
+        // sheet waits rather than opening over a gate the user hasn't passed,
+        // and `JournalLocked`'s own auto-prompt handles authentication first.
+        .task(id: isLocked) {
+            guard startingNewEntry, !didAutoOpenCompose, !isLocked else { return }
+            didAutoOpenCompose = true
+            DiagnosticLog.log("journal: auto-opening compose from deep link")
+            showingCompose = true
         }
     }
 
@@ -170,7 +215,29 @@ struct JournalListView: View {
                 }
             }
         } else {
+            ScrollViewReader { proxy in
             List {
+                Section {
+                    JournalCalendarStrip(entryCounts: entryCounts) { day in
+                        // Jump the list to that day's section -- the section
+                        // ids ARE startOfDay dates, so the tapped bubble and
+                        // its section share an identity by construction. A
+                        // live search can be hiding the day's section
+                        // entirely; clearing it first is what "go to that
+                        // particular day" has to mean, and the tiny hop lets
+                        // the unfiltered list exist before scrolling it.
+                        searchText = ""
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(60))
+                            withAnimation { proxy.scrollTo(day, anchor: .top) }
+                        }
+                    }
+                    .padding(.horizontal, CobuxSpacing.screenMargin)
+                }
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+
                 if journalStreak > 0 {
                     Section {
                         streakChip
@@ -198,6 +265,9 @@ struct JournalListView: View {
                             }
                         }
                     }
+                    // The calendar's jump target -- section ids are already
+                    // startOfDay dates, the same key the strip's bubbles use.
+                    .id(section.id)
                 }
             }
             .listStyle(.plain)
@@ -206,6 +276,7 @@ struct JournalListView: View {
                 if !searchText.isEmpty && filteredEntries.isEmpty {
                     CobuxEmptyStateView(icon: "magnifyingglass", title: "No matches", message: "Try a different search.")
                 }
+            }
             }
         }
     }

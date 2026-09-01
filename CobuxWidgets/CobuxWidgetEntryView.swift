@@ -18,33 +18,6 @@ struct CobuxWidgetEntryView: View {
     /// and one widget kind. See `CycleHighlightIntent` for the full reasoning.
     private var scopeKey: String? { entry.scopeBookID?.uuidString }
 
-    /// Horizontal room to leave clear at the bottom-right corner when
-    /// `historyChevrons` can render there.
-    ///
-    /// `historyChevrons` is a `.overlay`, so it never participates in layout —
-    /// the book title / citation `Text` beside it lays out against the full
-    /// width of its own container and only knows to truncate or wrap short of
-    /// that corner if something tells it to. Two 24pt circles plus 2pt padding
-    /// each plus 4pt spacing between them is 60pt; this is that reservation,
-    /// applied only when the chevrons can actually appear (a fresh widget with
-    /// no history yet renders neither, and should not lose the width for
-    /// nothing). Same 60pt regardless of family: systemSmall is the tight
-    /// case (roughly 110pt of usable width after system + local padding, so a
-    /// long book title genuinely needs this), and reserving it on
-    /// systemMedium/systemLarge too costs those wider layouts nothing visible
-    /// while keeping one rule instead of three.
-    private var chevronReserve: CGFloat {
-        (entry.canGoBack || entry.canGoForward) ? 60 : 0
-    }
-
-    /// Same reservation shape as `chevronReserve`, mirrored to the leading
-    /// side for `shuffleButton` now that it lives at `.bottomLeading` --
-    /// moved there from the top-right corner (Rajan's direct feedback: a
-    /// widget sits at the very top of the home screen, so a control up in
-    /// its own top-right corner is the single hardest spot on it to reach
-    /// one-handed). Always reserved, unlike `chevronReserve`: the shuffle
-    /// button is always present, where the chevrons only sometimes are.
-    private let shuffleReserve: CGFloat = 32
 
     var body: some View {
         Group {
@@ -87,7 +60,16 @@ struct CobuxWidgetEntryView: View {
         .containerBackground(for: .widget) {
             backgroundView
         }
-        .widgetURL(tapDestination)
+        // Tapping the widget CHANGES THE HIGHLIGHT. It used to open the app, with cycling
+        // available only from a deliberately tiny corner button -- reported twice, the
+        // second time as "still hasn't been fixed... important fix this in the last way
+        // whatever build please". The old comment argued the body had to stay a
+        // `.widgetURL` so open-to-book kept working; that ranked a secondary action above
+        // the one he asked for. Open-to-book is not lost, it moves to the corner the
+        // cycling button used to occupy, so both actions still exist -- just the right
+        // way round. Lock-screen accessory families keep `.widgetURL`, since they are too
+        // small for a second target and tapping one is unambiguously "take me there".
+        .modifier(WidgetTapBehavior(family: family, destination: tapDestination, scopeKey: scopeKey))
     }
 
     /// Used to hardcode `cobux://chat` for every family -- the widget always
@@ -134,66 +116,46 @@ struct CobuxWidgetEntryView: View {
             Text(entry.quote)
                 .font(.system(.footnote, design: .serif))
                 .italic()
-                .lineLimit(5)
-                .minimumScaleFactor(0.85)
+                // WidgetKit cannot scroll -- there is no interactive scroll
+                // view in a widget, full stop -- so a long highlight can only
+                // fit by shrinking. Rajan: "some of the highlights in the iOS
+                // widget are not fully able to be read." The old caps (4-5
+                // lines, and only 15%% of shrink allowed) truncated real
+                // highlights well before the space ran out. More lines plus a
+                // genuinely permissive floor lets a long quote shrink to fit
+                // instead of being cut off; short quotes are unaffected, since
+                // scaling only engages when the text would otherwise clip.
+                .lineLimit(8)
+                .minimumScaleFactor(0.6)
 
             Spacer(minLength: 0)
 
-            Text(entry.bookTitle)
-                .font(.caption2)
-                .fontWeight(.medium)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .padding(.leading, shuffleReserve)
-                .padding(.trailing, chevronReserve)
+            footerRow(Text(entry.bookTitle).fontWeight(.medium))
         }
         .padding(4)
-        .overlay(alignment: .bottomLeading) { shuffleButton }
-        .overlay(alignment: .bottomTrailing) { historyChevrons }
     }
 
-    /// A small, deliberately corner-sized tap target for `CycleHighlightIntent` --
-    /// swaps the shown highlight in place without leaving the home screen. Must stay
-    /// small: the rest of each widget body's surface still needs to trigger the
-    /// existing `.widgetURL(tapDestination)` open-to-book behavior, which a button
-    /// covering more of the widget would silently break.
-    private var shuffleButton: some View {
-        Button(intent: CycleHighlightIntent(scopeKey: scopeKey)) {
-            Image(systemName: "arrow.triangle.2.circlepath")
+    /// Citation on the left, controls on the right, in one row.
+    ///
+    /// The citation used to be a plain `Text` with a hand-computed trailing
+    /// padding, dodging controls that lived in an `.overlay` and therefore took
+    /// part in no layout at all. That is why it read as wedged awkwardly between
+    /// the buttons -- "the title... is weirdly formatted placed bw the buttons
+    /// at the both bottom ends". As siblings in an `HStack` the citation simply
+    /// truncates where the controls begin, correctly, at any width and on every
+    /// family, with no reserved-width constant to keep in sync.
+    private func footerRow(_ citation: Text) -> some View {
+        HStack(alignment: .center, spacing: 6) {
+            citation
                 .font(.caption2)
-                .foregroundStyle(accent)
-                .padding(6)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 4)
+            controlCluster
         }
-        .buttonStyle(.plain)
     }
 
-    /// Back/forward chevrons for `WidgetHighlightHistory` — return to the quote
-    /// that was showing before a shuffle (or rotation) replaced it, then
-    /// re-advance. Each renders only when its tap would do something, so the
-    /// corner stays empty on a fresh widget and systemSmall never carries more
-    /// chrome than it has to. Same placement discipline as `shuffleButton`:
-    /// the body's surface must keep its `.widgetURL` tap. Rendered as filled
-    /// circles rather than bare glyphs — Rajan's direct feedback: he loved
-    /// the buttons but "slightly made visible" was TOO slight to spot.
-    @ViewBuilder
-    private var historyChevrons: some View {
-        if entry.canGoBack || entry.canGoForward {
-            HStack(spacing: 4) {
-                if entry.canGoBack {
-                    Button(intent: PreviousHighlightIntent(scopeKey: scopeKey)) {
-                        chevronGlyph("chevron.backward")
-                    }
-                    .buttonStyle(.plain)
-                }
-                if entry.canGoForward {
-                    Button(intent: NextHighlightIntent(scopeKey: scopeKey)) {
-                        chevronGlyph("chevron.forward")
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
 
     /// Shares the exact quote showing, as its `cobux://` deep link -- tapping
     /// it on the recipient's own phone (if they have Cobux) opens straight to
@@ -201,8 +163,7 @@ struct CobuxWidgetEntryView: View {
     /// goes to. `systemMedium`/`systemLarge` only: `systemSmall`'s two
     /// corners are already spoken for (`shuffleButton`, `historyChevrons`),
     /// and it's the tightest layout of the three to begin with -- see
-    /// `chevronReserve`'s own doc comment on why that family gets protected
-    /// rather than crowded further.
+    /// that family is the tightest layout and gets protected rather than crowded further.
     @ViewBuilder
     private var shareButton: some View {
         if let bookID = entry.bookID, let highlightID = entry.highlightID {
@@ -216,13 +177,53 @@ struct CobuxWidgetEntryView: View {
         }
     }
 
-    private func chevronGlyph(_ systemName: String) -> some View {
+    /// Every control in the cluster is this exact glyph -- one size, one shape,
+    /// one tint. They used to differ: the chevrons were 24pt tinted circles at
+    /// bottom-LEADING while the open-in-app control was a larger rounded square
+    /// at bottom-TRAILING. Three controls, two shapes, two sizes, opposite
+    /// corners. That mismatch is what read as unfinished ("looks little weird
+    /// and not simple and clean"), not any one button.
+    private func controlGlyph(_ systemName: String) -> some View {
         Image(systemName: systemName)
-            .font(.caption.weight(.bold))
+            .font(.caption2.weight(.bold))
             .foregroundStyle(accent)
-            .frame(width: 24, height: 24)
-            .background(accent.opacity(0.18), in: Circle())
-            .padding(2)
+            .frame(width: 22, height: 22)
+    }
+
+    /// Back / forward / open, grouped into a single capsule at the bottom-right.
+    ///
+    /// One object instead of three floating ones, on the thumb side he asked
+    /// for. The shared capsule does the visual work that three separate
+    /// backgrounds were doing badly: the controls read as one related set, and
+    /// the quote keeps the attention -- his standing note that he likes the
+    /// controls visible but never competing with the highlight.
+    ///
+    /// Chevrons still render only when their tap would do something, so a fresh
+    /// widget shows just the open control and the capsule shrinks to fit rather
+    /// than reserving space for buttons that aren't there.
+    @ViewBuilder
+    private var controlCluster: some View {
+        HStack(spacing: 2) {
+            if entry.canGoBack {
+                Button(intent: PreviousHighlightIntent(scopeKey: scopeKey)) {
+                    controlGlyph("chevron.backward")
+                }
+                .buttonStyle(.plain)
+            }
+            if entry.canGoForward {
+                Button(intent: NextHighlightIntent(scopeKey: scopeKey)) {
+                    controlGlyph("chevron.forward")
+                }
+                .buttonStyle(.plain)
+            }
+            Link(destination: tapDestination) {
+                controlGlyph("arrow.up.forward")
+            }
+        }
+        .padding(.horizontal, 3)
+        .padding(.vertical, 1)
+        .background(accent.opacity(0.14), in: Capsule())
+        .fixedSize()
     }
 
     private var mediumBody: some View {
@@ -236,21 +237,14 @@ struct CobuxWidgetEntryView: View {
                 Text(entry.quote)
                     .font(.system(.subheadline, design: .serif))
                     .italic()
-                    .lineLimit(4)
-                    .minimumScaleFactor(0.85)
+                    .lineLimit(7)
+                    .minimumScaleFactor(0.6)
 
-                Text(citation)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .padding(.leading, shuffleReserve)
-                    .padding(.trailing, chevronReserve)
+                footerRow(Text(citation))
             }
         }
         .padding(4)
-        .overlay(alignment: .topLeading) { shareButton }
-        .overlay(alignment: .bottomLeading) { shuffleButton }
-        .overlay(alignment: .bottomTrailing) { historyChevrons }
+        .overlay(alignment: .topTrailing) { shareButton }
     }
 
     private var largeBody: some View {
@@ -262,8 +256,8 @@ struct CobuxWidgetEntryView: View {
             Text(entry.quote)
                 .font(.system(.body, design: .serif))
                 .italic()
-                .lineLimit(9)
-                .minimumScaleFactor(0.85)
+                .lineLimit(14)
+                .minimumScaleFactor(0.6)
 
             Spacer(minLength: 0)
 
@@ -271,17 +265,10 @@ struct CobuxWidgetEntryView: View {
                 .fill(accent.opacity(0.3))
                 .frame(height: 1)
 
-            Text(citation)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .padding(.leading, shuffleReserve)
-                .padding(.trailing, chevronReserve)
+            footerRow(Text(citation))
         }
         .padding(4)
-        .overlay(alignment: .topLeading) { shareButton }
-        .overlay(alignment: .bottomLeading) { shuffleButton }
-        .overlay(alignment: .bottomTrailing) { historyChevrons }
+        .overlay(alignment: .topTrailing) { shareButton }
     }
 
     private var citation: String {
@@ -327,5 +314,32 @@ struct CobuxHighlightWidget: Widget {
             .systemSmall, .systemMedium, .systemLarge,
             .accessoryRectangular, .accessoryInline, .accessoryCircular
         ])
+    }
+}
+
+
+/// Makes the widget body cycle the highlight on tap, except on the lock-screen accessory
+/// families where a single small target should just open the app.
+private struct WidgetTapBehavior: ViewModifier {
+    let family: WidgetFamily
+    let destination: URL
+    let scopeKey: String?
+
+    private var isAccessory: Bool {
+        switch family {
+        case .accessoryRectangular, .accessoryInline, .accessoryCircular: true
+        default: false
+        }
+    }
+
+    func body(content: Content) -> some View {
+        if isAccessory {
+            content.widgetURL(destination)
+        } else {
+            Button(intent: CycleHighlightIntent(scopeKey: scopeKey)) {
+                content
+            }
+            .buttonStyle(.plain)
+        }
     }
 }

@@ -125,7 +125,12 @@ enum FlowQueueBuilder {
         excludedBookIDs: Set<UUID> = [],
         continuation: inout BatchContinuation,
         now: Date = .now,
-        recentlyShownIDs: Set<UUID> = []
+        recentlyShownIDs: Set<UUID> = [],
+        /// Caller-supplied so this builder stays pure and deterministic (the
+        /// whole point of `seedBase`, and what its tests rely on) -- the
+        /// "have we already greeted them today" state lives in
+        /// `StreakTracker.hasShownDailyOpenerToday`, read at the call site.
+        includeDailyOpener: Bool = true
     ) -> [FlowCard] {
         var rng = SeededRandomNumberGenerator(seed: seed(base: seedBase, forBatch: batch))
         let night = isNight(now)
@@ -159,6 +164,24 @@ enum FlowQueueBuilder {
             if !fresh.isEmpty {
                 highlights = fresh + seen
             }
+        }
+
+        // Highlights that can't be read on their own go to the BACK, never out.
+        //
+        // Flow deals a highlight full-screen with no surrounding page, so a
+        // fragment like "He was right about this" arrives as a card the reader
+        // cannot parse at all -- his report: "some of the flow highlights are
+        // just randomly picked or something cause i can't fucking comprehend
+        // what they mean by just reading the flow highlight."
+        //
+        // A soft demotion, matching the recently-shown pass above, rather than
+        // a filter: a small library must still get a full feed, and a fragment
+        // is worth showing eventually rather than never. Same reasoning that
+        // made the recency pass a reorder instead of an exclusion.
+        let standalone = highlights.filter { Self.readsStandalone($0.text) }
+        let fragments = highlights.filter { !Self.readsStandalone($0.text) }
+        if !standalone.isEmpty {
+            highlights = standalone + fragments
         }
 
         let lessons: [(Chapter, Int)] = sourceBooks.flatMap(\.chapters).flatMap { chapter in
@@ -213,7 +236,10 @@ enum FlowQueueBuilder {
         // count uses the SAME filters as the cloze pool (gradeable, not
         // recently reviewed) so the number never promises cards the feed
         // can't actually surface.
-        if batch == 0 {
+        // `batch == 0` alone was never enough: every Flow open starts a new
+        // session at batch 0, so this greeting re-dealt itself on every
+        // reopen. `includeDailyOpener` carries the once-per-DAY half.
+        if batch == 0 && includeDailyOpener {
             let dueCount = allQuestions.filter { question in
                 guard !question.isSuspended, question.correctAnswerIndex != nil else { return false }
                 guard let dueDate = question.dueDate, dueDate <= now else { return false }
@@ -296,5 +322,29 @@ enum FlowQueueBuilder {
             guard !question.isSuspended, let dueDate = question.dueDate else { return false }
             return dueDate > now && dueDate <= tomorrow
         }.count
+    }
+
+    /// Whether a highlight can be understood with no surrounding page.
+    ///
+    /// Three cheap signals, deliberately conservative -- this only reorders, so
+    /// a false negative costs a highlight its place near the front, never its
+    /// place in the feed:
+    /// - too short to carry a complete thought on its own
+    /// - no terminal punctuation, i.e. it was clipped mid-sentence
+    /// - opens on a bare referential word whose antecedent lives in the
+    ///   paragraph above, which Flow does not show
+    static func readsStandalone(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 40 else { return false }
+        guard let last = trimmed.last, ".!?\u{201D}\"')".contains(last) else { return false }
+        let opener = trimmed
+            .prefix(while: { !$0.isWhitespace })
+            .trimmingCharacters(in: .punctuationCharacters)
+            .lowercased()
+        let dangling: Set<String> = [
+            "this", "that", "these", "those", "it", "its", "he", "she", "they", "them",
+            "but", "which", "therefore", "thus", "and", "so", "because", "however", "hence"
+        ]
+        return !dangling.contains(opener)
     }
 }

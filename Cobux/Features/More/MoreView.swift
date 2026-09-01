@@ -1,5 +1,22 @@
 import SwiftUI
 
+/// Destinations under More that something OUTSIDE the view can push -- today
+/// the Journal widget and the `cobux://journal` deep link.
+///
+/// The ordinary rows here use `NavigationLink(destination:)`, which is fine for
+/// a tap but can't be triggered programmatically: there's no value to append to
+/// the tab's `NavigationPath`. Rather than convert every row (churn with no
+/// benefit -- the others have no external entry point), this adds one typed
+/// route for the destinations that genuinely need to be reachable from a
+/// widget, a deep link, or a future Shortcut.
+enum MoreRoute: Hashable {
+    /// Journal's list. `startingNewEntry` opens the compose sheet straight
+    /// away, which is the whole point of the widget's "write" tap -- Rajan's
+    /// reminder was "Cobux journal widget direct", i.e. land on the page you
+    /// actually came to use, not two taps short of it.
+    case journal(startingNewEntry: Bool)
+}
+
 /// Landing point for the lower-priority tabs — Reminders and Settings
 /// (which already has its own Appearance/theme picker) — kept
 /// off the main tab bar so Library/Wisdom/Chat, the features actually used
@@ -40,6 +57,12 @@ struct MoreView: View {
                 // More is a menu, not content, so this is the one place that
                 // convention doesn't apply, and this NavigationLink is fine
                 // pushing onto More's own reset-on-leave path.
+                CobuxFormSection(title: "Saved") {
+                    NavigationLink(destination: LikedHighlightsView()) {
+                        Label("Liked", systemImage: "heart.fill")
+                    }
+                }
+
                 CobuxFormSection(title: "Journal") {
                     NavigationLink(destination: JournalListView()) {
                         Label("Journal", systemImage: "book.closed.fill")
@@ -56,14 +79,26 @@ struct MoreView: View {
                     NavigationLink(destination: ChangelogView()) {
                         Label("What's New", systemImage: "sparkles")
                     }
-                    #if DEBUG
+                    // Not #if DEBUG. DiagnosticLog writes in Release too, and its whole
+                    // purpose is letting a tester share what happened after a crash -- but
+                    // the only viewer was compiled out of exactly the builds testers run,
+                    // so the log had no way out of the device. The launch-crash hunt this
+                    // was built for had to fall back to pulling logs off the phone by hand.
                     NavigationLink(destination: DiagnosticsView()) {
                         Label("Diagnostics", systemImage: "stethoscope")
                     }
-                    #endif
                 }
             }
             .navigationTitle("More")
+            // Programmatic counterpart to the Journal row's own NavigationLink,
+            // so a widget tap / deep link lands on the same screen the tap does
+            // (including its Face ID gate, which lives inside JournalListView).
+            .navigationDestination(for: MoreRoute.self) { route in
+                switch route {
+                case .journal(let startingNewEntry):
+                    JournalListView(startingNewEntry: startingNewEntry)
+                }
+            }
             .onAppear { streak = StreakTracker.currentStreak }
         }
     }

@@ -2,7 +2,7 @@ name: Cobux
 options:
   bundleIdPrefix: com.rajansharma
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "18.0"
     watchOS: "10.0"
   xcodeVersion: "27.0"
   generateEmptyDirectories: true
@@ -13,8 +13,8 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     TARGETED_DEVICE_FAMILY: "1"
-    MARKETING_VERSION: "2.1.0"
-    CURRENT_PROJECT_VERSION: "5"
+    MARKETING_VERSION: "2.5.22"
+    CURRENT_PROJECT_VERSION: "44"
     DEVELOPMENT_TEAM: "58Q76NHADF"
     CODE_SIGN_STYLE: "Automatic"
 
@@ -28,6 +28,15 @@ packages:
   SnapshotTesting:
     url: https://github.com/pointfreeco/swift-snapshot-testing
     from: 1.17.0
+  # Neural on-device TTS. Apple ships only compact system voices and gives apps
+  # no API to download, trigger, or even enumerate the good ones -- and Siri's
+  # voices aren't exposed to third parties at all. So the only way to sound
+  # good without a per-minute network bill is to bring our own synthesizer.
+  # MIT, runs on MLX, ~3.3x faster than real-time on an iPhone 13 Pro.
+  # This is what forces the iOS 18 floor above.
+  KokoroSwift:
+    url: https://github.com/mlalma/kokoro-ios
+    from: 1.0.8
 
 schemes:
   Cobux:
@@ -66,6 +75,14 @@ targets:
         excludes:
           - "**/.DS_Store"
           - "Resources/SeedBooks/**"
+          # Figures gets its own `type: folder` reference below (same reason as
+          # SeedBooks -- preserve the subdirectory instead of flattening to the
+          # bundle root), but unlike SeedBooks it was never excluded from this
+          # recursive path, so it was being bundled TWICE: once flattened via
+          # this path, once correctly via the folder reference below. 152 MB /
+          # 1,598 JPEGs at stake -- confirmed by reading this file directly,
+          # not just suspected.
+          - "Resources/Figures/**"
       # A real folder reference (blue folder), not a group -- this is what makes Xcode's
       # "Copy Bundle Resources" step preserve the SeedBooks/ subdirectory in the built app
       # instead of flattening its contents to the bundle root. Without `type: folder`, every
@@ -96,8 +113,16 @@ targets:
         CFBundleDisplayName: "Cobux"
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
-        NSMicrophoneUsageDescription: "Cobux uses your microphone in Voice Mode and Spoken Quiz so you can talk to your book wisdom, and quiz yourself, hands-free."
-        NSSpeechRecognitionUsageDescription: "Cobux uses speech recognition in Voice Mode and Spoken Quiz to turn what you say into a question for Cobux AI, or a graded quiz answer."
+        NSMicrophoneUsageDescription: "Cobux uses your microphone in Voice Mode and Spoken Quiz so you can talk to your book wisdom hands-free."
+        NSSpeechRecognitionUsageDescription: "Cobux uses speech recognition to turn what you say into a question for Cobux AI or a graded quiz answer."
+        NSFaceIDUsageDescription: "Cobux uses Face ID to keep your journal entries private."
+        # Apple requires BOTH Health purpose strings the moment the HealthKit
+        # entitlement is present -- its static check keys off the entitlement,
+        # not off which APIs you actually call. Cobux only ever READS (see
+        # HealthContextService: requestAuthorization passes toShare: []), so this
+        # string says exactly that rather than inventing a writing feature.
+        NSHealthUpdateUsageDescription: "Cobux never writes to Health. It only reads your mindful minutes and sleep to show beside your journal entries."
+        NSHealthShareUsageDescription: "Cobux can show your mindful minutes and last night's sleep beside your journal entries, so you can see how your writing tracks with how you actually felt. Read-only, stays on your device, and never leaves the app."
         # Cobux only ever makes standard HTTPS calls (to the Anthropic API) —
         # exempt from export compliance. Declaring this here skips the
         # compliance question on every future TestFlight/App Store upload.
@@ -122,6 +147,9 @@ targets:
       - target: CobuxWatch
         embed: true
       - package: CobuxCore
+      - package: KokoroSwift
+        product: KokoroSwift
+        embed: true
 
   CobuxWidgets:
     type: app-extension
@@ -133,7 +161,54 @@ targets:
       - path: Cobux/Models
       - path: Cobux/Extensions/Color+Hex.swift
       - path: Cobux/Services/StreakTracker.swift
+      - path: Cobux/Services/CobuxSchema.swift
+      # Shared read/write of the book-source exclusion set. Deliberately its
+      # own file, NOT BookSourceFilter.swift -- that one also holds a SwiftUI
+      # view, which an app-extension target has no business compiling.
+      - path: Cobux/Shared/BookSourceSharing.swift
+      # Shared with the app target rather than duplicated: `SelectBookIntent`
+      # (the Book Wisdom widget's configuration intent) needs a `BookEntity`
+      # picker backed by the real library, and this file already is exactly
+      # that -- an AppEntity + EntityQuery reading through
+      # CobuxSchema.makeAppGroupContainer(). Compiling one file into two
+      # targets is Apple's own documented pattern for widget configuration
+      # intents; the two copies are distinct types (Cobux.BookEntity vs
+      # CobuxWidgets.BookEntity) so nothing collides in the AppIntents
+      # registry. Its only dependencies -- Book and CobuxSchema -- are already
+      # in this target's sources above.
+      - path: Cobux/Intents/BookEntity.swift
+      # FSRSService (+ its CobuxCore dependency below) so the Quick Check
+      # widget's grade buttons write REAL scheduling state from the widget
+      # process, same as Flow's in-app quick checks -- not a parallel fake.
+      - path: Cobux/Services/FSRSService.swift
+      # A successful widget grade needs to tell the running host app its
+      # `@Query`-backed due counts are stale, same cross-process gap
+      # `CaptureQuoteIntent`/`ShareQuoteView` already solve for capturing a
+      # quote -- this file was missing from this target entirely (a plain
+      # `import` isn't enough across separate app-extension targets; each
+      # needs the source file itself in its own target membership).
+      - path: Cobux/Services/CrossProcessSync.swift
+      # Shared with the main app and now also the widget's own share button
+      # (`CobuxWidgetEntryView`'s `tapDestination` and `shareButton` both use
+      # it) -- see the file's own doc comment for why one shared builder
+      # replaces three independent hand-built strings.
+      - path: Cobux/Shared/CobuxDeepLink.swift
       - path: Cobux/DesignSystem/CobuxColor.swift
+      # `CobuxColor` resolves every token (`.cobuxAccent`/`.cobuxWarning`/etc.)
+      # through `Color("...")`, a runtime asset-catalog lookup against
+      # `Bundle.main` -- which inside an app extension is the EXTENSION's own
+      # bundle, not the host app's. Without the catalog itself bundled here,
+      # `CobuxQuizLiveActivity`'s `.tint(Color.cobuxAccent)` and
+      # `QuickCheckWidgetView`'s `.tint(.cobuxWarning)` /
+      # `.foregroundStyle(Color.cobuxWarning)` were silently resolving to
+      # nothing (a String-literal lookup, so this compiles clean either way --
+      # nothing catches it except actually reasoning through target
+      # membership). Bundling the real catalog is what makes those tokens
+      # resolve to the intended light/dark colors instead of falling back to
+      # whatever undefined color a miss renders as.
+      - path: Cobux/Resources/Assets.xcassets
+    dependencies:
+      - package: CobuxCore
     info:
       path: Generated/CobuxWidgets-Info.plist
       properties:
@@ -159,6 +234,7 @@ targets:
       - path: Cobux/Models
       - path: Cobux/Services/SpotlightIndexer.swift
       - path: Cobux/Services/CrossProcessSync.swift
+      - path: Cobux/Services/CobuxSchema.swift
       - path: Cobux/DesignSystem/CobuxColor.swift
       - path: Cobux/Extensions/Color+Hex.swift
     info:
@@ -244,6 +320,13 @@ targets:
     platform: iOS
     sources:
       - path: Tests
+      # Compiled in alongside the tests rather than reached through the app
+      # module: it lives in the widget extension, which the test bundle can't
+      # import. It is deliberately dependency-free (Foundation only) so this
+      # costs nothing -- the App-Group/UserDefaults half stays in
+      # WidgetHighlightHistory, which is NOT compiled here, so the tests can't
+      # touch Rajan's real device state.
+      - path: CobuxWidgets/WidgetHistoryState.swift
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES

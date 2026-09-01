@@ -57,6 +57,29 @@ class ClaudeService: AIService {
         static let `default` = RequestOptions()
     }
 
+    /// Off by default, and that default is a real cost decision, not a stylistic
+    /// one. Claude Sonnet 5 reasons adaptively unless told not to, and thinking
+    /// tokens bill as OUTPUT -- the most expensive class -- while never being
+    /// shown to the user. Cobux never asked for it: the request simply omitted
+    /// the `thinking` field, so the API default applied and every text chat
+    /// message quietly paid for reasoning nobody chose.
+    ///
+    /// That was already understood for voice -- `RequestOptions`' own doc
+    /// comment above says thinking "buys nothing for short retrieval-grounded
+    /// spoken answers" -- and text chat is the same retrieval-grounded shape,
+    /// so the same logic simply hadn't been applied there.
+    ///
+    /// It's a toggle rather than a blanket disable because it genuinely earns
+    /// its cost somewhere: Symposium Mode (answering as several authors, then
+    /// finding where they'd disagree) is real multi-source synthesis, not
+    /// lookup. So the expensive mode stays available and deliberate -- the user
+    /// decides when a question is worth it, instead of paying on every message.
+    static let extendedThinkingKey = "cobux.chat.extendedThinking"
+
+    static var extendedThinkingEnabled: Bool {
+        UserDefaults.standard.bool(forKey: extendedThinkingKey)
+    }
+
     var apiKey: String
     var isLoading: Bool = false
 
@@ -436,7 +459,12 @@ class ClaudeService: AIService {
             "messages": messages,
             "stream": stream
         ]
-        if options.thinkingDisabled {
+        // Explicit either way -- never leave `thinking` unset and inherit the
+        // API default, which is what made every text chat message pay for
+        // hidden reasoning nobody opted into. `thinkingDisabled` still forces
+        // it off regardless (voice), otherwise the user's own Settings toggle
+        // decides, defaulting OFF.
+        if options.thinkingDisabled || !Self.extendedThinkingEnabled {
             body["thinking"] = ["type": "disabled"]
         }
 

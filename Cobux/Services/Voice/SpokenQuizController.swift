@@ -78,6 +78,7 @@ final class SpokenQuizController: NSObject, AVSpeechSynthesizerDelegate {
             try session.setCategory(.playAndRecord, mode: .default, options: [.duckOthers, .defaultToSpeaker])
             try session.setActive(true, options: .notifyOthersOnDeactivation)
             sessionActive = true
+            registerAudioObservers()
         } catch {
             onError?("Couldn't set up the audio session.")
             return
@@ -90,9 +91,79 @@ final class SpokenQuizController: NSObject, AVSpeechSynthesizerDelegate {
         synthesizer.stopSpeaking(at: .immediate)
         silenceTimer?.invalidate()
         silenceTimer = nil
+        NotificationCenter.default.removeObserver(self)
         guard sessionActive else { return }
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        deactivateSession()
         sessionActive = false
+    }
+
+    // MARK: - Audio interruptions and route changes
+
+    /// Same teardown gaps `VoiceSessionController` had, and for the same reason: a phone call
+    /// or a Bluetooth disconnect stopped the engine with nothing listening for it, leaving the
+    /// quiz sitting in `.listening` with a dead microphone.
+    private func registerAudioObservers() {
+        let center = NotificationCenter.default
+        center.removeObserver(self)
+        center.addObserver(
+            self, selector: #selector(handleInterruption(_:)),
+            name: AVAudioSession.interruptionNotification, object: AVAudioSession.sharedInstance()
+        )
+        center.addObserver(
+            self, selector: #selector(handleConfigurationChange(_:)),
+            name: .AVAudioEngineConfigurationChange, object: audioEngine
+        )
+    }
+
+    @objc private func handleInterruption(_ note: Notification) {
+        guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.sessionActive else { return }
+            switch type {
+            case .began:
+                self.synthesizer.stopSpeaking(at: .immediate)
+                self.stopListeningInternal()
+            case .ended:
+                let options = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt)
+                    .map(AVAudioSession.InterruptionOptions.init(rawValue:)) ?? []
+                guard options.contains(.shouldResume) else { return }
+                try? AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
+                self.startListening()
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    @objc private func handleConfigurationChange(_ note: Notification) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.sessionActive, self.state == .listening else { return }
+            self.stopListeningInternal()
+            self.startListening()
+        }
+    }
+
+    /// `setActive(false)` throws while audio IO is still winding down; the old `try?` swallowed
+    /// it and left Cobux holding audio focus after the quiz ended.
+    private func deactivateSession() {
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            DiagnosticLog.log("spoken quiz: audio session deactivate failed (\(error)); retrying")
+            DispatchQueue.main.async {
+                try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            }
+        }
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        if sessionActive {
+            audioEngine.stop()
+            synthesizer.stopSpeaking(at: .immediate)
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 
     // MARK: - Question flow
@@ -111,7 +182,15 @@ final class SpokenQuizController: NSObject, AVSpeechSynthesizerDelegate {
 
     private func speak(_ text: String) {
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: AVSpeechSynthesisVoice.currentLanguageCode())
+        // `VoicePreference.selectedVoice()`, exactly like `VoiceSessionController`
+        // -- NOT `AVSpeechSynthesisVoice(language:)`, which is the plain system
+        // default (the old robotic Samantha-class voice) and ignored both the
+        // user's explicit Settings pick AND the automatic
+        // best-quality-available fallback. Voice Mode has always honored the
+        // preference; Spoken Quiz silently didn't, so the same app spoke in two
+        // different voices depending on which screen you were on.
+        utterance.voice = VoicePreference.selectedVoice()
+            ?? AVSpeechSynthesisVoice(language: AVSpeechSynthesisVoice.currentLanguageCode())
         synthesizer.speak(utterance)
     }
 

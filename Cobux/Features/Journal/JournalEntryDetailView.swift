@@ -55,8 +55,9 @@ struct JournalEntryDetailView: View {
                     Button {
                         showingContinue = true
                     } label: {
-                        Label("Continue Entry", systemImage: "square.and.pencil")
+                        Label("Continue Entry", systemImage: "square.and.pencil.circle")
                     }
+                    .labelStyle(.titleAndIcon)
                 }
             }
         }
@@ -86,6 +87,8 @@ struct JournalEntryDetailView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
+                    statsBar
+
                     Text(entry.text)
                         .font(CobuxTypography.display(colorScheme, size: 17, weight: .regular))
                         .textSelection(.enabled)
@@ -100,6 +103,55 @@ struct JournalEntryDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Color.cobuxBackground)
+    }
+
+    /// The per-entry stats Apple's own Journal shows when reading an entry
+    /// back -- his ask verbatim: *"a bar displayed when later clicking back on
+    /// a specific journal item that displays stuff like total writing time and
+    /// etc. also the Apple officials journal app features like total words."*
+    ///
+    /// Words and reading time are derived from the text itself, so every
+    /// entry has them, imported ones included. Writing time reads
+    /// `writingSeconds`, which only compose sessions accumulate -- entries
+    /// from before the field existed (and imports, whose writing time is
+    /// genuinely unknown) simply don't show that segment rather than showing
+    /// a fake zero.
+    private var statsBar: some View {
+        let words = entry.text.split(whereSeparator: \.isWhitespace).count
+        // 200 wpm -- the same ballpark reading-time convention everywhere.
+        let readMinutes = max(1, Int((Double(words) / 200).rounded()))
+
+        return HStack(spacing: 14) {
+            statSegment(icon: "text.alignleft", label: "\(words) word\(words == 1 ? "" : "s")")
+            if let seconds = entry.writingSeconds, seconds > 0 {
+                statSegment(icon: "pencil", label: writingTimeLabel(seconds: seconds))
+            }
+            statSegment(icon: "book", label: "\(readMinutes) min read")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.cobuxSurface2, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func statSegment(icon: String, label: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.caption2)
+            Text(label)
+                .font(.caption)
+                .monospacedDigit()
+        }
+        .foregroundStyle(.secondary)
+    }
+
+    /// "45s" under a minute, "12 min" under an hour, "1h 20m" beyond --
+    /// short at every scale, never "0 min" for a real quick note.
+    private func writingTimeLabel(seconds: Int) -> String {
+        switch seconds {
+        case ..<60: return "\(seconds)s writing"
+        case ..<3600: return "\(seconds / 60) min writing"
+        default: return "\(seconds / 3600)h \((seconds % 3600) / 60)m writing"
+        }
     }
 
     /// The first photo, full-bleed with a bottom gradient scrim -- the same

@@ -85,7 +85,11 @@ struct MessageBubbleView: View {
             HStack {
                 if isUser { Spacer() }
 
-                VStack(alignment: .leading, spacing: 6) {
+                // 12/6 padding, spacing 4, lineSpacing 1 (was 14/8, 6, 2) — the
+                // chat-density fix. Rajan asked for more conversation per screen;
+                // density comes from trimming chrome, never from shrinking text,
+                // so every font size in this bubble is deliberately unchanged.
+                VStack(alignment: .leading, spacing: 2) {
                     if isError {
                         Label(content, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(Color.cobuxDanger)
@@ -98,7 +102,7 @@ struct MessageBubbleView: View {
                                 quoteBlock(block.text)
                             } else if !block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                 Text(inlineAttributed(block.text, color: isUser ? .white : .primary))
-                                    .lineSpacing(2)
+                                    .lineSpacing(1)
                                     .textSelection(.enabled)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
@@ -114,8 +118,8 @@ struct MessageBubbleView: View {
                         .padding(.top, 2)
                     }
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
                 .background(isUser ? AnyShapeStyle(accentColor) : AnyShapeStyle(Color.cobuxSurface))
                 .clipShape(ChatBubbleShape(direction: isUser ? .right : .left))
                 .overlay(
@@ -206,7 +210,7 @@ struct MessageBubbleView: View {
                 .frame(width: 3)
             Text(inlineAttributed(text, color: isUser ? .white.opacity(0.85) : .primary.opacity(0.75)))
                 .italic()
-                .lineSpacing(2)
+                .lineSpacing(1)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }

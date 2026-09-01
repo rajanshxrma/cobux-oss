@@ -122,6 +122,22 @@ final class CrashReportCollector: NSObject, MXMetricManagerSubscriber {
     /// Newest first within each group, current build's reports ahead of every
     /// stale one -- a tester should never have to scroll past reports from a
     /// build they're not even running to find the one that matters right now.
+    /// Dates Cobux is known to have crashed, newest first, from the saved
+    /// reports' own file timestamps.
+    ///
+    /// Used by `StreakTracker` to avoid punishing the user for the app's own
+    /// failure: builds 25-30 crashed on launch for several days, which silently
+    /// broke a real streak because the app simply could not be opened. A streak
+    /// is a promise about the user's consistency, not the build's.
+    static func crashDates() -> [Date] {
+        let urls = (try? FileManager.default.contentsOfDirectory(
+            at: reportsDirectory, includingPropertiesForKeys: [.contentModificationDateKey]
+        )) ?? []
+        return urls.compactMap {
+            (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        }.sorted(by: >)
+    }
+
     static func savedReports() -> [StoredReport] {
         let urls = (try? FileManager.default.contentsOfDirectory(
             at: reportsDirectory, includingPropertiesForKeys: nil

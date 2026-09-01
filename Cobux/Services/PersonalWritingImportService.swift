@@ -1,7 +1,7 @@
 import SwiftData
 import Foundation
 
-/// Imports Rajan's personal-writing export (Apple Notes "21writing"/
+/// Imports Rajan's personal-writing export (Apple Notes 
 /// "Journal" folders, plus reflective notes from his general Notes) into
 /// `PersonalWritingEntry` rows, so chat can draw on them the same way it
 /// already draws on book highlights (`SearchService.relevantPersonalWriting`).
@@ -92,9 +92,29 @@ enum PersonalWritingImportService {
     /// thread the way one long unyielded loop of on-device ML inference
     /// would.
     @discardableResult
-    static func importData(_ data: Data, modelContext: ModelContext) async throws -> ImportResult {
+    /// - Parameter deferEmbeddings: skip the per-entry embedding pass, leaving
+    ///   `embedding` nil for `backfillPersonalWritingEmbeddings` to fill in later.
+    ///   Embedding every entry inline is the single slowest part of an import
+    ///   (one model call each, hundreds of entries), and it delays the thing the
+    ///   user is actually waiting for: seeing today's journal in the app. Nothing
+    ///   is lost -- an entry without an embedding is fully readable and editable,
+    ///   it just isn't semantically searchable until the backfill runs.
+    static func importData(
+        _ data: Data,
+        modelContext: ModelContext,
+        deferEmbeddings: Bool = false
+    ) async throws -> ImportResult {
         let decoder = JSONDecoder()
-        let entries = try decoder.decode([ExportedEntry].self, from: data)
+        let decoded = try decoder.decode([ExportedEntry].self, from: data)
+
+        // Newest first. The file arrives in whatever order it was assembled, so
+        // a 245-entry import could spend a minute on 2019 before reaching the
+        // entry written this morning -- which is the one he opened the app for.
+        // Combined with the save-every-10 below, the most recent entries are on
+        // screen within the first fraction of the work.
+        let entries = decoded.sorted { a, b in
+            (parseModifiedDate(a.modifiedDate) ?? .distantPast) > (parseModifiedDate(b.modifiedDate) ?? .distantPast)
+        }
 
         let existing = (try? modelContext.fetch(FetchDescriptor<PersonalWritingEntry>())) ?? []
         var existingKeys = Set(existing.map { DedupeKey(source: $0.source, title: $0.title, text: $0.text) })
@@ -113,7 +133,7 @@ enum PersonalWritingImportService {
 
             let modifiedDate = parseModifiedDate(entry.modifiedDate)
             let row = PersonalWritingEntry(source: entry.source, title: entry.title, text: entry.text, modifiedDate: modifiedDate)
-            if let vector = EmbeddingService.embed(entry.text) {
+            if !deferEmbeddings, let vector = EmbeddingService.embed(entry.text) {
                 row.embedding = vector
             }
             modelContext.insert(row)

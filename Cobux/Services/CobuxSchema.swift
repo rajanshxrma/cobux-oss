@@ -22,10 +22,22 @@ enum CobuxSchema {
     /// Every process opening the shared App-Group store (the app itself, the Share
     /// Extension, widgets, App Intents) should build its container through this,
     /// not a hand-typed schema list.
+    ///
+    /// `cloudKitDatabase: .none` is load-bearing, not stylistic -- see
+    /// `ModelContainerFactory`'s doc comment for the full story: the default
+    /// `.automatic` silently turns on SwiftData-CloudKit mirroring for any
+    /// process whose entitlements carry an iCloud container, and this schema
+    /// (deliberately) fails CloudKit's every-attribute-needs-a-default rule,
+    /// which crashed the app at launch for four straight builds.
     static func makeAppGroupContainer() -> ModelContainer? {
         try? ModelContainer(
             for: Schema(all),
-            configurations: ModelConfiguration(schema: Schema(all), groupContainer: .identifier(appGroupID))
+            configurations: ModelConfiguration(
+                schema: Schema(all),
+                isStoredInMemoryOnly: false,
+                groupContainer: .identifier(appGroupID),
+                cloudKitDatabase: .none
+            )
         )
     }
 }

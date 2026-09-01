@@ -9,6 +9,26 @@ struct CobuxApp: App {
         // iOS delivers a crash's diagnostic payload on the launch AFTER the
         // crash, so the subscriber must exist before anything else can fail.
         CrashReportCollector.shared.start()
+
+        // Set here, synchronously, in `init()` — before `body` is ever
+        // evaluated and before any view's `.task` anywhere in the app could
+        // possibly start — rather than relying on SwiftUI's `.task`
+        // scheduling order between two independently-created tasks (this
+        // one and `ContentView`'s own launch `.task`, which reads this same
+        // flag). `App` conformance is `@MainActor`-isolated by inference
+        // (confirmed by `CrashReportCollector.shared.start()` above already
+        // running here with no `await`/`MainActor.run`), so this is a plain
+        // synchronous main-actor write, not a race with anything. `body`'s
+        // own `.task` still does the ACTUAL seeding work and resolves this
+        // back to `false` once it determines there's nothing to mutate —
+        // this only closes the window where it could ever read `false`
+        // while a mutating pass is about to start.
+        SeedingStatus.shared.isSeeding = true
+
+        // Before anything reads the streak: don't let OUR crashes cost HIS
+        // streak. Builds 25-30 crashed on launch for days, which silently
+        // reset a real streak because the app couldn't be opened at all.
+        StreakTracker.forgiveStreakBreakFromCrashes(CrashReportCollector.crashDates())
     }
 
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
@@ -37,6 +57,12 @@ struct CobuxApp: App {
                         // itself won't double-invoke it for an unchanged view, and
                         // `SeedGate` below is a second, explicit belt-and-braces guard so
                         // this can't recur even if some future edge case re-triggers it.
+                        //
+                        // `isSeeding` is already `true` by the time this runs -- set
+                        // synchronously in `init()` above, before `body` (and therefore
+                        // this `.task`, and every other `.task` in the app) is ever
+                        // evaluated. See `init()`'s doc comment for why that's the real
+                        // fix, not just this `.task` setting it early.
                         .task {
                             await Self.seedDatabase(container: sharedModelContainer)
                         }
@@ -104,9 +130,26 @@ struct CobuxApp: App {
         // full-table scans take -- brief, not the multi-second "populate
         // 1,300 highlights" case a fresh install actually needs.
         DiagnosticLog.log("seed started, isFirstRun=\(isFirstRun)")
+        // Durable, write-once record of whether THIS install was ever
+        // genuinely fresh (empty store) the first time it was ever seeded --
+        // `AutoRestoreService` reads this instead of inferring freshness from
+        // `AutoBackupService`'s own throttle key, which is absent on every
+        // existing install's first launch of a build that ships automatic
+        // backup for the first time, not just on a real fresh install.
+        // Written once, first launch only -- later launches (where the store
+        // already has books, so `isFirstRun` would read `false`) must never
+        // overwrite the true original signal.
+        let freshInstallKey = "cobux.install.wasFreshOnFirstSeed"
+        if UserDefaults.standard.object(forKey: freshInstallKey) == nil {
+            UserDefaults.standard.set(isFirstRun, forKey: freshInstallKey)
+        }
+        // `isSeeding` itself is already `true` -- set synchronously at the call
+        // site in `body` above, before this function's first suspension point,
+        // specifically to close the race window other launch-time `.task`s
+        // could otherwise win. Only the message (which depends on `isFirstRun`,
+        // only known after the fetch above) is new information here.
         await MainActor.run {
             SeedingStatus.shared.message = isFirstRun ? "Setting up your library…" : "Syncing your library…"
-            SeedingStatus.shared.isSeeding = true
         }
 
         // The two large medical reference books stay as hand-written Swift —
@@ -118,21 +161,44 @@ struct CobuxApp: App {
         // `SeedData.swift`/`SeedDataAttached.swift`/`SeedDataValueOfOthers.swift`
         // as unused dead code pending a cleanup pass, rather than risk
         // touching them further tonight).
-        SeedData.seedMicrobiology(modelContext: context)
-        SeedData.seedRobbins(modelContext: context)
+        // The two medical textbooks (and their 1,597 clinical figures) exist for
+        // Rajan's brother, a med student. Every other install was getting them
+        // too, so a new user's Library opened on Robbins and Microbiology and
+        // their quizzes drew from pathology -- his own note that "a lot of the
+        // other people are not gonna be med students... Utkarsh's desires should
+        // be a SUBSET of Cobux, and Cobux should cater to the rest generically."
+        //
+        // Gated on the persona chosen in onboarding rather than removed: the
+        // exam path is exactly who they're for, and existing installs keep them
+        // because `hasSeededMedicalReference` is set true for anyone who already
+        // has them (see the migration below).
+        if UserPersona(rawValue: UserDefaults.standard.string(forKey: UserPersona.storageKey) ?? "") == .exam
+            || UserDefaults.standard.bool(forKey: Self.medicalSeedKey) {
+            SeedData.seedMicrobiology(modelContext: context)
+            SeedData.seedRobbins(modelContext: context)
+            FigureSeedLoader.seedBundledFigures(modelContext: context)
+            UserDefaults.standard.set(true, forKey: Self.medicalSeedKey)
+        }
         SeedLoader.seedAllBundledBooks(modelContext: context)
-        FigureSeedLoader.seedBundledFigures(modelContext: context)
 
         // Safety net: each seed function above already guards against duplicates
         // by title, but if the underlying store ever changes out from under us
         // (e.g. moving to a new ModelConfiguration/container) a seed can end up
         // silently missing. Re-run any seed whose book didn't make it in.
         let existingTitles = Set(((try? context.fetch(FetchDescriptor<Book>())) ?? []).map(\.title))
-        if !existingTitles.contains("Essentials of Medical Microbiology") {
-            SeedData.seedMicrobiology(modelContext: context)
+        // Migration: anyone who ALREADY has the medical books keeps them, so an
+        // existing library never loses content because of the gate above.
+        if existingTitles.contains("Robbins & Cotran Pathologic Basis of Disease")
+            || existingTitles.contains("Essentials of Medical Microbiology") {
+            UserDefaults.standard.set(true, forKey: Self.medicalSeedKey)
         }
-        if !existingTitles.contains("Robbins & Cotran Pathologic Basis of Disease") {
-            SeedData.seedRobbins(modelContext: context)
+        if UserDefaults.standard.bool(forKey: Self.medicalSeedKey) {
+            if !existingTitles.contains("Essentials of Medical Microbiology") {
+                SeedData.seedMicrobiology(modelContext: context)
+            }
+            if !existingTitles.contains("Robbins & Cotran Pathologic Basis of Disease") {
+                SeedData.seedRobbins(modelContext: context)
+            }
         }
 
         // Devices that already ran the re-entrant-seeding bug (fixed by `SeedGate`
@@ -272,6 +338,12 @@ struct CobuxApp: App {
     // nil embedding" case this already exists to handle, and there's no
     // reason to make a just-recovered library wait for the next cold launch
     // to become fully searchable again.
+    /// Set once for anyone who has the medical textbooks -- either because they
+    /// chose the exam persona, or because they already had them before the gate
+    /// existed. Keyed separately from the persona so switching persona later
+    /// never deletes books out from under someone.
+    static let medicalSeedKey = "cobux.seed.medicalReference"
+
     static func backfillEmbeddingsAndReindex(container: ModelContainer) async {
         let backgroundContext = ModelContext(container)
 

@@ -73,7 +73,19 @@ struct ChatView: View {
     @State private var monthlyEstimate: Double = 0
     /// nil = the general "Cobux" thread; a Book's id = that book's own
     /// persistent, scoped thread (see `ChatMessage.bookID`).
-    @State private var selectedBookID: UUID?
+    ///
+    /// Restored from the last thread he was in, not reset to General on every launch.
+    /// Plain `@State` meant relaunching always landed on General and then restored
+    /// GENERAL's scroll position -- so the careful per-thread scroll restore below was
+    /// doing precise work on the wrong thread. His ask: "fix the coming in the chat
+    /// Cobux it should open to wherever the user last left the Cobux chat reading."
+    @State private var selectedBookID: UUID? = {
+        guard let stored = UserDefaults.standard.string(forKey: lastThreadKey) else { return nil }
+        return stored.isEmpty ? nil : UUID(uuidString: stored)
+    }()
+
+    /// "" encodes the General thread, distinct from an absent key (never chosen).
+    fileprivate static let lastThreadKey = "cobux.chat.lastThreadID"
     @State private var showSymposiumExplanation = false
     @State private var showingBookThreadPicker = false
     @AppStorage("hasSeenSymposiumExplanation") private var hasSeenSymposiumExplanation = false
@@ -92,6 +104,17 @@ struct ChatView: View {
     /// actually stable across reloads.
     @State private var visibleMessageTimestamps: Set<Date> = []
 
+    /// Gates every scroll-position write until the initial restore for the
+    /// current thread has actually landed. Without this, the reactive persist
+    /// on `visibleMessageTimestamps` fires while the list is still rendering
+    /// at its natural top -- rows' own `.onAppear` can even run BEFORE this
+    /// view's `.onAppear` reads the saved value -- so the position being
+    /// restored was overwritten with "top of thread" in the exact window the
+    /// restore needed it. Set true either when `restoreScrollPosition`
+    /// declines (nothing saved -- the natural top IS the truth) or once the
+    /// restore's `scrollTo` has been issued; reset on every thread switch.
+    @State private var hasRestoredScroll = false
+
     /// Soft warning threshold — Rajan's brother's key is capped around $5/mo;
     /// this isn't fetched from anywhere (Anthropic doesn't expose the cap
     /// itself to the app), it's just a reasonable default matching that
@@ -99,55 +122,24 @@ struct ChatView: View {
     /// never at all. See `UsageTracker` for how the estimate itself is built.
     private let budgetWarningThreshold: Double = 4.0
 
+    private var isJournalThread: Bool {
+        selectedBookID == ChatPromptBuilder.journalThreadID
+    }
+
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                if symposiumModeEnabled {
-                    symposiumBadge
+            // The journal thread's content (its history quotes journal
+            // entries back verbatim) sits behind the same Face ID gate as
+            // every Journal screen -- one shared `JournalLocked`, not a
+            // reimplementation. Wrapping only the chat body keeps the toolbar
+            // thread picker reachable, so a locked user can still switch to
+            // any other thread without authenticating.
+            Group {
+                if isJournalThread {
+                    JournalLocked { chatBody }
+                } else {
+                    chatBody
                 }
-                if monthlyEstimate >= budgetWarningThreshold {
-                    budgetWarningBanner
-                }
-
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: 8) {
-                            if messages.isEmpty {
-                                emptyStateView
-                            } else {
-                                ForEach(messages, id: \.id) { msg in
-                                    MessageBubbleView(
-                                        content: msg.content,
-                                        isUser: msg.isUser,
-                                        timestamp: msg.timestamp,
-                                        referencedBooks: msg.referencedBooks,
-                                        isError: msg.isError,
-                                        isStreaming: msg.isStreaming,
-                                        accentColor: currentThreadAccent,
-                                        referencedFigureID: msg.referencedFigureID
-                                    )
-                                    .id(msg.id)
-                                    .onAppear { visibleMessageTimestamps.insert(msg.timestamp) }
-                                    .onDisappear { visibleMessageTimestamps.remove(msg.timestamp) }
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                    }
-                    .scrollDismissesKeyboard(.interactively)
-                    .onTapGesture {
-                        isInputFocused = false
-                    }
-                    .onChange(of: scrollTarget) { _, target in
-                        guard let target else { return }
-                        withAnimation(.easeOut(duration: 0.3)) {
-                            proxy.scrollTo(target, anchor: .top)
-                        }
-                    }
-                }
-
-                inputBar
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -217,6 +209,7 @@ struct ChatView: View {
                 }
             }
             .onAppear {
+                validateRestoredThread()
                 applyPendingDeepLinkBookID()
                 checkAPIKey()
                 loadChatHistory()
@@ -238,7 +231,7 @@ struct ChatView: View {
             .onChange(of: visibleMessageTimestamps) { _, _ in
                 persistScrollPosition(forThread: selectedBookID)
             }
-            .onChange(of: selectedBookID) { oldValue, _ in
+            .onChange(of: selectedBookID) { oldValue, newValue in
                 // Switching threads mid-stream: cancel rather than let a
                 // response keep streaming into a thread the user has left.
                 // v1 deliberately keeps this simple — one active stream at a
@@ -250,6 +243,13 @@ struct ChatView: View {
                 // thread being LEFT passed explicitly rather than reading the
                 // now-stale-for-this-purpose `selectedBookID` itself.
                 persistScrollPosition(forThread: oldValue)
+                // Record the INCOMING thread as the resume thread right away --
+                // `persistScrollPosition` above just wrote the outgoing one, and
+                // the next gated persist may be a while off (the new thread's
+                // own restore has to land first), so without this a kill right
+                // after switching reopened on the thread just left.
+                UserDefaults.standard.set(newValue?.uuidString ?? "", forKey: Self.lastThreadKey)
+                hasRestoredScroll = false
                 visibleMessageTimestamps = []
                 loadChatHistory()
             }
@@ -269,6 +269,10 @@ struct ChatView: View {
                 // `applyPendingDeepLinkHighlightID`). A no-op unless a pending
                 // highlight ID is still waiting.
                 applyPendingDeepLinkHighlightID()
+                // Same cold-launch reasoning for the restored thread: the store
+                // can be empty when `.onAppear`'s validation ran, and this is
+                // the moment it has data to validate against.
+                validateRestoredThread()
             }
             .alert("API Key Required", isPresented: $showNoAPIKeyAlert) {
                 Button("OK", role: .cancel) { }
@@ -314,9 +318,71 @@ struct ChatView: View {
                     claudeService: claudeService,
                     selectedBookID: selectedBookID,
                     symposiumModeEnabled: symposiumModeEnabled,
-                    initialConversationHistory: conversationHistory
+                    initialConversationHistory: conversationHistory,
+                    personalWritingEntries: personalWritingEntries
                 )
             }
+        }
+    }
+
+    /// The actual conversation surface -- extracted from `body` so the
+    /// journal thread can wrap exactly this (and not the toolbar/sheets) in
+    /// `JournalLocked`.
+    private var chatBody: some View {
+        VStack(spacing: 0) {
+            if symposiumModeEnabled {
+                symposiumBadge
+            }
+            if monthlyEstimate >= budgetWarningThreshold {
+                budgetWarningBanner
+            }
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    // One step tighter (was 8) as the inter-bubble half of the
+                    // chat-density fix — see `MessageBubbleView` for the rest.
+                    LazyVStack(spacing: 6) {
+                        if messages.isEmpty {
+                            emptyStateView
+                        } else {
+                            ForEach(messages, id: \.id) { msg in
+                                MessageBubbleView(
+                                    content: msg.content,
+                                    isUser: msg.isUser,
+                                    timestamp: msg.timestamp,
+                                    referencedBooks: msg.referencedBooks,
+                                    isError: msg.isError,
+                                    isStreaming: msg.isStreaming,
+                                    accentColor: currentThreadAccent,
+                                    referencedFigureID: msg.referencedFigureID
+                                )
+                                .id(msg.id)
+                                .onAppear { visibleMessageTimestamps.insert(msg.timestamp) }
+                                .onDisappear { visibleMessageTimestamps.remove(msg.timestamp) }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .onTapGesture {
+                    isInputFocused = false
+                }
+                .onChange(of: scrollTarget) { _, target in
+                    guard let target else { return }
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        proxy.scrollTo(target, anchor: .top)
+                    }
+                    // The initial restore's scroll has been issued -- from
+                    // here on, what's visible reflects where the user
+                    // actually is, so persisting becomes safe. Also runs
+                    // for send-message nudges, where it's a no-op.
+                    hasRestoredScroll = true
+                }
+            }
+
+            inputBar
         }
     }
 
@@ -355,7 +421,7 @@ struct ChatView: View {
 
     private var inputBar: some View {
         HStack {
-            TextField("Ask about your books...", text: $inputText, axis: .vertical)
+            TextField(isJournalThread ? "Ask about your journal..." : "Ask about your books...", text: $inputText, axis: .vertical)
                 .focused($isInputFocused)
                 .padding(12)
                 .cobuxCard()
@@ -408,9 +474,9 @@ struct ChatView: View {
 
     private var emptyStateView: some View {
         CobuxEmptyStateView(
-            icon: "book.pages",
+            icon: isJournalThread ? "text.book.closed" : "book.pages",
             title: "How can I help?",
-            message: "Ask about the wisdom in your library"
+            message: isJournalThread ? "Ask about what you've been writing" : "Ask about the wisdom in your library"
         ) {
             VStack(spacing: 10) {
                 let chips = suggestedPrompts()
@@ -445,6 +511,13 @@ struct ChatView: View {
     }
 
     private func suggestedPrompts() -> [String] {
+        if isJournalThread {
+            return [
+                "What was I writing about last month?",
+                "What themes keep coming up in my journal?",
+                "How have I been doing lately?"
+            ]
+        }
         if let selectedBookID, let book = books.first(where: { $0.id == selectedBookID }) {
             return bookScopedSuggestions(for: book)
         }
@@ -507,6 +580,7 @@ struct ChatView: View {
     }
 
     private var currentThreadLabel: String {
+        if isJournalThread { return "My Journal" }
         guard let selectedBookID, let book = books.first(where: { $0.id == selectedBookID }) else {
             return "General"
         }
@@ -600,7 +674,27 @@ struct ChatView: View {
         } else {
             messages = []
             conversationHistory = []
+            hasRestoredScroll = true
         }
+    }
+
+    /// The persisted thread id can point at a book that has since been
+    /// deleted. Left alone, that half-worked in the worst way: the toolbar
+    /// fell back to saying "General" while messages actually loaded (and new
+    /// ones saved into) the dead book's thread. Falls back to the real
+    /// General thread instead -- but only once the library has data, because
+    /// on a cold launch an empty `books` means "not loaded yet," not "gone"
+    /// (the same not-loaded-vs-really-gone distinction
+    /// `applyPendingDeepLinkHighlightID` already draws); the `books.count`
+    /// `.onChange` retries the validation once the store populates.
+    private func validateRestoredThread() {
+        guard let restoredID = selectedBookID,
+              // The journal thread's sentinel id is never a real book -- it
+              // is always valid to restore.
+              restoredID != ChatPromptBuilder.journalThreadID,
+              !books.isEmpty,
+              !books.contains(where: { $0.id == restoredID }) else { return }
+        selectedBookID = nil
     }
 
     /// Persists the topmost currently-visible message's `timestamp` as this
@@ -608,7 +702,11 @@ struct ChatView: View {
     /// (see the `selectedBookID` `.onChange`) -- a no-op if nothing is tracked
     /// as visible yet (e.g. the view never actually rendered any rows).
     private func persistScrollPosition(forThread bookID: UUID?) {
-        guard let earliestVisible = visibleMessageTimestamps.min() else { return }
+        // Record WHICH thread too, not just where in it. Persisting the position of a
+        // thread we won't reopen is what made the restore look broken.
+        UserDefaults.standard.set(bookID?.uuidString ?? "", forKey: Self.lastThreadKey)
+        // Inert until the initial restore lands -- see `hasRestoredScroll`.
+        guard hasRestoredScroll, let earliestVisible = visibleMessageTimestamps.min() else { return }
         UserDefaults.standard.set(earliestVisible.timeIntervalSince1970, forKey: scrollPositionKey(for: bookID))
     }
 
@@ -620,10 +718,19 @@ struct ChatView: View {
     /// which keeps today's default (natural top-of-content) behavior.
     private func restoreScrollPosition(in loaded: [(id: UUID, content: String, isUser: Bool, timestamp: Date, referencedBooks: [String], isError: Bool, isStreaming: Bool, referencedFigureID: UUID?)], forThread bookID: UUID?) {
         let key = scrollPositionKey(for: bookID)
-        guard UserDefaults.standard.object(forKey: key) != nil else { return }
+        guard UserDefaults.standard.object(forKey: key) != nil else {
+            // Nothing saved -- the natural top IS the position; persisting is safe now.
+            hasRestoredScroll = true
+            return
+        }
         let savedInterval = UserDefaults.standard.double(forKey: key)
         let savedDate = Date(timeIntervalSince1970: savedInterval)
-        guard let closest = loaded.min(by: { abs($0.timestamp.timeIntervalSince(savedDate)) < abs($1.timestamp.timeIntervalSince(savedDate)) }) else { return }
+        guard let closest = loaded.min(by: { abs($0.timestamp.timeIntervalSince(savedDate)) < abs($1.timestamp.timeIntervalSince(savedDate)) }) else {
+            hasRestoredScroll = true
+            return
+        }
+        // NOT setting `hasRestoredScroll` here -- the `.onChange(of: scrollTarget)`
+        // handler flips it once this target's `scrollTo` is actually issued.
         scrollTarget = closest.id
     }
 
@@ -726,6 +833,10 @@ struct ChatView: View {
             useRealNamesInLifeExamples: useRealNamesInLifeExamples
         )
         switch assembled {
+        case .journal(let systemPrompt):
+            // Uncached like symposium -- see `Assembled.journal`'s doc comment.
+            referencedTitles = []
+            stream = claudeService.streamMessage(userMessage: userMessage, conversationHistory: conversationHistory, systemPrompt: systemPrompt)
         case .symposium(let systemPrompt, let titles):
             referencedTitles = titles
             stream = claudeService.streamMessage(userMessage: userMessage, conversationHistory: conversationHistory, systemPrompt: systemPrompt)

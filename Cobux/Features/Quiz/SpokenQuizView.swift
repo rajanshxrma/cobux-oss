@@ -15,6 +15,7 @@ struct SpokenQuizView: View {
     let onDone: () -> Void
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @Query private var books: [Book]
 
     @State private var controller: SpokenQuizController?
@@ -69,6 +70,18 @@ struct SpokenQuizView: View {
         }
         .preferredColorScheme(.dark)
         .onAppear(perform: setUpAndRequestPermissions)
+        // Both voice surfaces are presented as `fullScreenCover`, which stays
+        // presented when the app backgrounds -- so `onDisappear` never fires and
+        // tearing down only from there meant the session survived being "closed".
+        // The mic stayed hot, the .duckOthers audio session stayed active so every
+        // other app's audio stayed ducked, the synthesizer kept talking until iOS
+        // suspended the process, and an in-flight stream kept spending API credits
+        // with nobody listening. Reported as "it keeps going even if closed".
+        // `QuizSessionView` already observed scenePhase this way; the voice
+        // surfaces just never got it.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { controller?.end() }
+        }
         .onDisappear {
             isEnding = true
             controller?.end()

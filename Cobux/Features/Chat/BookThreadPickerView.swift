@@ -50,6 +50,16 @@ struct BookThreadPickerView: View {
                         selectedBookID = nil
                         dismiss()
                     }
+                    // Pinned above the book sections: the journal thread is a
+                    // surface of its own, not a book in a category. Selecting
+                    // it while the journal is Face-ID locked is fine -- the
+                    // lock is enforced where the content shows (`ChatView`
+                    // wraps this thread in `JournalLocked`, which auto-prompts
+                    // on arrival), so this row stays a plain selection.
+                    row(title: "My Journal", isSelected: selectedBookID == ChatPromptBuilder.journalThreadID) {
+                        selectedBookID = ChatPromptBuilder.journalThreadID
+                        dismiss()
+                    }
                     ForEach(groupedBooks, id: \.category) { group in
                         Section {
                             ForEach(group.books) { book in
@@ -64,6 +74,14 @@ struct BookThreadPickerView: View {
                         }
                     }
                 } else {
+                    // The pinned journal row stays findable under search too --
+                    // same substring rule the books get.
+                    if "My Journal".localizedCaseInsensitiveContains(searchText) {
+                        row(title: "My Journal", isSelected: selectedBookID == ChatPromptBuilder.journalThreadID) {
+                            selectedBookID = ChatPromptBuilder.journalThreadID
+                            dismiss()
+                        }
+                    }
                     ForEach(filteredBooks) { book in
                         row(title: book.title, isSelected: selectedBookID == book.id) {
                             selectedBookID = book.id
