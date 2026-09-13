@@ -46,8 +46,12 @@ struct ContentView: View {
     // onboarding finishes.
     @AppStorage("lastSeenChangelogBuild") private var lastSeenChangelogBuild = ""
     @State private var showingWhatsNew = false
-    /// Flow, presented on demand from the Flow button.
+    /// Flow, presented on demand from the Flow button -- as an in-place
+    /// overlay (see `flowOverlay`), no longer a `fullScreenCover`.
     @State private var showingFlowOnLaunch = false
+    /// Reduce Motion is a hard gate (`CobuxMotion`): the Flow overlay then
+    /// arrives by opacity alone, no scale.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Shown once, ever. See `WidgetInviteView` for why there is no second ask.
     @AppStorage("cobux.widgetInvite.seen") private var hasSeenWidgetInvite = false
     @State private var showingWidgetInvite = false
@@ -146,7 +150,101 @@ struct ContentView: View {
     /// that had to be collapsed, or, on one OS version, filled with a quieter
     /// button because the slot could not be collapsed at all.
     private var flowLaunch: FlowLaunchInset<FlowLaunchButton> {
-        FlowLaunchInset { FlowLaunchButton { showingFlowOnLaunch = true } }
+        FlowLaunchInset { FlowLaunchButton { openFlow() } }
+    }
+
+    /// The tap. Starts the tap-to-first-card clock and inserts the overlay in
+    /// the same statement, so nothing sits between the two.
+    private func openFlow() {
+        SpeedTrace.flowOpenBegan()
+        // A cover used to resign the keyboard for us; an overlay does not.
+        // With a search field focused, Flow would open under a live keyboard.
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        showingFlowOnLaunch = true
+    }
+
+    /// Any screen that wants Flow posts this instead of presenting its own
+    /// cover (Wisdom's hero card did, and slid). One overlay, one open path.
+    static let openFlowNotification = Notification.Name.cobuxOpenFlow
+
+    private func closeFlow() {
+        showingFlowOnLaunch = false
+    }
+
+    /// FLOW AS AN IN-PLACE OVERLAY (build 60). His words on 59: "opening flow
+    /// got faster too but still not right away fast." 58 and 59 took every
+    /// piece of work out of the open -- the deck is dealt from `FlowWarmCache`
+    /// in the first frame -- and what was left was the `fullScreenCover`'s own
+    /// system slide, ~0.4 s of UIKit presentation between the tap and the
+    /// card, which no amount of app work could shorten. So Flow is no longer
+    /// presented; it is INSERTED, as a layer over the tab shell, already
+    /// sized, and arrives by a 0.12 s opacity + 0.98→1.0 scale (opacity alone
+    /// under Reduce Motion). Dismissal is the mirror.
+    ///
+    /// What the deferred-ledger row said this would cost, and what happened
+    /// to each:
+    ///   1. `@Environment(\.dismiss)` inside `FlowView` stops working. Flow's
+    ///      own close button takes `onClose` (this view's `closeFlow`). The
+    ///      card footers' "Open Cobux"/"Open Quiz" call `dismiss()` and then
+    ///      `openURL` -- and `onOpenURL` below has always closed Flow itself
+    ///      (`showingFlowOnLaunch = false`) before routing, so those buttons
+    ///      close it through the route they already take; the `dismiss()`
+    ///      ahead of it is now a no-op rather than a second dismissal.
+    ///   2. The `onDismiss:` widget-invite offer moved to `.onChange` of the
+    ///      flag, same guard order (`flowDidClose`).
+    ///   3. Flow's Sources sheet and celebration overlay present from this
+    ///      view's hierarchy. A `.sheet` on a view inside an overlay presents
+    ///      through the window's root presenter, over whichever tab is
+    ///      underneath -- and, unlike before, this view's own sheets (a
+    ///      widget's compose, the share sheet) can now present while Flow is
+    ///      up instead of failing against a cover already in the slot.
+    ///   4. The cover's swipe-down-to-close: `fullScreenCover` never had one
+    ///      (only `.sheet` does), so nothing is lost.
+    ///
+    /// The tab shell's paging veto reads `pagingEnabled`, which is false
+    /// while this is up (belt; the braces are that the overlay is above the
+    /// shell's view in the hit-test order, so its pan never sees the touch).
+    /// The Wisdom tab's hero card still presents its own cover
+    /// (`WisdomGraphView.showingFlow`, not this lane's file); `FlowView`
+    /// keeps `dismiss()` as the fallback for that route.
+    @ViewBuilder
+    private var flowOverlay: some View {
+        // The `ZStack` is the container the transition needs: the `if` has
+        // to be evaluated inside a view carrying `.animation(value:)` for
+        // the insertion and removal to animate at all.
+        ZStack {
+            if showingFlowOnLaunch {
+                FlowView(onClose: closeFlow)
+                    .transition(reduceMotion
+                                ? .opacity
+                                : .opacity.combined(with: .scale(scale: 0.98)))
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: showingFlowOnLaunch)
+        .ignoresSafeArea(.keyboard)
+    }
+
+    /// What used to be the cover's `onDismiss:`, verbatim in effect: consumes
+    /// `launchedFromDeepLink` once, for exactly the one dismissal it was set
+    /// to suppress, and offers the widget invite once ever. Guard ORDER is
+    /// load-bearing and must stay this way: the deep-link check runs BEFORE
+    /// `hasSeenWidgetInvite`, so a suppressed showing returns without ever
+    /// touching the persisted seen-flag. `defer` rather than an assignment at
+    /// the end: both guards return early, and the deep-link guard is the very
+    /// path that most needs the flag reset afterwards.
+    private func flowDidClose() {
+        defer { launchedFromDeepLink = false }
+        // The one moment desire actually exists: he has just finished
+        // swiping through the app's best surface. iOS has no API to add a
+        // widget for someone, so the only honest tactic is wanting it plus
+        // a clear how, offered once. Not after a deep link: `onOpenURL`
+        // force-closes Flow, which lands here too -- so the invite could
+        // appear on top of the highlight he tapped, and for journal/new it
+        // would race the compose sheet for the one presentation slot.
+        guard !launchedFromDeepLink else { return }
+        guard !hasSeenWidgetInvite, let sample = widgetInviteSample() else { return }
+        widgetInviteQuote = sample
+        showingWidgetInvite = true
     }
 
     /// Whether a horizontal drag may page to the next tab right now.
@@ -163,6 +261,9 @@ struct ContentView: View {
     /// one meaning if the same drag can also land in a different tab. Snapchat's
     /// swipe surface is its flat top level too.
     private var pagingEnabled: Bool {
+        // Not while Flow covers the shell: a drag on Flow's feed must never
+        // reach the pager underneath. See `flowOverlay`.
+        guard !showingFlowOnLaunch else { return false }
         switch selectedTab {
         case 0: return libraryPath.isEmpty
         case 1: return wisdomPath.isEmpty
@@ -320,11 +421,11 @@ struct ContentView: View {
             //
             // Flow no longer presents itself on launch (see
             // `presentFlowOnLaunchIfNeeded`), so the only way it can be up here
-            // is that the user opened it by hand and then tapped a widget.
-            // Closing it fires the cover's `onDismiss`, which is the one and
-            // only reader of `launchedFromDeepLink` -- the flag exists to stop
-            // the widget invite appearing there, on top of the highlight he
-            // just tapped.
+            // is that the user opened it by hand and then tapped a widget --
+            // or tapped a card's own "Open Cobux", which routes through here.
+            // Closing it runs `flowDidClose`, which is the one and only reader
+            // of `launchedFromDeepLink` -- the flag exists to stop the widget
+            // invite appearing there, on top of the highlight he just tapped.
             //
             // Which is why it is retired again immediately when there is no
             // such dismissal coming. Left armed, it survived to whatever Flow
@@ -556,6 +657,16 @@ struct ContentView: View {
             }
         }
         .animation(CobuxMotion.snap, value: autoRestoreStatus.summary)
+        // Flow, above every banner and this view's own celebration overlay
+        // (Flow hosts its own copy of that one). Last in the overlay chain
+        // on purpose: what draws later draws on top.
+        .overlay { flowOverlay }
+        .onReceive(NotificationCenter.default.publisher(for: .cobuxOpenFlow)) { _ in
+            if !showingFlowOnLaunch { openFlow() }
+        }
+        .onChange(of: showingFlowOnLaunch) { wasShowing, isShowing in
+            if wasShowing && !isShowing { flowDidClose() }
+        }
         // `scenePhase` above only fires on a TRANSITION, and by the time this
         // view's `.onChange` modifier attaches, `scenePhase` is usually already
         // `.active` (a normal foreground launch) -- `.onChange` never fires for
@@ -635,6 +746,16 @@ struct ContentView: View {
             // a restore surfaces through `AutoRestoreBanner` rather than by
             // gating the feed.
             resolveLaunchSheets()
+
+            // Flow's first deck, built before he taps. `FlowWarmCache` waits
+            // its own `launchDelay` (1.5 s -- after this tab's first frame and
+            // the shell's warm-up passes), never while seeding, never in the
+            // background, and keeps the result as values on `FlowPoolProbe`'s
+            // executor. This is the call site the cache's doc comment names
+            // as "the launch chain"; without it the deck was only ever built
+            // after the FIRST Flow close, so the first open of every launch
+            // took the cold path.
+            FlowWarmCache.shared.scheduleWarm(container: modelContext.container)
 
             // Everything below is background housekeeping -- detached so a slow
             // or unreachable iCloud can never again hold the first screen
@@ -759,40 +880,15 @@ struct ContentView: View {
         }) {
             WhatsNewSheet(sinceBuild: lastSeenChangelogBuild)
         }
-        .fullScreenCover(isPresented: $showingFlowOnLaunch, onDismiss: {
-            // Consumed here, once, for exactly the one dismissal it was set to
-            // suppress. `onOpenURL` is the only writer and this is the only
-            // reader; it now arms the flag only when it is actually closing
-            // Flow, and this clears it again either way -- belt and braces for
-            // a once-per-install offer that a new user has the best chance of
-            // wanting in their first session. When nothing cleared it, a single
-            // widget tap killed the invite for the entire life of the process.
-            //
-            // `defer` rather than an assignment at the end: both guards below
-            // return early, and the deep-link guard is the very path that most
-            // needs the flag reset afterwards.
-            defer { launchedFromDeepLink = false }
-            // The one moment desire actually exists: he has just finished
-            // swiping through the app's best surface. iOS has no API to add a
-            // widget for someone, so the only honest tactic is wanting it plus
-            // a clear how, offered once.
-            // Not after a deep link. `onOpenURL` force-closes Flow, which still
-            // fires this dismissal handler -- so the invite could appear on top
-            // of the highlight he tapped, and for journal/new it would race the
-            // compose sheet for the one presentation slot.
-            //
-            // Guard ORDER is load-bearing and must stay this way: the deep-link
-            // check runs BEFORE `hasSeenWidgetInvite`, so a suppressed showing
-            // returns without ever touching the persisted seen-flag. The invite
-            // can still only ever appear once -- `hasSeenWidgetInvite` is
-            // `@AppStorage` and is set true by both dismissal routes below.
-            guard !launchedFromDeepLink else { return }
-            guard !hasSeenWidgetInvite, let sample = widgetInviteSample() else { return }
-            widgetInviteQuote = sample
-            showingWidgetInvite = true
-        }) {
-            FlowView()
-        }
+        // Flow itself is `flowOverlay`, up in the overlay chain; its close
+        // handling is `flowDidClose`. `launchedFromDeepLink` is consumed
+        // there, once, for exactly the one dismissal it was set to suppress:
+        // `onOpenURL` is the only writer and `flowDidClose` the only reader;
+        // the writer arms the flag only when it is actually closing Flow, and
+        // the reader clears it again either way -- belt and braces for a
+        // once-per-install offer that a new user has the best chance of
+        // wanting in their first session. When nothing cleared it, a single
+        // widget tap killed the invite for the entire life of the process.
         .sheet(isPresented: $showingWidgetInvite, onDismiss: {
             // Dismissed forever by any route, including a swipe down. There is
             // deliberately no second ask: a repeat prompt is a nag, and he

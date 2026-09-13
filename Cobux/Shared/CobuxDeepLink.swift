@@ -71,3 +71,11 @@ enum CobuxDeepLink {
         URL(string: newEntry ? "cobux://journal/new" : "cobux://journal")!
     }
 }
+
+
+extension Notification.Name {
+    /// "Open Flow, in place." Posted by any screen with a Flow button;
+    /// handled by `ContentView`'s overlay so there is one open path and no
+    /// system slide (build 60).
+    static let cobuxOpenFlow = Notification.Name("com.rajansharma.Cobux.openFlow")
+}

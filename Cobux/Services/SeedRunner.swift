@@ -624,10 +624,24 @@ actor SeedRunner {
         DiagnosticLog.log("spotlight: rebuilt index with \(indexed) highlight(s)")
     }
 
+    /// Free space the cover precache wants before it writes anything.
+    /// Covers are a convenience tier (the card falls back to its gradient),
+    /// so on a phone this close to full they wait rather than take the last
+    /// gigabyte iOS needs for itself. Nothing is deleted to make room.
+    private static let precacheRequiredFreeBytes: Int64 = 1_000_000_000
+
     func precacheCoverImages() async {
         let context = modelContext
         let books = (try? context.fetch(FetchDescriptor<Book>())) ?? []
         CoverImageCache.pruneOrphans(validBookIDs: Set(books.map(\.id)))
+        // retries: next launch -- `seed(container:)` runs this at the end of
+        // every launch's background chain, so a phone that frees space gets
+        // its covers on the next open without anyone remembering to ask.
+        // `nil` (the volume could not be asked) counts as room.
+        if let free = DeviceClass.freeDiskBytes(), free < Self.precacheRequiredFreeBytes {
+            DiagnosticLog.log("covers: precache deferred, \(free / 1_000_000) MB free (needs \(Self.precacheRequiredFreeBytes / 1_000_000) MB)")
+            return
+        }
         for book in books {
             if let assetName = book.coverAssetName, UIImage(named: "Cover-" + assetName) != nil {
                 continue

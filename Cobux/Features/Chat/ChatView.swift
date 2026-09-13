@@ -368,7 +368,10 @@ struct ChatView: View {
                             Text("COBUX")
                                 .font(chatWordmarkFont)
                                 .tracking(2.5)
-                                .foregroundStyle(.primary)
+                                // Ink into crimson by the X -- a fill, so the
+                                // 85.1pt budget above is untouched. See
+                                // `ShapeStyle.cobuxWordmark`.
+                                .foregroundStyle(.cobuxWordmark)
                             HStack(spacing: 3) {
                                 Text(currentThreadLabel)
                                     .font(.system(size: 11, weight: .semibold))
@@ -800,8 +803,13 @@ struct ChatView: View {
                 // the room a colour temperature owned by the book without
                 // touching legibility. Switching from an orange book's thread to
                 // a blue one now melts, exactly like Flow's card transitions.
+                //
+                // In dark the room leans toward crimson (P9): the thread's hue
+                // is blended, not replaced -- a blue book still reads blue --
+                // at `.room`, the strength measured for exactly this blend
+                // (see `CobuxAtmosphere`). Light keeps `.reading` untouched.
                 .background {
-                    CobuxAtmosphere(accent: currentThreadAccent, strength: .reading)
+                    CobuxAtmosphere(accent: atmosphereAccent, strength: atmosphereStrength)
                 }
                 .onTapGesture {
                     isInputFocused = false
@@ -1353,6 +1361,17 @@ struct ChatView: View {
             return .cobuxAccent
         }
         return Color(hex: book.coverColorHex)
+    }
+
+    /// The atmosphere's hue: the thread's own colour in light; in dark, that
+    /// colour half-way to crimson, so every room in the app shares the
+    /// red-black presence while the thread still owns its temperature.
+    private var atmosphereAccent: Color {
+        colorScheme == .dark ? currentThreadAccent.mix(with: .cobuxCrimson, by: 0.5) : currentThreadAccent
+    }
+
+    private var atmosphereStrength: CobuxAtmosphere.Strength {
+        colorScheme == .dark ? .room : .reading
     }
 
     private var chatWordmarkFont: Font {

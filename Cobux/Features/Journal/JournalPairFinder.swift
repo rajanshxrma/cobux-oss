@@ -52,7 +52,7 @@ enum JournalPairFinder {
     /// threshold proposed for this feature dies on that fact. A pairing
     /// qualifies by standing clear of ITS OWN spread, which is also what
     /// separates a real echo from a merely fluent one.
-    static let minimumSigma: Double = 2.0
+    static let minimumSigma: Double = JournalPairThresholds.minimumSigma
 
     /// The bar a pool of `n` candidates must clear, which is NOT a constant.
     ///
@@ -67,8 +67,7 @@ enum JournalPairFinder {
     /// asks the winner to beat what noise alone would produce, plus a margin.
     /// At n=8 it is ≈2.5σ; at n=150 ≈3.7σ.
     static func requiredSigma(poolSize: Int) -> Double {
-        let n = Double(max(2, poolSize))
-        return max(minimumSigma, (2 * Foundation.log(n)).squareRoot() + 0.4)
+        JournalPairThresholds.requiredSigma(poolSize: poolSize)
     }
 
     /// The best pairing for one passage, or nothing.

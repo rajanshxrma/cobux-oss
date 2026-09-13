@@ -1,6 +1,7 @@
 import Foundation
 import SwiftData
 import CobuxCore
+import Accelerate
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -1708,11 +1709,15 @@ struct SearchService {
 
         var items: [RankableItem] = []
         items.reserveCapacity(entries.count)
+        // The query's own norm once, not once per row -- the `magA` half of
+        // `EmbeddingService.cosineSimilarity`, hoisted; the row's half was
+        // taken when the table was built. See `Entry.cosineSimilarity`.
+        let querySquaredNorm = vDSP.sumOfSquares(queryVector)
         for entry in entries {
             items.append(RankableItem(
                 id: entry.idKey,
                 bookID: entry.bookKey,
-                rawScore: EmbeddingService.cosineSimilarity(queryVector, entry.vector)
+                rawScore: entry.cosineSimilarity(to: queryVector, querySquaredNorm: querySquaredNorm)
             ))
         }
 
@@ -1788,6 +1793,16 @@ struct SemanticHit: Sendable, Equatable, Identifiable {
 /// bytes the old path faulted into the main context's row cache on every
 /// chat send and then threw away; here it is paid once per process, off the
 /// main actor, and released on a memory warning (`SemanticVectorCache`).
+///
+/// ON A COMPACT PHONE (`DeviceClass.compact`, ≤ 4 GB) each row is kept as
+/// `Float16` instead -- ~33 MB -- and widened as it is scored. What that
+/// costs in ranking: a half-float carries 11 significant bits, so each
+/// component of a unit-scale vector moves by at most ~5e-4 (typically
+/// ~1e-4), and a 512-term cosine by ~5e-4 in the worst case. Two rows whose
+/// scores sit closer than that can swap places; the existing parity test
+/// already concedes exactly this class ("exact ties") between the
+/// relationship pool and the Float32 table. Nothing else changes: same
+/// rows, same skips, same `Ranker`.
 struct SemanticVectorTable: Sendable {
     struct Entry: Sendable, Equatable {
         let id: UUID
@@ -1797,13 +1812,78 @@ struct SemanticVectorTable: Sendable {
         /// `book.id.uuidString`, or `unknownBookKey`, precomputed for the
         /// same reason.
         let bookKey: String
-        let vector: [Float]
+        /// Float32 storage. Empty when `half` holds the row.
+        private let wide: [Float]
+        /// Float16 storage, on a compact phone. Empty when `wide` holds it.
+        private let half: [Float16]
+        /// Σv² over the values as stored, taken once here: the `magB` that
+        /// `EmbeddingService.cosineSimilarity` recomputed on every call.
+        let squaredNorm: Float
 
-        init(id: UUID, bookKey: String, vector: [Float]) {
+        init(id: UUID, bookKey: String, vector: [Float], compact: Bool = false) {
             self.id = id
             self.idKey = id.uuidString
             self.bookKey = bookKey
-            self.vector = vector
+            if compact {
+                let half = vector.map { Float16($0) }
+                self.half = half
+                self.wide = []
+                // Over the values that will actually be scored, so the
+                // norm and the dot product describe the same vector.
+                self.squaredNorm = vDSP.sumOfSquares(half.map { Float($0) })
+            } else {
+                self.wide = vector
+                self.half = []
+                self.squaredNorm = vDSP.sumOfSquares(vector)
+            }
+        }
+
+        /// The row as `[Float]` -- what it is stored as on a standard phone,
+        /// widened on demand on a compact one. Ranking does not go through
+        /// this (see `cosineSimilarity`); `EbbView`'s counterpoint probe does.
+        var vector: [Float] { wide.isEmpty ? half.map { Float($0) } : wide }
+
+        var dimension: Int { wide.isEmpty ? half.count : wide.count }
+
+        /// `EmbeddingService.cosineSimilarity(query, vector)`, to the bit,
+        /// for a Float32 row: the same `vDSP` calls in the same operand
+        /// order, with the row's norm taken once at build instead of per
+        /// call. For a Float16 row, the same expression over the widened
+        /// values, with the widening fused into the dot product so each
+        /// row's bytes are read exactly once per query. `querySquaredNorm`
+        /// is `vDSP.sumOfSquares(query)`, taken once per query by the caller.
+        func cosineSimilarity(to query: [Float], querySquaredNorm: Float) -> Float {
+            guard query.count == dimension, dimension > 0 else { return 0 }
+            let dot = wide.isEmpty ? Self.dot(half, query) : vDSP.dot(query, wide)
+            let denominator = querySquaredNorm.squareRoot() * squaredNorm.squareRoot()
+            guard denominator > 0 else { return 0 }
+            return dot / denominator
+        }
+
+        /// Four independent accumulators so the adds do not serialise on one
+        /// dependency chain; the compiler vectorises the widen-multiply-add
+        /// over NEON. ~33k rows × 512 is a few milliseconds, the same order
+        /// as the `vDSP.dot` path it stands in for.
+        private static func dot(_ half: [Float16], _ query: [Float]) -> Float {
+            half.withUnsafeBufferPointer { h in
+                query.withUnsafeBufferPointer { q in
+                    var a0: Float = 0, a1: Float = 0, a2: Float = 0, a3: Float = 0
+                    let n = h.count
+                    var i = 0
+                    while i + 4 <= n {
+                        a0 += Float(h[i]) * q[i]
+                        a1 += Float(h[i + 1]) * q[i + 1]
+                        a2 += Float(h[i + 2]) * q[i + 2]
+                        a3 += Float(h[i + 3]) * q[i + 3]
+                        i += 4
+                    }
+                    while i < n {
+                        a0 += Float(h[i]) * q[i]
+                        i += 1
+                    }
+                    return (a0 + a1) + (a2 + a3)
+                }
+            }
         }
     }
 
@@ -1878,8 +1958,11 @@ actor SemanticSearchProbe {
     /// pool (`books.flatMap(\.highlights)`) never contained an unsorted
     /// Share-Extension capture either.
     /// Internal, not private, so the parity test can build a table without
-    /// publishing it to the process-wide cache.
-    func buildTable() -> SemanticVectorTable {
+    /// publishing it to the process-wide cache. `compact` defaults to the
+    /// phone's class (`DeviceClass`): the test host is never compact, so the
+    /// parity test exercises the Float32 table; pass `compact: true` to
+    /// build the half-width one deliberately.
+    func buildTable(compact: Bool = DeviceClass.current.compactVectorTable) -> SemanticVectorTable {
         var bookDescriptor = FetchDescriptor<Book>()
         bookDescriptor.propertiesToFetch = [\.id]
         let books = (try? modelContext.fetch(bookDescriptor)) ?? []
@@ -1897,7 +1980,8 @@ actor SemanticSearchProbe {
                 // The backfill's "tried, nothing to index" marker -- skipped
                 // here exactly as the relationship pool skips it.
                 guard !vector.isEmpty else { continue }
-                entries.append(SemanticVectorTable.Entry(id: highlight.id, bookKey: bookKey, vector: vector))
+                entries.append(SemanticVectorTable.Entry(id: highlight.id, bookKey: bookKey,
+                                                         vector: vector, compact: compact))
             }
         }
         return SemanticVectorTable(entries: entries)
@@ -1950,6 +2034,24 @@ final class SemanticVectorCache: @unchecked Sendable {
     /// into one build.
     static let rebuildDebounce: Duration = .seconds(2)
 
+    // MARK: Background release (compact phones)
+
+    /// Main-thread state for the background release below. Touched only by
+    /// the `@MainActor` methods that own it.
+    private var backgroundRelease: DispatchWorkItem?
+    #if canImport(UIKit)
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    #endif
+    private var droppedForBackground = false
+    /// How long the app sits in the background before the table goes. Not
+    /// at once: a glance at Messages and back is a few seconds, and dropping
+    /// on every one of those would put a 66 MB re-read behind every return.
+    /// Inside iOS's ~30 s background-execution grace, so it actually runs.
+    private static let backgroundReleaseDelay: TimeInterval = 15
+    /// How long after the foreground the rebuild starts, so it never shares
+    /// the returning frame or the tab shell's first work.
+    private static let foregroundRewarmDelay: TimeInterval = 1.5
+
     private init() {
         observers.append(NotificationCenter.default.addObserver(
             forName: ModelContext.didSave, object: nil, queue: nil
@@ -1963,8 +2065,83 @@ final class SemanticVectorCache: @unchecked Sendable {
         ) { [weak self] _ in
             self?.dropTable()
         })
+        // COMPACT PHONES: the table is the largest thing this process holds,
+        // and the background is where iOS decides which apps to keep alive.
+        // A smaller footprint in the background is the difference between
+        // the app resuming where he left it and cold-launching again -- the
+        // slowest thing the app can do. So on a ≤ 4 GB phone the table is
+        // released once the app has settled into the background, and built
+        // again, off-main, shortly after the next foreground. Until that
+        // rebuild lands a chat send ranks the old way (the relationship
+        // pool) exactly as it does on a cold launch today.
+        if DeviceClass.current.releasesVectorTableInBackground {
+            observers.append(NotificationCenter.default.addObserver(
+                forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.scheduleBackgroundRelease() }
+            })
+            observers.append(NotificationCenter.default.addObserver(
+                forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.cancelBackgroundRelease(rewarm: true) }
+            })
+        }
         #endif
     }
+
+    #if canImport(UIKit)
+    /// Arms the release: a background-task assertion (so the delay can
+    /// elapse before iOS suspends the process) and a delayed drop. A table
+    /// that is not there has nothing to release.
+    @MainActor
+    private func scheduleBackgroundRelease() {
+        cancelBackgroundRelease(rewarm: false)
+        lock.lock()
+        let hasTable = state.table != nil
+        lock.unlock()
+        guard hasTable else { return }
+        let app = UIApplication.shared
+        backgroundTask = app.beginBackgroundTask(withName: "SemanticVectorRelease") { [weak self] in
+            // iOS is ending the grace period early: release now.
+            self?.releaseForBackground()
+        }
+        let work = DispatchWorkItem { [weak self] in self?.releaseForBackground() }
+        backgroundRelease = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.backgroundReleaseDelay, execute: work)
+    }
+
+    @MainActor
+    private func releaseForBackground() {
+        backgroundRelease?.cancel()
+        backgroundRelease = nil
+        dropTable()
+        droppedForBackground = true
+        endBackgroundTaskIfNeeded()
+    }
+
+    /// The foreground (or a fresh background) cancels a pending release. If
+    /// the table did go, it is rebuilt after `foregroundRewarmDelay`.
+    @MainActor
+    private func cancelBackgroundRelease(rewarm: Bool) {
+        backgroundRelease?.cancel()
+        backgroundRelease = nil
+        endBackgroundTaskIfNeeded()
+        guard rewarm, droppedForBackground else { return }
+        droppedForBackground = false
+        lock.lock()
+        let container = state.container
+        lock.unlock()
+        let work = DispatchWorkItem { [weak self] in self?.warm(using: container) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.foregroundRewarmDelay, execute: work)
+    }
+
+    @MainActor
+    private func endBackgroundTaskIfNeeded() {
+        guard backgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTask)
+        backgroundTask = .invalid
+    }
+    #endif
 
     /// The one probe for this container, created on first use.
     func probe(for container: ModelContainer) -> SemanticSearchProbe {

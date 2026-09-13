@@ -191,3 +191,143 @@ enum EbbDeckBuilder {
         UInt64(Calendar.current.ordinality(of: .day, in: .era, for: date) ?? 0)
     }
 }
+
+/// The same thought, from another shelf: the line an echo card sets beside
+/// its library line, chosen from a book of a DIFFERENT tradition.
+///
+/// This is the "Another tradition" half of the Traditions ruling (ledger P6).
+/// `BookTradition` exists because a line from Greene and a line from Aurelius
+/// used to arrive carrying identical authority; the kicker now names the
+/// shelf. Naming is half of it. The other half is letting him SEE the
+/// difference, and the only honest way an app can show that is to place two
+/// lines on one theme side by side, in the same face, and say nothing about
+/// which is wiser. Rajan: *"it's just not everything is just taken at the
+/// same level of darkness… We can do something more than just displaying the
+/// highlight as it is."* Nothing here grades a tradition: the kicker states
+/// the shelf's own name, the citation states the book, and the two lines are
+/// set in the one library face.
+///
+/// Plain values only -- this crosses back from a `@ModelActor`.
+struct EbbCounterpoint: Sendable, Equatable {
+    let text: String
+    let bookTitle: String
+    let author: String
+    let tradition: BookTradition
+    /// The echo's own shelf, so the pair can be read as a pair. Never
+    /// rendered as a comparison.
+    let sourceTradition: BookTradition
+    /// How far the winner stood above the pool, in standard deviations. Never
+    /// rendered -- calibration only, exactly as `JournalPairFinder.Pairing`
+    /// keeps it.
+    let sigma: Double
+}
+
+/// Ranks a cross-tradition pool against an echo's library line and decides
+/// whether the winner is worth showing. Pure, so the gate can be reasoned
+/// about without a device, an embedder or SwiftData.
+///
+/// The rule is `JournalPairFinder.bestPairing`'s, applied one shelf over:
+/// argmax by cosine, the winner must clear the pool's own expected noise
+/// maximum (`JournalPairFinder.requiredSigma`, which scales with the pool),
+/// and it must beat the runner-up rather than merely the average. Not
+/// re-implemented there because that finder is shaped around a journal
+/// passage and returns text, while this pool is the whole library's STORED
+/// vectors -- tens of thousands of rows whose text is fetched only for the
+/// handful that make the shortlist. The threshold constants are read from
+/// the finder, never restated, so the two gates cannot drift apart.
+///
+/// Two stages rather than one, on purpose: a line has to be READ before it
+/// can be shown (`FlowQueueBuilder.readsStandalone`, the quiet words), and
+/// reading means fetching text. Stage one scores the pool and keeps a short
+/// list; the caller fetches those few texts and applies the line gates; stage
+/// two seats the first survivor and re-asks the statistical question against
+/// the pool it actually beat. If nothing clears, there is no counterpoint --
+/// the section does not appear. Never a placeholder.
+enum EbbCounterpointFinder {
+
+    /// One embedded highlight from an allowed shelf. `bookID` is carried so
+    /// the winner's text can be fetched through the book's own relationship
+    /// index rather than a scan of every row.
+    struct Candidate: Sendable {
+        let id: UUID
+        let bookID: UUID
+        let vector: [Float]
+    }
+
+    struct Scored: Sendable, Equatable {
+        let id: UUID
+        let bookID: UUID
+        let score: Double
+    }
+
+    /// The scored pool, reduced to what stage two needs.
+    struct Field: Sendable, Equatable {
+        /// The top `shortlistSize` by score, best first.
+        let shortlist: [Scored]
+        /// The best score OUTSIDE the shortlist, so a runner-up still exists
+        /// when the line gates thin the shortlist to one.
+        let nextScore: Double?
+        let mean: Double
+        let deviation: Double
+        let poolSize: Int
+    }
+
+    /// Enough that the line gates can drop a few fragments and still leave a
+    /// runner-up to be measured against; few enough that resolving their text
+    /// is a handful of indexed fetches.
+    static let shortlistSize = 8
+    /// The winner must beat the runner-up by this many standard deviations,
+    /// or the theme is generic and the pairing is coincidence presented as
+    /// recognition. `JournalPairFinder.bestPairing`'s own margin.
+    static let runnerUpMargin: Double = 0.5
+    /// The fewest candidates a pool may hold for its spread to mean
+    /// anything -- `JournalPairFinder.bestPairing`'s floor.
+    static let minimumPool = 8
+
+    /// Stage one. `nil` when the pool is too small or has no spread.
+    static func rank(sourceVector: [Float],
+                     candidates: [Candidate],
+                     similarity: ([Float], [Float]) -> Float) -> Field? {
+        guard !sourceVector.isEmpty, candidates.count >= minimumPool else { return nil }
+
+        var scored: [Scored] = []
+        scored.reserveCapacity(candidates.count)
+        var total = 0.0
+        for candidate in candidates {
+            let score = Double(similarity(sourceVector, candidate.vector))
+            scored.append(Scored(id: candidate.id, bookID: candidate.bookID, score: score))
+            total += score
+        }
+        let mean = total / Double(scored.count)
+        let variance = scored.reduce(0) { $0 + ($1.score - mean) * ($1.score - mean) } / Double(scored.count)
+        let deviation = variance.squareRoot()
+        // A pool with no spread cannot single anything out, and dividing by
+        // it would manufacture a winner from noise.
+        guard deviation > 0.0001 else { return nil }
+
+        scored.sort { $0.score > $1.score }
+        let shortlist = Array(scored.prefix(shortlistSize))
+        let nextScore = scored.count > shortlistSize ? scored[shortlistSize].score : nil
+        return Field(shortlist: shortlist, nextScore: nextScore,
+                     mean: mean, deviation: deviation, poolSize: scored.count)
+    }
+
+    /// Stage two. `surviving` is the subset of the shortlist whose text
+    /// passed the line gates; the first of them, in score order, is seated
+    /// and measured. Returns the winner and its sigma, or `nil`.
+    static func clear(_ field: Field, surviving: Set<UUID>) -> (winner: Scored, sigma: Double)? {
+        let survivors = field.shortlist.filter { surviving.contains($0.id) }
+        guard let winner = survivors.first else { return nil }
+
+        let sigma = (winner.score - field.mean) / field.deviation
+        guard sigma >= JournalPairThresholds.requiredSigma(poolSize: field.poolSize) else { return nil }
+
+        // The runner-up is the next line that could have been shown -- or,
+        // when the gates emptied the rest of the shortlist, the best line
+        // just outside it. A shortlist that IS the whole pool has no
+        // runner-up, and a pool of one cannot make a claim.
+        guard let runnerUp = survivors.dropFirst().first?.score ?? field.nextScore else { return nil }
+        guard (winner.score - runnerUp) / field.deviation >= runnerUpMargin else { return nil }
+        return (winner, sigma)
+    }
+}

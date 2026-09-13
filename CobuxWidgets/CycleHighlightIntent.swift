@@ -56,23 +56,33 @@ struct CycleHighlightIntent: AppIntent {
     /// nil = the whole library (an unconfigured widget). Otherwise the
     /// configured book's UUID string, which is both the pool filter and the
     /// history lane key.
-    @Parameter(title: "Book")
-    var scopeKey: String?
-
+    @Parameter(title: "Book", default: "")
+    // NON-OPTIONAL since 59 (his fifth report, on 59: "tapping on widget
+    // opens app"). A tap that opens the app is WidgetKit's fallback for a
+    // region with no interactive control -- the button was drawn but never
+    // registered. The one thing these three intents carry that the working
+    // QuickCheck buttons do not is an OPTIONAL parameter; WidgetKit has to
+    // encode the intent into the archived button when it draws the widget,
+    // and an optional String left nil is the encoding most likely to fail
+    // silently. Empty string means "no scope"; `scope` maps it back to nil
+    // for the history lane, so every lane key is unchanged.
+    var scopeKey: String
 
     init() {}
 
     init(scopeKey: String?) {
-        self.scopeKey = scopeKey
+        self.scopeKey = scopeKey ?? ""
     }
+
+    private var scope: String? { scopeKey.isEmpty ? nil : scopeKey }
 
     func perform() async throws -> some IntentResult {
         WidgetHighlightHistory.trace("started")
         // Fast path (58): the provider pre-drew the next quote when it built
         // what is showing. Moving the pointer is all a tap has to do.
-        if let next = WidgetHighlightHistory.takeNext(scope: scopeKey),
-           next != WidgetHighlightHistory.currentID(scope: scopeKey) {
-            WidgetHighlightHistory.push(next, scope: scopeKey)
+        if let next = WidgetHighlightHistory.takeNext(scope: scope),
+           next != WidgetHighlightHistory.currentID(scope: scope) {
+            WidgetHighlightHistory.push(next, scope: scope)
             StreakTracker.recordActivityToday()
             WidgetHighlightHistory.trace("pre-drawn")
             WidgetCenter.shared.reloadTimelines(ofKind: "CobuxHighlightWidget")
@@ -85,13 +95,13 @@ struct CycleHighlightIntent: AppIntent {
         let context = ModelContext(container)
         guard let picked = WidgetHighlightPool.randomHighlight(
             in: context,
-            bookID: scopeKey.flatMap(UUID.init(uuidString:)),
-            excluding: WidgetHighlightHistory.currentID(scope: scopeKey)
+            bookID: scope.flatMap(UUID.init(uuidString:)),
+            excluding: WidgetHighlightHistory.currentID(scope: scope)
         ) else {
             WidgetHighlightHistory.trace("no pick")
             return .result()
         }
-        WidgetHighlightHistory.push(picked.id, scope: scopeKey)
+        WidgetHighlightHistory.push(picked.id, scope: scope)
         StreakTracker.recordActivityToday()
         WidgetHighlightHistory.trace("picked from store")
         WidgetCenter.shared.reloadTimelines(ofKind: "CobuxHighlightWidget")

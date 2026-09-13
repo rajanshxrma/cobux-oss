@@ -245,6 +245,9 @@ struct MoreView: View {
                     }
                 }
             }
+            // The tab room's ground (P9): the journal's crimson wash in dark
+            // under the inset cards, nothing added in light.
+            .cobuxRoomGround()
             .navigationTitle("More")
             // Programmatic counterpart to the Journal row's own NavigationLink,
             // so a widget tap / deep link lands on the same screen the tap does

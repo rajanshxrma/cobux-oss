@@ -173,9 +173,11 @@ struct JournalEntryDetailView: View {
             // bounded to this entry's own notes.
             let voiceIDs = voiceNoteAttachments.map(\.id)
             guard !voiceIDs.isEmpty else { return }
-            let known = Dictionary(uniqueKeysWithValues: voiceNoteAttachments.compactMap { attachment in
+            // `uniquingKeysWith`, not `uniqueKeysWithValues`: a repeated sidecar
+            // restore can hand two attachments one id, and the strict form traps.
+            let known = Dictionary(voiceNoteAttachments.compactMap { attachment in
                 attachment.durationSeconds.map { (attachment.id, $0) }
-            })
+            }, uniquingKeysWith: { a, _ in a })
             let container = keepContext.container
             let missing = voiceIDs.filter { known[$0] == nil }
             let measured = await Task.detached(priority: .userInitiated) { () -> [UUID: TimeInterval] in

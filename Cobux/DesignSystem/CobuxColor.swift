@@ -171,6 +171,33 @@ extension Color {
     static var cobuxAccent: Color { CobuxColor.accent }
 }
 
+// MARK: - Wordmark
+
+extension ShapeStyle where Self == LinearGradient {
+    /// The fill for the COBUX wordmark wherever it is set in type: ink for
+    /// the first letters, leaning into crimson by the last one.
+    ///
+    /// Rajan, 12 Sep: "the red should also come in icon and name with the
+    /// cobux current colors a tiny bit, like tiktok icon has multiple colors
+    /// right but we mostly remember it as black ... a light tint of red as
+    /// well." So the mark stays ink -- it is read as ink -- and the tint is
+    /// a second hue you notice only when you look: solid ink through 62 % of
+    /// the width, then one ramp into `cobuxCrimson` that lands on the X.
+    /// Crimson clears 5.5:1 on the light ground and 5.4:1 on the dark one
+    /// (`scripts/check-contrast.py`, rule 1), so the last letter never reads
+    /// weaker than the first. A fill changes no glyph metrics, so the chat
+    /// bar's 85.1pt principal budget (see `ChatView`) is untouched.
+    static var cobuxWordmark: LinearGradient {
+        LinearGradient(
+            stops: [
+                .init(color: Color.cobuxInk, location: 0.0),
+                .init(color: Color.cobuxInk, location: 0.62),
+                .init(color: Color.cobuxCrimson, location: 1.0),
+            ],
+            startPoint: .leading, endPoint: .trailing)
+    }
+}
+
 // MARK: - Month hues
 
 /// One hue per month, for the journal.

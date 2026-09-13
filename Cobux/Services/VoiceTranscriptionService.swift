@@ -220,14 +220,14 @@ final class VoiceTranscriptionService {
         case .unsupported:
             return .unavailable
         case .supported, .downloading:
-            do {
-                _ = try? await AssetInventory.reserve(locale: locale)
-                if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-                    try await request.downloadAndInstall()
-                }
-            } catch {
-                return .failed("asset install: \(error)")
-            }
+            // Not installed yet: this pass uses the on-device recogniser
+            // instead of starting a system model download from a journal
+            // save (the 60 rule: no download without room to spare, and never
+            // one the user did not ask for). Ask for the asset quietly so a
+            // later pass finds it installed; a failure here is nobody's
+            // problem.
+            _ = try? await AssetInventory.reserve(locale: locale)
+            return .unavailable
         case .installed:
             break
         @unknown default:
@@ -242,13 +242,29 @@ final class VoiceTranscriptionService {
                 context.contextualStrings = [.general: vocabulary]
                 try await analyzer.setContext(context)
             }
-            async let collected = collectResults(from: transcriber)
-            if let last = try await analyzer.analyzeSequence(from: file) {
-                try await analyzer.finalizeAndFinish(through: last)
-            } else {
-                await analyzer.cancelAndFinishNow()
+            // Bounded: a results stream that never ends would otherwise leave
+            // the entry saying "Transcribing..." until relaunch. Ten minutes
+            // covers any voice note this app records; past that the analyzer
+            // is cancelled and the note is retried next launch.
+            return try await withThrowingTaskGroup(of: Outcome.self) { group in
+                group.addTask {
+                    async let collected = collectResults(from: transcriber)
+                    if let last = try await analyzer.analyzeSequence(from: file) {
+                        try await analyzer.finalizeAndFinish(through: last)
+                    } else {
+                        await analyzer.cancelAndFinishNow()
+                    }
+                    return .text(try await collected)
+                }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(600))
+                    await analyzer.cancelAndFinishNow()
+                    return .failed("analyzer timed out")
+                }
+                let first = try await group.next() ?? .failed("no result")
+                group.cancelAll()
+                return first
             }
-            return .text(try await collected)
         } catch {
             return .failed(String(describing: error))
         }
@@ -283,7 +299,11 @@ final class VoiceTranscriptionService {
         request.contextualStrings = Array(vocabulary.prefix(VocabularyCache.recognizerLimit))
 
         let once = ResumeOnce()
-        return await withCheckedContinuation { (c: CheckedContinuation<Outcome, Never>) in
+        // `withExtendedLifetime`: the recogniser's last use is the call below,
+        // so ARC may release it before the callback lands -- and a released
+        // recogniser cancels its task, which reports as an error. Every
+        // pre-iOS-26 phone is on this path.
+        let outcome: Outcome = await withCheckedContinuation { (c: CheckedContinuation<Outcome, Never>) in
             recognizer.recognitionTask(with: request) { result, error in
                 if let result, result.isFinal {
                     once.run { c.resume(returning: .text(result.bestTranscription.formattedString)) }
@@ -292,6 +312,8 @@ final class VoiceTranscriptionService {
                 }
             }
         }
+        withExtendedLifetime(recognizer) {}
+        return outcome
     }
 
     /// A recogniser callback can fire more than once; a continuation may

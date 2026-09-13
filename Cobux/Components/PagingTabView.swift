@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import UIKit
+import os
 
 /// The tab shell, paging under the finger — Snapchat's model, with iOS 26's
 /// real tab bar.
@@ -67,6 +68,12 @@ import UIKit
 ///   3. Re-appear work each tab did on its own tap frame (Chat's full
 ///      transcript reload, Wisdom's keychain read, Library's highlight count)
 ///      -- fixed in the tabs, recorded in `docs/regressions.yml`.
+///   4. (build 60) The warm-up above laid each host out OFF-window, and
+///      nothing on this Mac could say whether SwiftUI treats that as an
+///      appearance. It now gives each unloaded host one real frame IN the
+///      window -- behind the visible tab, alpha 0, touches off -- so
+///      `.onAppear`/`.task` demonstrably run, and `SpeedTrace` records what
+///      a tap actually cost so the Diagnostics screen can say so.
 struct PagingTabView: UIViewControllerRepresentable {
 
     /// One tab: its bar item, and the SwiftUI view it hosts.
@@ -119,8 +126,8 @@ struct PagingTabView: UIViewControllerRepresentable {
         let coordinator = context.coordinator
         coordinator.parent = self
 
-        let hosts = pages.map { page -> UIHostingController<AnyView> in
-            let host = UIHostingController(rootView: wrapped(page.content))
+        let hosts = pages.map { page -> TabHostController in
+            let host = TabHostController(rootView: wrapped(page.content))
             host.tabBarItem = UITabBarItem(title: page.title,
                                            image: UIImage(systemName: page.systemImage),
                                            selectedImage: nil)
@@ -131,6 +138,7 @@ struct PagingTabView: UIViewControllerRepresentable {
         controller.viewControllers = hosts
         controller.delegate = coordinator
         controller.selectedIndex = clamped(selection)
+        SpeedTrace.noteShellCreated()
         // Once. `Color.cobuxAccent` is an asset colour, so the `UIColor` made
         // from it is dynamic and follows the theme on its own; setting it
         // again on every pass was a `tintColorDidChange` walk of five view
@@ -175,6 +183,12 @@ struct PagingTabView: UIViewControllerRepresentable {
         guard !coordinator.isTransitioning else { return }
         let target = clamped(selection)
         if controller.selectedIndex != target {
+            // A programmatic change (a deep link, a widget tap). The warm
+            // frame, if one is showing, ends first so UIKit never adopts a
+            // view that is sitting at alpha 0 -- and the switch is timed like
+            // a tap, labelled so the Diagnostics row can tell them apart.
+            coordinator.endWarmFrame()
+            coordinator.timeSelection(to: target, via: "deep link")
             controller.selectedIndex = target
         }
     }
@@ -203,7 +217,7 @@ struct PagingTabView: UIViewControllerRepresentable {
     @MainActor
     final class Coordinator: NSObject, UITabBarControllerDelegate, UIGestureRecognizerDelegate {
         var parent: PagingTabView
-        var hosts: [UIHostingController<AnyView>] = []
+        var hosts: [TabHostController] = []
         private weak var controller: UITabBarController?
         private weak var pan: UIPanGestureRecognizer?
 
@@ -312,31 +326,53 @@ struct PagingTabView: UIViewControllerRepresentable {
         /// `@Query`'s first fetch and the first layout pass in the same frame
         /// as the swap. "whenever I click it still loads" is that frame.
         ///
-        /// This gives each off-screen host a real frame and lays it out once,
-        /// off-window, after launch has settled: the hierarchy exists, the
-        /// queries have answered, the layout is cached, and the first real
-        /// selection is a swap of a finished view -- Instagram's and Snapchat's
-        /// model, where the neighbouring screens are already built. Ordered
-        /// nearest neighbour first (one swipe away), one host per pass with a
-        /// gap between, so the tab on screen never waits behind two of them.
+        /// This gives each off-screen host ONE REAL FRAME IN THE WINDOW after
+        /// launch has settled: the hierarchy exists, the queries have
+        /// answered, the layout is cached, `.onAppear` and `.task` have run,
+        /// and the first real selection is a swap of a finished view --
+        /// Instagram's and Snapchat's model, where the neighbouring screens are
+        /// already built. Ordered nearest neighbour first (one swipe away),
+        /// one host per pass with a gap between, so the tab on screen never
+        /// waits behind two of them.
+        ///
+        /// WHY IN THE WINDOW (build 60). Build 59 laid each host out
+        /// off-window (`layoutIfNeeded` on a view with no superview). That
+        /// builds the SwiftUI tree, but whether SwiftUI counts it as an
+        /// appearance -- whether the tabs' `.onAppear`/`.task` run -- could
+        /// not be settled from this Mac, and it was an honest "either way".
+        /// `warmFrame` removes the doubt: the host's view is inserted BEHIND
+        /// the visible tab's content (index 0 of the shell's root view), at
+        /// alpha 0 with user interaction off, wrapped in the container
+        /// appearance calls UIKit documents for exactly this, laid out, and
+        /// removed on the next run-loop turn -- after the frame has committed.
+        /// A view in a window that has rendered is, by every definition
+        /// SwiftUI has, appeared. What a tab does on appearance it then does
+        /// here, at idle, rather than under the thumb.
         ///
         /// SAFETY. Never while `SeedingStatus.shared.isSeeding`: building a
         /// tree against a store the seed merge is mutating is the Build-5
         /// crash class, and Library's grid is the surface that hit it. Never
-        /// under a finger (`isTransitioning`) and never in the background.
-        /// No model object leaves the main actor -- this is the same main-actor
-        /// layout pass the tab would get on selection, only earlier. Whether
-        /// SwiftUI treats an off-window layout as an appearance (and so runs
-        /// the tabs' `.task`s here) cannot be settled from this Mac; every
-        /// root-level `.task`/`.onAppear` in the five tabs is guarded on the
-        /// seed flag and reads only counts or its own actor-isolated probe, so
-        /// it is safe either way -- and if they do not run here, the redacted
-        /// first states the tabs already draw fill in on first selection,
-        /// exactly as they do today.
+        /// under a finger (`isTransitioning`), never in the background, never
+        /// two at once (`warmingHost`). No model object leaves the main actor
+        /// -- this is the same main-actor appearance the tab would get on
+        /// selection, only earlier. And it can never be SEEN or TOUCHED: alpha
+        /// 0, interaction off, behind the content -- and `endWarmFrame` runs
+        /// synchronously at the head of every path that changes the selection
+        /// (a tap in `shouldSelect`, a drag in `begin`, a programmatic write in
+        /// `updateUIViewController`), so UIKit never adopts a view that is
+        /// still at alpha 0. If UIKit's own selection re-parents the view
+        /// first anyway, the cleanup sees a superview that is not the root and
+        /// leaves the hierarchy alone, restoring only alpha and interaction.
         ///
-        /// Safe-area insets are zero off-window, so the first on-window layout
-        /// re-runs with the real ones. That is a layout pass over a built tree,
-        /// not the build; the build is what this moves.
+        /// OLDER PHONES. `DeviceClass.compact` (≤ 4 GB) warms only the two
+        /// neighbours of the launch tab, not all four: two fewer live trees
+        /// in memory on a device whose per-app budget is a third of his.
+        ///
+        /// Safe-area insets during the warm frame come from the window rather
+        /// than from the tab bar's content inset, so the first on-window
+        /// selection may re-run one layout with the real ones. That is a
+        /// layout pass over a built tree, not the build; the build is what
+        /// this moves.
         func scheduleWarmUp() {
             warmUpTask?.cancel()
             warmUpTask = Task { @MainActor [weak self] in
@@ -349,7 +385,10 @@ struct PagingTabView: UIViewControllerRepresentable {
                 }
                 guard let self, let controller = self.controller else { return }
                 let anchor = controller.selectedIndex
-                let order = self.hosts.indices.sorted { abs($0 - anchor) < abs($1 - anchor) }
+                let radius = DeviceClass.current.isCompact ? 1 : self.hosts.count
+                let order = self.hosts.indices
+                    .filter { $0 != anchor && abs($0 - anchor) <= radius }
+                    .sorted { abs($0 - anchor) < abs($1 - anchor) }
                 for index in order {
                     guard !Task.isCancelled else { return }
                     while self.isTransitioning || self.parent.scenePhase != .active {
@@ -361,10 +400,91 @@ struct PagingTabView: UIViewControllerRepresentable {
                     let host = self.hosts[index]
                     // He may have got there first; a loaded view is a warm view.
                     guard index != controller.selectedIndex, !host.isViewLoaded else { continue }
-                    host.view.frame = controller.view.bounds
-                    host.view.layoutIfNeeded()
+                    let title = self.parent.pages.indices.contains(index) ? self.parent.pages[index].title : "Tab \(index)"
+                    await self.warmFrame(host, title: title)
                     try? await Task.sleep(for: .milliseconds(150))
                 }
+            }
+        }
+
+        /// The host whose warm frame is on screen right now, if any.
+        private var warmingHost: TabHostController?
+
+        /// One in-window frame for an unloaded host. See `scheduleWarmUp`.
+        private func warmFrame(_ host: TabHostController, title: String) async {
+            guard warmingHost == nil, !isTransitioning,
+                  let controller, let root = controller.view else { return }
+            // Loads the view (`viewDidLoad`) on first access.
+            let view: UIView = host.view
+            view.frame = root.bounds
+            view.alpha = 0
+            view.isUserInteractionEnabled = false
+            warmingHost = host
+            // The documented container-controller pair around a manual
+            // add: the child's `viewWillAppear`/`viewDidAppear` run, and
+            // `UIHostingController` forwards those into SwiftUI's own
+            // appearance. Balanced by the mirror pair in `endWarmFrame`, so
+            // the child is back in its "disappeared" state before
+            // `UITabBarController` ever selects it for real.
+            host.beginAppearanceTransition(true, animated: false)
+            root.insertSubview(view, at: 0)
+            view.layoutIfNeeded()
+            host.endAppearanceTransition()
+            // Two frames, not one run-loop turn: this loop already runs as a
+            // main-actor job, and a job re-enqueued from inside a queue drain
+            // can resume in the same drain -- before this turn's commit. A
+            // timed sleep resumes on a later iteration by construction, so
+            // the frame has committed and every `.task` the appearance
+            // started has had its first slice.
+            try? await Task.sleep(for: .milliseconds(32))
+            endWarmFrame()
+            SpeedTrace.recordWarmedTab(title)
+        }
+
+        /// Takes the warm frame down. Idempotent, synchronous, and called at
+        /// the head of every path that changes the selection as well as from
+        /// `warmFrame` itself.
+        func endWarmFrame() {
+            guard let host = warmingHost else { return }
+            warmingHost = nil
+            guard host.isViewLoaded else { return }
+            let view: UIView = host.view
+            if let root = controller?.view, view.superview === root {
+                host.beginAppearanceTransition(false, animated: false)
+                view.removeFromSuperview()
+                host.endAppearanceTransition()
+            }
+            // Whatever happened to the hierarchy, the view UIKit will show
+            // next must be visible and tappable.
+            view.alpha = 1
+            view.isUserInteractionEnabled = true
+        }
+
+        // MARK: Timing
+
+        /// Arms the tap-to-frame stopwatch for a selection that is about to
+        /// happen: the incoming host's next layout and the run-loop turn after
+        /// this one (the frame's commit) both report back to `SpeedTrace`.
+        /// A re-tap of the current tab is not a switch and is not timed.
+        func timeSelection(to index: Int, via: String) {
+            guard let controller, index != controller.selectedIndex,
+                  hosts.indices.contains(index) else { return }
+            let from = parent.pages.indices.contains(controller.selectedIndex)
+                ? parent.pages[controller.selectedIndex].title : "?"
+            let to = parent.pages.indices.contains(index) ? parent.pages[index].title : "?"
+            SpeedTrace.tabSwitchBegan(from: from, to: to, via: via)
+            let host = hosts[index]
+            host.onNextLayout = { SpeedTrace.tabSwitchLaidOut() }
+            // The next main-actor job. A tap is handled from a UIKit event,
+            // not from inside a queue drain, so this runs on the run-loop
+            // iteration after the tap's -- after the frame that carries the
+            // new tab has committed.
+            Task { @MainActor [weak host] in
+                // A warm host whose cached layout still fits does not lay
+                // out again -- and that absence IS the evidence the warm-up
+                // worked, so the sample records it rather than waiting.
+                host?.onNextLayout = nil
+                SpeedTrace.tabSwitchFrameCommitted()
             }
         }
 
@@ -439,6 +559,7 @@ struct PagingTabView: UIViewControllerRepresentable {
                     let settled = abs(translation) / width
                     guard settled > 0.32 || abs(pan.velocity(in: root).x) > 450,
                           let target = neighbour(of: controller.selectedIndex, step: step) else { return }
+                    endWarmFrame()
                     controller.selectedIndex = target
                     commit(target)
                 }
@@ -463,6 +584,9 @@ struct PagingTabView: UIViewControllerRepresentable {
 
         private func begin(from: Int, to: Int, fingerMovingLeft: Bool) {
             guard let controller, !isTransitioning else { return }
+            // Never slide in a view that is sitting at alpha 0 for its warm
+            // frame. Synchronous and idempotent; see `scheduleWarmUp`.
+            endWarmFrame()
             transitionFrom = from
             transitionTo = to
             incomingFromRight = fingerMovingLeft
@@ -605,14 +729,21 @@ struct PagingTabView: UIViewControllerRepresentable {
                 interactor?.cancel()
                 clearStuckTransition()
             }
+            // A warm frame must never become the selected view while it is
+            // still at alpha 0 -- and this is the earliest callback for a
+            // tap, which is also where the tap-to-frame clock starts.
+            endWarmFrame()
             // Re-tapping the active tab. Handled here as well as in `didSelect`
             // because popping that tab to root is behaviour `ContentView` owns
             // (`tabSelection`'s setter) and this is the callback UIKit is
             // documented to make for every tap, re-selection included. Both
             // paths do the same idempotent thing.
-            if let index = tabBarController.viewControllers?.firstIndex(of: viewController),
-               index == tabBarController.selectedIndex {
-                parent.selection = index
+            if let index = tabBarController.viewControllers?.firstIndex(of: viewController) {
+                if index == tabBarController.selectedIndex {
+                    parent.selection = index
+                } else {
+                    timeSelection(to: index, via: "tap")
+                }
             }
             return true
         }
@@ -889,5 +1020,226 @@ private final class TabSlideAnimator: NSObject, UIViewControllerAnimatedTransiti
         }
         self.animator = animator
         return animator
+    }
+}
+
+// MARK: - The hosts
+
+/// A tab's hosting controller, with the one hook the shell's stopwatch
+/// needs: a one-shot layout callback, armed by `Coordinator.timeSelection`
+/// at the instant of a selection and consumed by the very next
+/// `viewDidLayoutSubviews`. Nil the rest of the time, so a warm-frame layout,
+/// a rotation or a keyboard never reports as a tab switch.
+final class TabHostController: UIHostingController<AnyView> {
+    fileprivate var onNextLayout: (() -> Void)?
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        if let onNextLayout {
+            self.onNextLayout = nil
+            onNextLayout()
+        }
+    }
+}
+
+// MARK: - Device class
+
+/// What kind of phone this is, decided once per process from the two facts
+/// that matter for "make sure in their little old phones and storage and etc
+/// it works the same quality and speed": physical memory and free disk.
+///
+/// `.compact` is a phone with 4 GB or less (an iPhone 12/13/SE-class device,
+/// whose per-app memory budget is roughly a third of a 12 GB phone's).
+/// Everything a compact phone does differently is listed here, in one place,
+/// and each is a memory decision, never a feature one:
+///
+///   * the tab shell warms only the two neighbours of the launch tab
+///     (`PagingTabView.Coordinator.scheduleWarmUp`), not all four;
+///   * the semantic vector table is kept as `Float16` -- ~33 MB instead of
+///     ~66 MB -- and released while the app sits in the background
+///     (`SemanticVectorCache`, `SemanticVectorTable.Entry`);
+///   * Flow's warm deck drops its probe context between sessions
+///     (`FlowWarmCache.warm`).
+///
+/// The ceiling is 4.5 GB rather than a literal 4 GB because
+/// `physicalMemory` on a "4 GB" phone reads a little under 4 GB (the kernel's
+/// share is carved out first); 4.5 GB puts every 4 GB phone on the compact
+/// side and every 6 GB phone on the standard side, with no phone near the
+/// line. A 6 GB phone -- Amal's iPhone 13 Pro -- keeps the full Float32
+/// table: 66 MB against a ~2 GB budget is fine, and halving it there would
+/// trade nothing but ranking precision for room it does not need.
+///
+/// `freeDiskBytes()` is the one syscall here. It is a `statfs`, not a cached
+/// property, so callers on the main actor take it off-main (`Task.detached`)
+/// or accept a sub-millisecond call at a moment nothing is animating.
+enum DeviceClass: String, Sendable {
+    case standard
+    case compact
+
+    private static let compactMemoryCeiling: UInt64 = 4_500_000_000
+
+    static let current: DeviceClass =
+        ProcessInfo.processInfo.physicalMemory <= compactMemoryCeiling ? .compact : .standard
+
+    var isCompact: Bool { self == .compact }
+
+    /// Whether the semantic vector table is stored half-width.
+    var compactVectorTable: Bool { isCompact }
+
+    /// Whether the vector table is released while the app is in the
+    /// background (and rebuilt off-main after the next foreground).
+    var releasesVectorTableInBackground: Bool { isCompact }
+
+    /// "Standard (12 GB)" / "Compact (3.9 GB)", for the Diagnostics screen.
+    var label: String {
+        let memory = ByteCountFormatter.string(
+            fromByteCount: Int64(ProcessInfo.processInfo.physicalMemory), countStyle: .memory)
+        return "\(rawValue.capitalized) (\(memory))"
+    }
+
+    /// Free space on the app's volume for "important" usage -- the figure
+    /// iOS itself uses to decide whether a download may proceed. `nil` when
+    /// the volume cannot be asked, which callers treat as "unknown, proceed"
+    /// so a query failure never disables a feature.
+    static func freeDiskBytes() -> Int64? {
+        guard let home = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+              let values = try? home.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+              let free = values.volumeAvailableCapacityForImportantUsage else { return nil }
+        return free
+    }
+}
+
+// MARK: - Speed trace
+
+/// Two stopwatches and a ledger, so "still not right away" has a number.
+///
+/// Measures the two things he named on 59 -- a tab switch, and opening Flow
+/// -- from the tap to the first frame that shows the result, with
+/// `CACurrentMediaTime()` (the display's own clock) and an `os_signpost`
+/// interval each, so Instruments reads the same intervals if a device is
+/// ever attached. The last sample of each, and which tabs the warm-up has
+/// built, are kept in `UserDefaults.standard` for the Diagnostics screen.
+///
+/// What a tab-switch sample means: `layoutMs` is the incoming host's first
+/// `viewDidLayoutSubviews` after the tap (nil when the warm layout was
+/// reused and no relayout happened -- the warm-up working); `frameMs` is the
+/// run-loop turn after the tap's, i.e. after the frame that carries the new
+/// tab has committed. What a Flow sample means: `frameMs` is the first
+/// card's own `.onAppear` -- the render pass that puts it on screen;
+/// `label` says which path dealt it (the warm deck, the instant card, or a
+/// built batch).
+///
+/// This is a diagnostics instrument, not a score: nothing here is counted,
+/// compared or graded (`checklist:nothing-grades-the-user`); it records the
+/// last measurement and nothing else.
+@MainActor
+enum SpeedTrace {
+    /// One measurement, as the Diagnostics screen reads it back.
+    struct Sample: Sendable {
+        let label: String
+        let layoutMs: Double?
+        let frameMs: Double
+        let at: Date
+    }
+
+    private static let signposter = OSSignposter(
+        subsystem: Bundle.main.bundleIdentifier ?? "Cobux", category: "Speed")
+    private static let defaults = UserDefaults.standard
+    private static let tabSwitchKey = "cobux.speed.lastTabSwitch"
+    private static let flowOpenKey = "cobux.speed.lastFlowOpen"
+    private static let warmedTabsKey = "cobux.speed.warmedTabs"
+
+    private static var shellCreatedAt: CFTimeInterval?
+
+    private static var switchStartedAt: CFTimeInterval?
+    private static var switchLabel = ""
+    private static var switchLayoutMs: Double?
+    private static var switchInterval: OSSignpostIntervalState?
+
+    private static var flowStartedAt: CFTimeInterval?
+    private static var flowInterval: OSSignpostIntervalState?
+
+    // MARK: Tab switches
+
+    fileprivate static func noteShellCreated() {
+        shellCreatedAt = CACurrentMediaTime()
+        defaults.removeObject(forKey: warmedTabsKey)
+    }
+
+    fileprivate static func tabSwitchBegan(from: String, to: String, via: String) {
+        if let interval = switchInterval { signposter.endInterval("Tab switch", interval) }
+        switchStartedAt = CACurrentMediaTime()
+        switchLabel = "\(from) → \(to) (\(via))"
+        switchLayoutMs = nil
+        switchInterval = signposter.beginInterval("Tab switch", id: signposter.makeSignpostID())
+    }
+
+    fileprivate static func tabSwitchLaidOut() {
+        guard let start = switchStartedAt else { return }
+        switchLayoutMs = (CACurrentMediaTime() - start) * 1000
+    }
+
+    fileprivate static func tabSwitchFrameCommitted() {
+        guard let start = switchStartedAt else { return }
+        let frameMs = (CACurrentMediaTime() - start) * 1000
+        if let interval = switchInterval { signposter.endInterval("Tab switch", interval) }
+        switchInterval = nil
+        switchStartedAt = nil
+        store(Sample(label: switchLabel, layoutMs: switchLayoutMs, frameMs: frameMs, at: .now),
+              under: tabSwitchKey)
+    }
+
+    fileprivate static func recordWarmedTab(_ title: String) {
+        var warmed = defaults.stringArray(forKey: warmedTabsKey) ?? []
+        let since = shellCreatedAt.map { CACurrentMediaTime() - $0 } ?? 0
+        warmed.append(String(format: "%@ +%.1f s", title, since))
+        defaults.set(warmed, forKey: warmedTabsKey)
+    }
+
+    // MARK: Flow
+
+    /// The tap on the Flow button. `ContentView` calls this in the same
+    /// statement that inserts the overlay.
+    static func flowOpenBegan() {
+        if let interval = flowInterval { signposter.endInterval("Flow open", interval) }
+        flowStartedAt = CACurrentMediaTime()
+        flowInterval = signposter.beginInterval("Flow open", id: signposter.makeSignpostID())
+    }
+
+    /// The first card has rendered. `FlowView` calls this from the first
+    /// card's own `.onAppear` -- the render pass that puts it on screen, the
+    /// same instant whichever path dealt it. A Flow opened by a path that did
+    /// not start the clock (the Wisdom hero card's own cover) records nothing.
+    static func flowFirstCardShown(via path: String) {
+        guard let start = flowStartedAt else { return }
+        let frameMs = (CACurrentMediaTime() - start) * 1000
+        if let interval = flowInterval { signposter.endInterval("Flow open", interval) }
+        flowInterval = nil
+        flowStartedAt = nil
+        store(Sample(label: path, layoutMs: nil, frameMs: frameMs, at: .now), under: flowOpenKey)
+    }
+
+    // MARK: Reading back
+
+    static func lastTabSwitch() -> Sample? { sample(under: tabSwitchKey) }
+    static func lastFlowOpen() -> Sample? { sample(under: flowOpenKey) }
+    static func warmedTabs() -> [String] { defaults.stringArray(forKey: warmedTabsKey) ?? [] }
+
+    private static func store(_ sample: Sample, under key: String) {
+        var record: [String: Any] = [
+            "label": sample.label,
+            "frameMs": sample.frameMs,
+            "at": sample.at
+        ]
+        if let layoutMs = sample.layoutMs { record["layoutMs"] = layoutMs }
+        defaults.set(record, forKey: key)
+    }
+
+    private static func sample(under key: String) -> Sample? {
+        guard let record = defaults.dictionary(forKey: key),
+              let label = record["label"] as? String,
+              let frameMs = record["frameMs"] as? Double,
+              let at = record["at"] as? Date else { return nil }
+        return Sample(label: label, layoutMs: record["layoutMs"] as? Double, frameMs: frameMs, at: at)
     }
 }

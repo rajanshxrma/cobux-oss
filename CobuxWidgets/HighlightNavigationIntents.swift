@@ -18,17 +18,20 @@ struct PreviousHighlightIntent: AppIntent {
     static var title: LocalizedStringResource = "Show Previous Highlight"
     static var isDiscoverable: Bool = false
 
-    @Parameter(title: "Book")
-    var scopeKey: String?
+    @Parameter(title: "Book", default: "")
+    // Non-optional since 59, same reason as `CycleHighlightIntent.scopeKey`.
+    var scopeKey: String
 
     init() {}
 
     init(scopeKey: String?) {
-        self.scopeKey = scopeKey
+        self.scopeKey = scopeKey ?? ""
     }
 
+    private var scope: String? { scopeKey.isEmpty ? nil : scopeKey }
+
     func perform() async throws -> some IntentResult {
-        if WidgetHighlightHistory.goBack(scope: scopeKey) {
+        if WidgetHighlightHistory.goBack(scope: scope) {
             WidgetHighlightHistory.trace("back")
             StreakTracker.recordActivityToday()
             WidgetCenter.shared.reloadTimelines(ofKind: "CobuxHighlightWidget")
@@ -44,17 +47,20 @@ struct NextHighlightIntent: AppIntent {
     static var title: LocalizedStringResource = "Show Next Highlight"
     static var isDiscoverable: Bool = false
 
-    @Parameter(title: "Book")
-    var scopeKey: String?
+    @Parameter(title: "Book", default: "")
+    // Non-optional since 59, same reason as `CycleHighlightIntent.scopeKey`.
+    var scopeKey: String
 
     init() {}
 
     init(scopeKey: String?) {
-        self.scopeKey = scopeKey
+        self.scopeKey = scopeKey ?? ""
     }
 
+    private var scope: String? { scopeKey.isEmpty ? nil : scopeKey }
+
     func perform() async throws -> some IntentResult {
-        if WidgetHighlightHistory.goForward(scope: scopeKey) {
+        if WidgetHighlightHistory.goForward(scope: scope) {
             WidgetHighlightHistory.trace("forward")
             StreakTracker.recordActivityToday()
             WidgetCenter.shared.reloadTimelines(ofKind: "CobuxHighlightWidget")

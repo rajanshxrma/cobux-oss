@@ -516,3 +516,164 @@ extension FlowQueueBuilderTests {
                        "the echo belongs to the first batch only, never repeated deeper in the feed")
     }
 }
+
+/// Batch 0 built ahead of the open.
+///
+/// `FlowWarmCache` deals the first deck at launch settle on `FlowPoolProbe`'s
+/// executor and hands `FlowView` a `FlowBatchPlan` of values plus the
+/// `seedBase` it was drawn under; the view adopts that base. The whole scheme
+/// rests on one property: a plan drawn EARLY for a seed base is the plan a
+/// cold build at open would draw for it -- same pools, same builder, same
+/// cards, same recap state after them. These prove it over the store, not
+/// over arrays: the probe's fetches and `COUNT`s read the persistent store,
+/// so the library is saved first.
+extension FlowQueueBuilderTests {
+
+    /// A two-book library with lessons and due quick checks, saved, so every
+    /// pool the plan draws from is non-empty and every card type resolves.
+    private func makeSavedLibrary(context: ModelContext, now: Date) throws {
+        let first = makeLibrary(context: context, highlightCount: 30, lessonsPerChapter: 6)
+        let second = Book(title: "Meditations", author: "Marcus Aurelius", coverColorHex: "#0EA5E9")
+        context.insert(second)
+        let chapter = Chapter(title: "Book I", summary: "s")
+        chapter.keyLessons = ["Waste no more time arguing what a good man should be. Be one."]
+        chapter.book = second
+        second.chapters.append(chapter)
+        for index in 0..<30 {
+            let highlight = Highlight(text: "A complete stoic sentence number \(index), long enough to stand alone.",
+                                      chapter: chapter.title, tags: ["stoicism"], isReminder: false)
+            highlight.book = second
+            context.insert(highlight)
+            second.highlights.append(highlight)
+        }
+        for index in 0..<4 {
+            let question = QuizQuestion(book: first, chapter: first.chapters[0], questionType: .recallMCQ,
+                                        prompt: "Q\(index)", explanation: "e")
+            question.choices = ["a", "b"]
+            question.correctAnswerIndex = 0
+            question.dueDate = now.addingTimeInterval(-3600)
+            context.insert(question)
+            first.chapters[0].quizQuestions.append(question)
+        }
+        try context.save()
+    }
+
+    /// `FlowCard` ids for a plan, resolved on `context` -- the same resolve
+    /// `FlowView` does at open. The opener's streak is not part of its id.
+    private func dealtIDs(of plan: FlowBatchPlan, in context: ModelContext) -> [String] {
+        let highlights = FlowRowResolver.rows(Highlight.self, for: plan.cards.flatMap(\.highlightIDs), in: context)
+        let chapters = FlowRowResolver.rows(Chapter.self, for: plan.cards.compactMap(\.chapterID), in: context)
+        let questions = FlowRowResolver.rows(QuizQuestion.self, for: plan.cards.compactMap(\.questionID), in: context)
+        return plan.cards.compactMap {
+            $0.card(highlights: highlights, chapters: chapters, questions: questions, streak: 0)?.id
+        }
+    }
+
+    func testWarmAndColdPlansForOneSeedBaseDealTheIdenticalBatch() throws {
+        let context = try makeContext()
+        // Midday: night mode would halve the cloze cap and drop weak topics.
+        let noon = Calendar.current.date(from: DateComponents(year: 2026, month: 6, day: 1, hour: 12))!
+        try makeSavedLibrary(context: context, now: noon)
+
+        let request = FlowBatchRequest(
+            seedBase: 4242, batch: 0, now: noon, excludedRaw: "", includedRaw: "",
+            recentlyShownIDs: [], suppressedIDs: [], includeDailyOpener: true,
+            journalEcho: nil, continuation: FlowQueueBuilder.BatchContinuation())
+
+        // "At launch settle" and "at open": two independent draws, one base.
+        let warm = FlowPoolProbe.makePlan(in: context, request)
+        let cold = FlowPoolProbe.makePlan(in: context, request)
+
+        XCTAssertEqual(warm.cards.count, FlowQueueBuilder.batchSize, "a plan is a full batch")
+        XCTAssertEqual(dealtIDs(of: warm, in: context), dealtIDs(of: cold, in: context),
+                       "a plan drawn early must be the plan a cold open would draw for the same seed base")
+        XCTAssertEqual(warm.continuation.recapNumber, cold.continuation.recapNumber)
+        XCTAssertEqual(warm.continuation.contentSinceRecap, cold.continuation.contentSinceRecap,
+                       "batch 1 must chain from the same recap state either way")
+
+        // The plan is the builder's own output, not a re-implementation: over
+        // the same pools, `buildBatch(pools:)` deals exactly these cards.
+        let books = FlowPoolProbe.sourceBooks(in: context, excludedRaw: "", includedRaw: "").books
+        let pools = FlowPoolProbe.drawPools(in: context, books: books, seedBase: 4242, batch: 0,
+                                            now: noon, wantsDueCount: true)
+        var continuation = FlowQueueBuilder.BatchContinuation()
+        let direct = FlowQueueBuilder.buildBatch(pools: pools, batch: 0, seedBase: 4242,
+                                                 continuation: &continuation, now: noon)
+        XCTAssertEqual(direct.map(\.id), dealtIDs(of: warm, in: context))
+
+        // Every card type the library can produce is in the plan and survives
+        // the value round-trip -- a pass must not come from everything having
+        // degraded to highlights.
+        XCTAssertTrue(warm.cards.contains { if case .clozeTeaser = $0 { return true } else { return false } })
+        XCTAssertTrue(warm.cards.contains { if case .keyLesson = $0 { return true } else { return false } })
+        XCTAssertTrue(warm.cards.contains { if case .dailyOpener = $0 { return true } else { return false } })
+
+        // A different base is a different feed -- the per-open freshness the
+        // cache must not flatten.
+        var other = request
+        other.seedBase = 4243
+        XCTAssertNotEqual(dealtIDs(of: FlowPoolProbe.makePlan(in: context, other), in: context),
+                          dealtIDs(of: warm, in: context))
+    }
+
+    /// The deck's rows are resolved on the MAIN context, which never saw the
+    /// probe's fetches -- so nothing is registered there and the resolver's
+    /// primary-key fetch is the path that actually runs on device.
+    func testPlanResolvesOnAContextThatNeverFetchedItsRows() throws {
+        let context = try makeContext()
+        let noon = Calendar.current.date(from: DateComponents(year: 2026, month: 6, day: 1, hour: 12))!
+        try makeSavedLibrary(context: context, now: noon)
+        let request = FlowBatchRequest(
+            seedBase: 77, batch: 0, now: noon, excludedRaw: "", includedRaw: "",
+            recentlyShownIDs: [], suppressedIDs: [], includeDailyOpener: false,
+            journalEcho: nil, continuation: FlowQueueBuilder.BatchContinuation())
+        let plan = FlowPoolProbe.makePlan(in: context, request)
+
+        let fresh = ModelContext(context.container)
+        XCTAssertEqual(dealtIDs(of: plan, in: fresh).count, plan.cards.count,
+                       "every card must resolve by primary key on a context with nothing registered")
+        XCTAssertEqual(dealtIDs(of: plan, in: fresh), dealtIDs(of: plan, in: context))
+    }
+
+    /// The instant card is the first thing on screen and is recorded as shown
+    /// before batch 0 is drawn, exactly as `FlowView.onAppear` does on the
+    /// cold path -- so a warm deck never deals it twice at the top.
+    func testWarmDeckInstantCardIsNotDealtAgainAtTheFrontOfBatchZero() throws {
+        let context = try makeContext()
+        let noon = Calendar.current.date(from: DateComponents(year: 2026, month: 6, day: 1, hour: 12))!
+        try makeSavedLibrary(context: context, now: noon)
+        let books = FlowPoolProbe.sourceBooks(in: context, excludedRaw: "", includedRaw: "").books
+        let instant = try XCTUnwrap(FlowPoolProbe.drawInstant(
+            in: context, books: books, seedBase: 9, recentlyShownIDs: [], suppressedIDs: []))
+        XCTAssertTrue(FlowQueueBuilder.readsStandalone(instant.text), "the first card must read on its own")
+
+        let request = FlowBatchRequest(
+            seedBase: 9, batch: 0, now: noon, excludedRaw: "", includedRaw: "",
+            recentlyShownIDs: [instant.id], suppressedIDs: [], includeDailyOpener: false,
+            journalEcho: nil, continuation: FlowQueueBuilder.BatchContinuation())
+        let plan = FlowPoolProbe.makePlan(in: context, request)
+        let firstHighlight = plan.cards.compactMap { snapshot -> UUID? in
+            if case .highlight(let key) = snapshot { return key.uuid }
+            return nil
+        }.first
+        XCTAssertNotEqual(firstHighlight, instant.id,
+                          "the recently-shown demotion must push the instant pick off the front")
+    }
+
+    /// A deck is only served under the inputs it was dealt with.
+    func testFingerprintRefusesADeckDealtUnderDifferentInputs() {
+        let now = Date(timeIntervalSince1970: 1_780_000_000)
+        let a = FlowWarmCache.Fingerprint.current(excludedRaw: "", includedRaw: "", now: now)
+        let b = FlowWarmCache.Fingerprint.current(excludedRaw: "", includedRaw: "", now: now)
+        XCTAssertEqual(a, b, "the same inputs at the same instant must match")
+        var switchedABookOff = a
+        switchedABookOff.excludedRaw = BookSourceFilter.encode([UUID()])
+        XCTAssertNotEqual(a, switchedABookOff)
+        var hidACard = a
+        hidACard.suppressedIDs.insert(UUID())
+        XCTAssertNotEqual(a, hidACard)
+        let tomorrow = FlowWarmCache.Fingerprint.current(
+            excludedRaw: "", includedRaw: "", now: now.addingTimeInterval(24 * 60 * 60))
+        XCTAssertNotEqual(a.day, tomorrow.day, "a day that rolled over is a different deck")
+    }
+}

@@ -52,6 +52,27 @@ struct DiagnosticsView: View {
                 }
             }
 
+            // EVIDENCE for "still not right away" (build 60). The last tab
+            // switch and the last Flow open, measured from the tap to the
+            // frame that shows the result (`SpeedTrace` -- `CACurrentMediaTime`
+            // and an `os_signpost` interval each), which tabs the shell's
+            // warm-up has built and when, the phone's class and its free
+            // disk. Every row is `isHealthy: true` on purpose: these are
+            // measurements to read, not marks to pass -- this screen grades
+            // nothing (`checklist:nothing-grades-the-user`). Reads a
+            // `UserDefaults` dictionary each; no store or file IO.
+            Section("Speed") {
+                diagnosticRow("Last tab switch", Self.describe(SpeedTrace.lastTabSwitch(), layout: true), isHealthy: true)
+                diagnosticRow("Last Flow open", Self.describe(SpeedTrace.lastFlowOpen(), layout: false), isHealthy: true)
+                diagnosticRow("Warmed tabs", Self.warmedTabsSummary(), isHealthy: true)
+                diagnosticRow("Device class", DeviceClass.current.label, isHealthy: true)
+                if let diskSpace {
+                    diagnosticRow("Free disk", Self.formatBytes(diskSpace.free), isHealthy: true)
+                } else {
+                    pendingRow("Free disk")
+                }
+            }
+
             Section("Spend") {
                 diagnosticRow("Estimated this month", String(format: "$%.2f", UsageTracker.currentMonthEstimate()), isHealthy: true)
             }
@@ -195,6 +216,31 @@ struct DiagnosticsView: View {
         return "\(outcome) · \(at.formatted(.relative(presentation: .named)))"
     }
 
+    /// "Chat → Library (tap) · 14 ms to frame, layout 9 ms · 2 min ago".
+    /// A tab-switch sample with no layout time means the incoming tab's
+    /// warm layout was reused unchanged -- said in words, because that
+    /// absence is the warm-up doing its job.
+    @MainActor
+    private static func describe(_ sample: SpeedTrace.Sample?, layout: Bool) -> String {
+        guard let sample else { return "not yet" }
+        var parts = ["\(sample.label) · \(Int(sample.frameMs.rounded())) ms to frame"]
+        if layout {
+            if let layoutMs = sample.layoutMs {
+                parts[0] += ", layout \(Int(layoutMs.rounded())) ms"
+            } else {
+                parts[0] += ", layout reused"
+            }
+        }
+        parts.append(sample.at.formatted(.relative(presentation: .named)))
+        return parts.joined(separator: " · ")
+    }
+
+    @MainActor
+    private static func warmedTabsSummary() -> String {
+        let warmed = SpeedTrace.warmedTabs()
+        return warmed.isEmpty ? "not yet this launch" : warmed.joined(separator: ", ")
+    }
+
 
     private static func thermalStateLabel(_ state: ProcessInfo.ThermalState) -> String {
         switch state {
@@ -209,6 +255,7 @@ struct DiagnosticsView: View {
     /// The facts in the Build section plus the log's own tail, as plain text
     /// -- everything a "what's happening exactly" question needs, sized to
     /// paste into a message rather than attach as a file.
+    @MainActor
     private func diagnosticsSummaryText() -> String {
         var lines = [
             "Cobux \(Self.appVersion) (\(Self.appBuild))",
@@ -219,6 +266,10 @@ struct DiagnosticsView: View {
         }
         lines.append("Memory: \(Self.formatBytes(Int64(ProcessInfo.processInfo.physicalMemory)))")
         lines.append("Thermal state: \(Self.thermalStateLabel(ProcessInfo.processInfo.thermalState))")
+        lines.append("Device class: \(DeviceClass.current.label)")
+        lines.append("Last tab switch: \(Self.describe(SpeedTrace.lastTabSwitch(), layout: true))")
+        lines.append("Last Flow open: \(Self.describe(SpeedTrace.lastFlowOpen(), layout: false))")
+        lines.append("Warmed tabs: \(Self.warmedTabsSummary())")
         lines.append("")
         lines.append("--- Recent log ---")
         lines.append(contentsOf: DiagnosticLog.recentEntries().prefix(20).reversed())

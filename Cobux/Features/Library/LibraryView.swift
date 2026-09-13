@@ -444,7 +444,9 @@ struct LibraryView: View {
                     )
                 }
             }
-            .background(Color.cobuxBackground)
+            // The tab room's ground: the journal's crimson wash in dark, the
+            // same flat paper as before in light (P9, `CobuxGround`).
+            .background { CobuxGround() }
             // REAL CLEARANCE FOR THE END OF THE SHELF, reserved by the layout
             // system at the container rather than baked into the last child.
             //

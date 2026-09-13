@@ -232,6 +232,12 @@ struct QuizHomeView: View {
             // imitating it. The hero row keeps its clear background and zero
             // insets, because the primary card is meant to float free of the
             // grouping -- that part was always right.
+            //
+            // P9 adds one thing under the family look: in dark the list's
+            // black backdrop steps aside for the journal's crimson wash
+            // (`cobuxRoomGround`), and the inset cards keep their material on
+            // top of it. Light is untouched, grouped grey and all.
+            .cobuxRoomGround()
             .navigationTitle("Quiz")
             .overlay {
                 if books.isEmpty {

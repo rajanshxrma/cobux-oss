@@ -108,6 +108,11 @@ import SwiftUI
 struct EbbCardView: View {
     let card: EbbCard
     let hue: Color
+    /// The echo card's third voice: a line on the same theme from a book of
+    /// another tradition (`EbbCounterpoint`). Found after the deck is on
+    /// screen and handed in by `EbbView`; `nil` means no line cleared the
+    /// gate, and the card is exactly the two-voice card it always was.
+    var counterpoint: EbbCounterpoint? = nil
     /// Declared before onOpenEntry -- the trailing-closure trap.
     var onWriteBack: ((UUID) -> Void)? = nil
     var onOpenEntry: (UUID) -> Void
@@ -181,32 +186,52 @@ struct EbbCardView: View {
             // the form every printed page uses to say "someone else wrote
             // this". Nothing new is invented for it; the thread is the era
             // divider's own spine, doing the same job one scale down.
+            //
+            // ## Another tradition -- the third voice
+            //
+            // When a line from a book of a DIFFERENT shelf clears the echo's
+            // own gate (`EbbCounterpointFinder`), it is set directly under the
+            // library line as a second block quotation: the same indent, the
+            // same thread, the same face, the same citation form. That
+            // sameness is the whole point. `BookTradition` exists so that
+            // Greene and Aurelius stop arriving with identical authority; the
+            // way an app shows that difference without grading it is to put
+            // the two lines on one theme side by side and say nothing about
+            // which is wiser. Rajan: "it's just not everything is just taken
+            // at the same level of darkness… We can do something more than
+            // just displaying the highlight as it is." The kicker over the
+            // block names the mechanism in the shelf's own words -- ANOTHER
+            // TRADITION · Stoic practice · Marcus Aurelius -- and nothing on
+            // the card interprets the pair. No framing sentence, on purpose:
+            // "the same thought" would be the app's reading of two lines, and
+            // this surface quotes, it does not read.
+            //
+            // His passage gives up two of its eight lines to make room -- the
+            // page has a band and three voices must share it -- and the two
+            // library lines keep the same three-line budget, because a
+            // tradition allowed one more line than another would already be
+            // a grade.
             VStack(alignment: .leading, spacing: 18) {
-                quoted(passage, lineLimit: 8)
-                VStack(alignment: .leading, spacing: 6) {
-                    // `display`, NOT `passage` — a real semantic error, fixed.
-                    // `CobuxTypography.passage` is documented as HIS OWN
-                    // writing, quoted, and closes with "Never used for Flow's
-                    // library quotes -- those stay `display`". This line is a
-                    // library quote; it was wearing his face. On the one card
-                    // that holds both voices at once, they must not be set in
-                    // the same type, and now they aren't: his passage above in
-                    // the book face on the page, the library's line below it in
-                    // the library's.
-                    Text("\u{201C}\(highlight)\u{201D}")
-                        .font(CobuxTypography.display(colorScheme, size: 16, weight: .regular))
-                        .italic()
-                        .foregroundStyle(.secondary)
-                        .lineSpacing(3)
-                        .lineLimit(3)
-                    // An em dash, not a bare title: the dash is what turns a
-                    // line of text into a citation, and it costs one character.
-                    Text("\u{2014} \(bookTitle)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                quoted(passage, lineLimit: counterpoint == nil ? 8 : 6)
+                libraryBlock(highlight, citation: bookTitle)
+                if let counterpoint {
+                    VStack(alignment: .leading, spacing: 8) {
+                        // The kicker grammar at its inline scale, in the
+                        // month's hue like the running head above the page:
+                        // the app naming the rule that fired, in dated-words
+                        // discipline -- here the shelf's name and the author's.
+                        Text("Another tradition · \(counterpoint.tradition.label) · \(counterpoint.author)")
+                            .cobuxKicker(tint: hue, scale: .inline)
+                            .lineLimit(2)
+                            .padding(.leading, CobuxSpacing.md)
+                        libraryBlock(counterpoint.text, citation: counterpoint.bookTitle)
+                    }
+                    // Arrives after the card is already on screen. A fade
+                    // only -- `EbbView` animates the assignment, shorter under
+                    // Reduce Motion -- never a move, so nothing on the page
+                    // travels.
+                    .transition(.opacity)
                 }
-                .padding(.leading, CobuxSpacing.md)
-                .overlay(alignment: .leading) { attributionThread }
             }
         case let .asked(_, _, question, passage, _):
             // His question first, in his words, then what he was looking at
@@ -283,6 +308,38 @@ struct EbbCardView: View {
                 .minimumScaleFactor(0.7)
                 .textSelection(.enabled)
         }
+    }
+
+    /// A library line as a block quotation on his page: indented from his
+    /// margin, threaded down its leading edge in the month's hue, and closed
+    /// with an em-dash citation -- the form every printed page uses to say
+    /// "someone else wrote this". One helper for BOTH library voices on the
+    /// echo card, so the echo line and the other-tradition line cannot be set
+    /// differently by accident: the sameness is the design.
+    ///
+    /// `display`, NOT `passage` — a real semantic error, fixed once and now
+    /// impossible to repeat here. `CobuxTypography.passage` is documented as
+    /// HIS OWN writing, quoted, and closes with "Never used for Flow's
+    /// library quotes -- those stay `display`". On the one card that holds
+    /// his voice and the library's at once, they must not be set in the same
+    /// type: his passage above in the book face, the library's lines below it
+    /// in the library's.
+    private func libraryBlock(_ line: String, citation: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("\u{201C}\(line)\u{201D}")
+                .font(CobuxTypography.display(colorScheme, size: 16, weight: .regular))
+                .italic()
+                .foregroundStyle(.secondary)
+                .lineSpacing(3)
+                .lineLimit(3)
+            // An em dash, not a bare title: the dash is what turns a line of
+            // text into a citation, and it costs one character.
+            Text("\u{2014} \(citation)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.leading, CobuxSpacing.md)
+        .overlay(alignment: .leading) { attributionThread }
     }
 
     private func passageFont(for text: String) -> Font {

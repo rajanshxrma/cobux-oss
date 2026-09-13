@@ -874,6 +874,11 @@ struct JournalEntryComposeView: View {
             // Not a count, not a score -- a row per note, with its length.
             if !stagedVoiceNotes.isEmpty {
                 stagedVoiceNoteRows
+                    // Playing or removing a staged note swaps the audio session
+                    // to playback and deactivates it on the way out -- under a
+                    // LIVE recorder that truncates the recording in progress,
+                    // and the failure is swallowed. Inert while recording.
+                    .disabled(recorder.isRecording)
                     .padding(10)
                     .frame(maxWidth: .infinity)
                     .background(Color.cobuxSurface,

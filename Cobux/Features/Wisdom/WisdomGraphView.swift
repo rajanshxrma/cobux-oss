@@ -38,7 +38,6 @@ struct WisdomGraphView: View {
     @State private var showMergeResult = false
     @State private var showNoAPIKeyAlert = false
     @AppStorage("hasSeenTagMergeExplanation") private var hasSeenTagMergeExplanation = false
-    @State private var showingFlow = false
 
     private let columns = [GridItem(.adaptive(minimum: 160), spacing: 14)]
 
@@ -269,11 +268,11 @@ struct WisdomGraphView: View {
                 }
                 .padding(.vertical)
             }
+            // The tab room's ground (P9): the journal's crimson wash in dark,
+            // nothing added in light.
+            .cobuxRoomGround()
             .navigationTitle("Wisdom Graph")
             .searchable(text: $searchText, prompt: "Search themes")
-            .fullScreenCover(isPresented: $showingFlow) {
-                FlowView()
-            }
             .sheet(isPresented: $showingSourcePicker) {
                 NavigationStack {
                     BookSourceFilterView()
@@ -480,7 +479,9 @@ struct WisdomGraphView: View {
     /// experience, and it should look like one.
     private var flowHeroCard: some View {
         Button {
-            showingFlow = true
+            // Through ContentView's in-place overlay (60), not a cover of our
+            // own: the system slide is the wait he still felt.
+            NotificationCenter.default.post(name: .cobuxOpenFlow, object: nil)
         } label: {
             HStack(spacing: 14) {
                 Image(systemName: "water.waves")

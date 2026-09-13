@@ -107,7 +107,9 @@ enum FlowQueueBuilder {
     /// Recap rhythm state threaded ACROSS batches — recap numbering and the
     /// 12-card count must survive the batch seam, or set numbers skip and
     /// the rhythm stretches whenever resonance riders displace a slot.
-    struct BatchContinuation {
+    /// `Sendable` because it now rides in `FlowBatchRequest`/`FlowBatchPlan`
+    /// to and from `FlowPoolProbe`'s executor -- two integers, nothing else.
+    struct BatchContinuation: Sendable {
         var contentSinceRecap = 0
         var recapNumber = 0
     }

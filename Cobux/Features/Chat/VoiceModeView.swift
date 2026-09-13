@@ -29,7 +29,10 @@ struct VoiceModeView: View {
         case .downloading:
             return "Downloading Cobux's natural voice (about 330 MB, one time, Wi-Fi only). Until it's ready, this uses the basic system voice."
         case .notStarted, .unavailable:
-            return usingDefaultQualityVoice ? VoicePreference.upgradeRecipe : nil
+            // The store's own reason first (60): under 1.5 GB free it refuses
+            // the 327 MB download and says so here, once, calmly.
+            return NeuralVoiceStore.shared.unavailableReason
+                ?? (usingDefaultQualityVoice ? VoicePreference.upgradeRecipe : nil)
         }
     }
 

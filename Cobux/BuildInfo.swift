@@ -31,6 +31,20 @@ enum BuildInfo {
     /// so testers can actually see what changed instead of guessing.
     static let changelog: [ChangelogEntry] = [
         ChangelogEntry(
+            version: "3.3.0",
+            build: "60",
+            date: "Sep 13, 2026",
+            changes: [
+                "Flow opens in place, no slide. The first card is already there when you tap",
+                "The other tabs are built before you reach them, so a switch is a switch",
+                "The warm red-black room is on every tab in the dark, and a Crimson appearance in Settings wears it on a light phone too",
+                "The icon and the COBUX wordmark carry a light tint of red",
+                "Go Deeper sets the same thought beside a line from another tradition",
+                "On phones with less memory the app keeps a smaller footprint; it will not start a 327 MB voice download or seed images without room to spare",
+                "Diagnostics has a Speed section: the last tab switch and Flow open in milliseconds",
+                "The widget's cycle tap carries no optional value any more — one variable removed on the way to the answer",
+            ]),
+        ChangelogEntry(
             version: "3.2.1",
             build: "59",
             date: "Sep 13, 2026",

@@ -155,7 +155,14 @@ struct SettingsView: View {
                     }
                 }
 
-                CobuxFormSection(title: "Appearance") {
+                // "Crimson" is the dark red-black look on any device: the
+                // fourth choice the ledger carried since the 3.0 repaint
+                // reached only phones already in dark mode. See
+                // `ThemePreference.crimson`.
+                CobuxFormSection(
+                    title: "Appearance",
+                    footer: "Crimson wears the red-black look whatever your device is set to."
+                ) {
                     Picker("Theme", selection: $themeRaw) {
                         ForEach(ThemePreference.allCases) { theme in
                             Text(theme.label).tag(theme.rawValue)
