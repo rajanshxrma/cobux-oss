@@ -1311,6 +1311,16 @@ struct SearchService {
         let style = Date.FormatStyle.dateTime.month(.wide).day().year()
         let count = entries.count
         var header = "The journal holds \(count) \(count == 1 ? "entry" : "entries"), from \(first.formatted(style)) to \(last.formatted(style))."
+        // Per-year counts: a number the model will echo, so "from 2022" is
+        // not a claim it has to believe but a table it can read. 318 dates
+        // through a calendar is nothing.
+        let calendar = Calendar.current
+        var perYear: [Int: Int] = [:]
+        for date in dates { perYear[calendar.component(.year, from: date), default: 0] += 1 }
+        if perYear.count > 1 {
+            let years = perYear.keys.sorted().map { "\($0): \(perYear[$0]!)" }.joined(separator: ", ")
+            header += " Entries per year — \(years)."
+        }
         let excerpts = excerpted == 1 ? "The 1 excerpt below is" : "The \(excerpted) excerpts below are"
         if let narrowedToMonth {
             let monthName = Calendar.current.monthSymbols[max(0, min(11, narrowedToMonth - 1))]
@@ -1398,6 +1408,20 @@ struct SearchService {
 
         if reach == .earliest {
             take(pool.sorted { stamp($0) < stamp($1) }, upTo: topK / 2)
+        } else if reach == .range, pool.count > topK {
+            // A question about the whole span ("all my journal", "since
+            // 2023") gets excerpts SPREAD across the timeline for a third of
+            // the slots -- oldest, middle, newest -- so the dates the model
+            // sees span the journal instead of clustering in the last week.
+            // His third report: the thread kept answering "September 7 to 10"
+            // because every excerpt it saw was from that week.
+            let timeline = pool.sorted { stamp($0) < stamp($1) }
+            let slots = max(2, topK / 3)
+            let stride = max(1, (timeline.count - 1) / max(1, slots - 1))
+            take((0..<slots).compactMap { i in
+                let index = min(timeline.count - 1, i * stride)
+                return timeline[index]
+            }, upTo: slots)
         }
 
         let remaining = pool.filter { !chosenIDs.contains($0.id) }

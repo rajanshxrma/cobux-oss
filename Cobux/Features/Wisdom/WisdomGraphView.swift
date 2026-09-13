@@ -99,10 +99,18 @@ struct WisdomGraphView: View {
     private func makeScope() -> Scope {
         var scope = Scope()
         scope.excludedBookIDs = excludedBookIDs
-        scope.hasAnyVisibleHighlight = hasAnyVisibleHighlight
-        scope.visibleCounts = visibleCounts
+        // (61) The FIRST body of this tab reads `TabWarmCache` synchronously
+        // when its own state is still empty, so the grid draws its real
+        // numbers and the hero card on frame one -- no pending badges, no
+        // probe -- whenever the cache was filled under exactly this book
+        // scope. `loadCounts` then confirms or, if the cache is empty, probes.
+        let cached = (hasAnyVisibleHighlight == nil || visibleCounts == nil)
+            ? TabWarmCache.shared.wisdomCounts(for: modelContext.container, excluding: scope.excludedBookIDs)
+            : nil
+        scope.hasAnyVisibleHighlight = hasAnyVisibleHighlight ?? cached?.hasAnyVisibleHighlight
+        scope.visibleCounts = visibleCounts ?? cached?.counts
 
-        if let counts = visibleCounts {
+        if let counts = scope.visibleCounts {
             // `?? 1`, not `?? 0`: a theme the counts have never heard of is
             // PENDING, not empty. That is what lets the previous counts stay on
             // screen while a refresh runs -- a theme added since the last probe
@@ -215,11 +223,32 @@ struct WisdomGraphView: View {
         // counts can stay on screen while the new ones are fetched.
         guard !SeedingStatus.shared.isSeeding else { return }
         let excluded = excludedBookIDs
-        let probe = WisdomProbe(modelContainer: modelContext.container)
-        let has = await probe.hasAnyVisibleHighlight(excluding: excluded)
-        let counts = await probe.visibleCounts(excluding: excluded)
-        hasAnyVisibleHighlight = has
-        visibleCounts = counts
+        let container = modelContext.container
+        // (61) The cache first: `TabWarmCache` ran this probe ~1.2 s after
+        // launch, off the main actor, under the scope it read from the same
+        // two keys, and again after every save that touched a theme or a
+        // highlight. Served only when the scope matches exactly.
+        if let cached = TabWarmCache.shared.wisdomCounts(for: container, excluding: excluded) {
+            hasAnyVisibleHighlight = cached.hasAnyVisibleHighlight
+            visibleCounts = cached.counts
+            return
+        }
+        let generation = TabWarmCache.shared.generation
+        // One probe at a time, shared with the launch warm (61): the same
+        // fill that is already running is awaited, never duplicated.
+        let snapshot = await TabWarmCache.shared.fillWisdom(
+            container: container, excludedRaw: excludedRaw, includedRaw: includedRaw)
+        if snapshot.excludedBookIDs == excluded {
+            hasAnyVisibleHighlight = snapshot.hasAnyVisibleHighlight
+            visibleCounts = snapshot.counts
+            TabWarmCache.shared.storeWisdom(snapshot, for: container, ifGeneration: generation, verified: false)
+        } else {
+            // The scope moved under the fill (a source toggled mid-probe):
+            // one direct read for this scope, no cache write.
+            let probe = WisdomProbe(modelContainer: container)
+            hasAnyVisibleHighlight = await probe.hasAnyVisibleHighlight(excluding: excluded)
+            visibleCounts = await probe.visibleCounts(excluding: excluded, verifyCache: false)
+        }
     }
 
     @ViewBuilder
@@ -615,19 +644,65 @@ actor WisdomProbe {
     /// it cannot trap. The build-53 record that moved this off the main actor
     /// stands; the 58 record that swapped the read for a predicate is
     /// reversed, and says so.
-    func visibleCounts(excluding excludedBookIDs: Set<UUID>) -> [UUID: Int] {
+    ///
+    /// THE 61 SHAPE: no rows at all on the ordinary path. The count is a
+    /// stored column now -- `Theme.cachedHighlightCount`, with the per-book
+    /// breakdown beside it -- written by `WisdomGraphService.buildGraph`
+    /// where every highlight of every theme is already in hand, so this is
+    /// one fetch of small `Theme` rows and arithmetic, on every phone
+    /// class. The relationship read survives as the fallback for exactly
+    /// two cases: a theme row the column was never written on (built before
+    /// 61), and `verifyCache` -- a highlight or book was deleted since the
+    /// columns were last known true (`TabWarmCache.verificationKey`). Both
+    /// paths WRITE the corrected columns back, so each runs once per theme,
+    /// not once per open. Never a `#Predicate` through the tag join.
+    func visibleCounts(excluding excludedBookIDs: Set<UUID>, verifyCache: Bool) -> [UUID: Int] {
         var counts: [UUID: Int] = [:]
+        var repaired = 0
         for theme in (try? modelContext.fetch(FetchDescriptor<Theme>())) ?? [] {
-            if excludedBookIDs.isEmpty {
-                counts[theme.id] = theme.highlights.count
-            } else {
-                counts[theme.id] = theme.highlights.reduce(into: 0) { total, highlight in
-                    if let book = highlight.book, excludedBookIDs.contains(book.id) { return }
-                    total += 1
-                }
+            if !verifyCache, let cached = theme.cachedVisibleHighlightCount(excluding: excludedBookIDs) {
+                counts[theme.id] = cached
+                continue
+            }
+            // The relationship read (57's and 60's path), on this executor.
+            var total = 0
+            var byBook: [UUID: Int] = [:]
+            for highlight in theme.highlights {
+                total += 1
+                if let bookID = highlight.book?.id { byBook[bookID, default: 0] += 1 }
+            }
+            if theme.cachedHighlightCount != total || theme.cachedBookCounts != byBook {
+                theme.cachedHighlightCount = total
+                theme.cachedBookCounts = byBook
+                repaired += 1
+            }
+            counts[theme.id] = theme.cachedVisibleHighlightCount(excluding: excludedBookIDs) ?? total
+        }
+        if repaired > 0 {
+            // Behind the gate, so `TabWarmCache`'s listener reads this save
+            // as the repair it is and not as a change to re-warm for.
+            TabWarmCache.writeBackGate.withWriteBack {
+                try? modelContext.save()
             }
         }
         return counts
+    }
+
+    /// Both stages under the scope the store itself implies, for
+    /// `TabWarmCache`, which has no `@Query books` to hand
+    /// `effectiveExcludedIDs`. Two columns of every `Book` (the id and the
+    /// content profile the default-off rule reads), then the same two calls
+    /// `WisdomGraphView.loadCounts` makes. `verifyCache` as above.
+    func countsSnapshot(excludedRaw: String, includedRaw: String, verifyCache: Bool) -> WisdomCountsSnapshot {
+        var books = FetchDescriptor<Book>()
+        books.propertiesToFetch = [\.id, \.contentProfileRaw]
+        let excluded = BookSourceFilter.effectiveExcludedIDs(
+            books: (try? modelContext.fetch(books)) ?? [],
+            excludedRaw: excludedRaw, includedRaw: includedRaw)
+        return WisdomCountsSnapshot(
+            hasAnyVisibleHighlight: hasAnyVisibleHighlight(excluding: excluded),
+            counts: visibleCounts(excluding: excluded, verifyCache: verifyCache),
+            excludedBookIDs: excluded)
     }
 
     /// One theme's lines as values, for `WisdomThemeDetailView`.

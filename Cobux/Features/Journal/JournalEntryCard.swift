@@ -126,6 +126,8 @@ struct JournalEntryCard: View {
     /// between those repeated reads. Same values, one traversal each.
     private struct RowFacts {
         var photo: JournalAttachment?
+        /// Every photo, in the array's order, for the card's carousel (61).
+        var photos: [JournalAttachment] = []
         var hasVoiceNote = false
         var wordCount = 0
         var shape: Shape = .entry
@@ -158,8 +160,9 @@ struct JournalEntryCard: View {
         for attachment in entry.attachments {
             if JournalAttachmentStore.isVoiceNote(id: attachment.id) {
                 facts.hasVoiceNote = true
-            } else if facts.photo == nil {
-                facts.photo = attachment
+            } else {
+                if facts.photo == nil { facts.photo = attachment }
+                facts.photos.append(attachment)
             }
         }
 
@@ -199,6 +202,11 @@ struct JournalEntryCard: View {
     // every call site below reads exactly as it did.
     private var wordCount: Int { facts.wordCount }
     private var photoAttachment: JournalAttachment? { facts.photo }
+    private var photoAttachments: [JournalAttachment] { facts.photos }
+    /// The carousel's page (61). Advances on its own every few seconds when
+    /// the entry carries more than one photo; a swipe moves it too.
+    @State private var photoIndex = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotionForCarousel
     private var hasVoiceNote: Bool { facts.hasVoiceNote }
     private var shape: Shape { facts.shape }
 
@@ -268,9 +276,38 @@ struct JournalEntryCard: View {
                     .aspectRatio(max(photoRatio ?? 4 / 3, 0.75), contentMode: .fit)
                     .frame(maxWidth: .infinity)
                     .overlay {
-                        JournalThumbnailImage(attachmentID: photo.id) { size in
-                            guard size.height > 0 else { return }
-                            photoRatio = size.width / size.height
+                        if photoAttachments.count > 1 {
+                            // 61, his words: "when multiple photos are attached
+                            // to a journal, in the all-entries view ... it
+                            // should carousel automatically as well after a
+                            // while." One page per photo, a swipe moves it,
+                            // and it turns on its own every 4 s. Off under
+                            // Reduce Motion (first photo stays).
+                            TabView(selection: $photoIndex) {
+                                ForEach(Array(photoAttachments.enumerated()), id: \.element.id) { index, attachment in
+                                    JournalThumbnailImage(attachmentID: attachment.id) { size in
+                                        guard index == 0, size.height > 0 else { return }
+                                        photoRatio = size.width / size.height
+                                    }
+                                    .tag(index)
+                                }
+                            }
+                            .tabViewStyle(.page(indexDisplayMode: .automatic))
+                            .task(id: photoAttachments.count) {
+                                guard !reduceMotionForCarousel else { return }
+                                while !Task.isCancelled {
+                                    try? await Task.sleep(for: .seconds(4))
+                                    guard !Task.isCancelled else { return }
+                                    withAnimation(.easeInOut(duration: 0.5)) {
+                                        photoIndex = (photoIndex + 1) % max(1, photoAttachments.count)
+                                    }
+                                }
+                            }
+                        } else {
+                            JournalThumbnailImage(attachmentID: photo.id) { size in
+                                guard size.height > 0 else { return }
+                                photoRatio = size.width / size.height
+                            }
                         }
                     }
                     .clipped()

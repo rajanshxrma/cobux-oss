@@ -52,6 +52,9 @@ enum CreditStatusMonitor {
         guard let since = exhaustedSince else { return }
         defaults.removeObject(forKey: exhaustedSinceKey)
         DiagnosticLog.log("credits: restored after \(Int(Date.now.timeIntervalSince(since) / 60))m")
+        // Credits came back: that is a reload, and the spend-per-cycle
+        // figure in Settings starts again from here (61).
+        UsageTracker.beginCycle()
         // Only worth interrupting someone over if the outage lasted long enough
         // that they plausibly hit it and walked away. A blip that resolved in
         // two minutes is noise, and a notification for it teaches people to

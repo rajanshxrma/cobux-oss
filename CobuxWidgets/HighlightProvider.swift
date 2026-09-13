@@ -35,7 +35,11 @@ struct HighlightEntry: TimelineEntry {
     /// Whether `WidgetHighlightHistory` has entries behind/ahead of the current
     /// position at build time -- drives the visibility of the back/forward
     /// chevrons so they only appear when tapping them would actually do
-    /// something.
+    /// something. Every path that builds a real entry -- the store, a
+    /// pre-drawn card, the last shown card -- reads these from the lane's
+    /// live state (`WidgetHighlightCard.entry`), so a chevron never vanishes
+    /// because of WHICH path built the entry; only the placeholder, and a
+    /// gallery snapshot whose history cannot describe it, carry false/false.
     var canGoBack: Bool = false
     var canGoForward: Bool = false
 }
@@ -75,8 +79,19 @@ struct HighlightProvider: AppIntentTimelineProvider {
         )
     }
 
+    /// How soon a lane is asked again after a build that had to fall back to
+    /// its last shown card: a failed container open is transient, and two
+    /// hours is a long time to sit on yesterday's quote. Bounded well inside
+    /// WidgetKit's daily budget even if every retry failed.
+    static let failedBuildRetry: TimeInterval = 15 * 60
+
+    /// The card last shown comes first: it IS what this configuration's widget
+    /// is showing, and it costs a defaults read rather than a container open.
+    /// A configuration whose lane has never shown anything (a new book picked
+    /// in the gallery) falls to the store, as before.
     func snapshot(for configuration: SelectBookIntent, in context: Context) async -> HighlightEntry {
-        makeEntry(for: configuration, isSnapshot: true) ?? placeholder(in: context)
+        if let shown = shownCardEntry(for: configuration) { return shown }
+        return makeEntry(for: configuration, isSnapshot: true) ?? placeholder(in: context)
     }
 
     /// One entry per timeline, refreshed on the rotation interval.
@@ -100,21 +115,116 @@ struct HighlightProvider: AppIntentTimelineProvider {
     /// kind (including ones triggered by a *different* widget's shuffle tap)
     /// lands here, and anchoring to "now" would let those reloads push the real
     /// rotation indefinitely into the future.
+    ///
+    /// # Three paths, in order (61)
+    ///
+    /// 1. **The card.** A cycle tap just moved this lane onto a card the
+    ///    previous build pre-drew, and the intent parked that card's whole
+    ///    payload. The entry is built from it with no container, no context
+    ///    and no fetch; the store is opened only afterwards, off this path,
+    ///    to draw the card after next (`WidgetPreDraw.scheduleRefill`). This
+    ///    is the answer to "that blinking is taking a little bit of time":
+    ///    the blink is `invalidatableContent` dimming from the tap until this
+    ///    method returns, and nothing slow is left between those two points.
+    /// 2. **The store.** Every other build -- the two-hour rotation, a Back or
+    ///    Forward step, an incidental reload from the app -- resolves through
+    ///    SwiftData as it always has, and leaves the shown card and at least
+    ///    one pre-drawn card behind it.
+    /// 3. **The last shown card.** When the store path produces nothing -- a
+    ///    container that would not open, a pool that came back empty -- the
+    ///    entry is the card this lane last showed, with the lane's REAL
+    ///    chevron state, never the placeholder. His report on 60: "sometimes
+    ///    when it refreshes it loses the bottom icons and everything". The
+    ///    placeholder has no book and no history behind it, so the share
+    ///    button and both chevrons went with the quote; the placeholder is
+    ///    now reachable only by a lane that has never shown a real quote.
     func timeline(for configuration: SelectBookIntent, in context: Context) async -> Timeline<HighlightEntry> {
-        guard let entry = makeEntry(for: configuration, isSnapshot: false, family: context.family) else {
-            // Nothing renderable yet — an empty library, or a container that
-            // wouldn't open. Retry on the ordinary cadence rather than backing
-            // off, so the widget fills itself in once content exists.
+        let scopeKey = configuration.scopeKey
+        let now = Date.now
+
+        if let entry = fastEntry(for: configuration, at: now) {
+            WidgetHighlightHistory.buildTrace("card")
+            WidgetPreDraw.scheduleRefill(
+                scope: scopeKey,
+                bookID: configuration.scopeBookID,
+                currentID: entry.highlightID,
+                maxLength: Self.readableLimit(for: context.family)
+            )
+            let state = WidgetHighlightHistory.load(scope: scopeKey)
             return Timeline(
-                entries: [placeholder(in: context)],
-                policy: .after(Date().addingTimeInterval(Self.refreshInterval))
+                entries: [entry],
+                policy: .after(state.nextRotationDate(now: now, interval: Self.refreshInterval))
             )
         }
-        let state = WidgetHighlightHistory.load(scope: configuration.scopeKey)
+
+        if let entry = makeEntry(for: configuration, isSnapshot: false, family: context.family) {
+            WidgetHighlightHistory.buildTrace("store")
+            let state = WidgetHighlightHistory.load(scope: scopeKey)
+            return Timeline(
+                entries: [entry],
+                policy: .after(state.nextRotationDate(now: now, interval: Self.refreshInterval))
+            )
+        }
+
+        if let entry = shownCardEntry(for: configuration, at: now) {
+            WidgetHighlightHistory.buildTrace("last shown")
+            let state = WidgetHighlightHistory.load(scope: scopeKey)
+            let scheduled = state.nextRotationDate(now: now, interval: Self.refreshInterval)
+            return Timeline(
+                entries: [entry],
+                policy: .after(min(scheduled, now.addingTimeInterval(Self.failedBuildRetry)))
+            )
+        }
+
+        // Nothing has ever rendered on this lane — an empty library, or a
+        // container that wouldn't open on the very first build. Retry on the
+        // ordinary cadence rather than backing off, so the widget fills
+        // itself in once content exists.
+        WidgetHighlightHistory.buildTrace("placeholder")
         return Timeline(
-            entries: [entry],
-            policy: .after(state.nextRotationDate(now: .now, interval: Self.refreshInterval))
+            entries: [placeholder(in: context)],
+            policy: .after(now.addingTimeInterval(Self.refreshInterval))
         )
+    }
+
+    /// Path 1 of `timeline(for:)`: the entry for a lane whose armed override
+    /// points at the card the intent just parked. Nil -- touching nothing --
+    /// whenever that is not exactly the situation: no override (a rotation or
+    /// an incidental reload), an override onto some other id (Back/Forward,
+    /// or the intent's own store path), a card whose book was switched off
+    /// since it was drawn, or a book-scoped lane whose card is from another
+    /// book (the whole-library fallback for an empty book; the store path
+    /// applies the same rule through `requiredBookID`).
+    ///
+    /// The override is only CONSUMED once this path has decided to honour it,
+    /// so a nil here leaves it armed for the store path, which honours it the
+    /// way it always has.
+    private func fastEntry(for configuration: SelectBookIntent, at now: Date) -> HighlightEntry? {
+        let scopeKey = configuration.scopeKey
+        guard let targetID = WidgetHighlightHistory.overrideTarget(scope: scopeKey, peek: true),
+              let card = WidgetHighlightHistory.shownCard(scope: scopeKey),
+              card.highlightID == targetID,
+              card.isShowableWithoutStore else { return nil }
+        if let scopeBookID = configuration.scopeBookID, card.bookID != scopeBookID { return nil }
+
+        _ = WidgetHighlightHistory.overrideTarget(scope: scopeKey, peek: false)
+        let state = WidgetHighlightHistory.load(scope: scopeKey)
+        return card.entry(scopeBookID: configuration.scopeBookID, state: state, at: now)
+    }
+
+    /// Path 3 of `timeline(for:)`, and the snapshot's first choice: the card
+    /// this lane last showed, with the lane's live chevron state. Nil for a
+    /// lane that has never shown anything, or whose last card's book has since
+    /// been switched off (the placeholder is better than a book he turned off
+    /// -- that was its own report). No scope check here, deliberately: a
+    /// book-scoped lane running on the whole-library fallback last showed a
+    /// card from another book, and that card is still what was on screen.
+    private func shownCardEntry(for configuration: SelectBookIntent, at now: Date = .now) -> HighlightEntry? {
+        let scopeKey = configuration.scopeKey
+        guard let card = WidgetHighlightHistory.shownCard(scope: scopeKey),
+              card.isShowableWithoutStore else { return nil }
+        let state = WidgetHighlightHistory.load(scope: scopeKey)
+        return card.entry(scopeBookID: configuration.scopeBookID, state: state, at: now)
     }
 
     /// The widget gallery's pre-configured variants: the whole library first
@@ -168,18 +278,26 @@ struct HighlightProvider: AppIntentTimelineProvider {
         guard let resolved = resolveHighlight(for: configuration, in: context, isSnapshot: isSnapshot, family: family),
               let book = resolved.highlight.book else { return nil }
         let highlight = resolved.highlight
+        let card = WidgetHighlightCard(highlight: highlight, book: book)
 
-        // Pre-draw the NEXT quote while the store is open, so the cycle tap
-        // never has to open it (see `WidgetHighlightHistory.storeNext`). Not
-        // for snapshots: those never become what is showing.
-        if !isSnapshot,
-           let next = WidgetHighlightPool.randomHighlight(
-               in: context,
-               bookID: configuration.scopeBookID,
-               excluding: highlight.id,
-               maxLength: Self.readableLimit(for: family)
-           ), next.id != highlight.id {
-            WidgetHighlightHistory.storeNext(next.id, scope: scopeKey)
+        // Not for snapshots: those never become what is showing.
+        if !isSnapshot {
+            // The card going on screen, parked as the lane's last good entry
+            // (path 3 of `timeline(for:)`) and as what the next tap's fast
+            // path will match against.
+            WidgetHighlightHistory.storeShown(card, scope: scopeKey)
+            // Pre-draw the NEXT quotes while the store is open, so the cycle
+            // tap never has to open it. Synchronous here, to full depth, and
+            // bounded: it draws only the shortfall, so a rotation build (no
+            // one waiting) tops the lane up and a Back/Forward step (someone
+            // waiting) usually finds it already full, since only cycle taps
+            // consume cards. One container per build either way; the detached
+            // refill belongs to the card path alone, where no store is open.
+            WidgetPreDraw.fill(
+                scope: scopeKey, bookID: configuration.scopeBookID,
+                currentID: highlight.id, maxLength: Self.readableLimit(for: family),
+                in: context, upTo: WidgetHighlightHistory.nextCardDepth
+            )
         }
 
         // Chevron visibility is read AFTER the resolution above has settled
@@ -190,20 +308,7 @@ struct HighlightProvider: AppIntentTimelineProvider {
         let state = resolved.describesShownHighlight
             ? WidgetHighlightHistory.load(scope: scopeKey)
             : WidgetHistoryState()
-        return HighlightEntry(
-            date: .now,
-            quote: highlight.text,
-            bookTitle: book.title,
-            author: book.author,
-            chapter: highlight.chapter,
-            coverColorHex: book.coverColorHex,
-            isPlaceholder: false,
-            bookID: book.id,
-            highlightID: highlight.id,
-            scopeBookID: configuration.scopeBookID,
-            canGoBack: state.canGoBack,
-            canGoForward: state.canGoForward
-        )
+        return card.entry(scopeBookID: configuration.scopeBookID, state: state)
     }
 
     /// Picks the highlight this build will render, and leaves this

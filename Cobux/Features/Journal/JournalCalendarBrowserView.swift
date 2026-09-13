@@ -60,6 +60,36 @@ struct JournalCalendarBrowserSession: Identifiable {
 /// `Slot` for the arithmetic; the short version is that a cell's whole render
 /// cost is one `Set` lookup and one `Date ==`, and no month is built until it
 /// is scrolled to.
+///
+/// **One upward timeline.** Rajan, ledger N62: *"all months are displayed top
+/// being the recent month but the dates still go down ... I want the dates to
+/// be also displayed from down to up, up being the latest date ... it's gonna
+/// be the best way for a person's ongoing life and growth display."* So the
+/// page has ONE direction of time. Today is the first cell at the very top,
+/// and every scroll downward is a step back -- across months (newest first, as
+/// before) and now also within them: a month's last week is its top row and
+/// its first week is its bottom row. Weekday COLUMNS keep their left-to-right
+/// order, so the header above the scroll still tells the truth about every
+/// row, and a week still reads as a week. The seam between two months is
+/// therefore continuous: scrolling down past "5 4 3 2 1" of September you meet
+/// August's title and then "31 30", which is exactly the day before.
+///
+/// Two consequences, both deliberate. The blanks that align day 1 to its
+/// weekday now sit at the bottom-left of a month and the blanks after its last
+/// day at the top-right, which is just the same padding seen from the other
+/// end. And the current month begins at today: its future days are not drawn,
+/// because the top of the page IS now, and a row of numbers above "now" would
+/// make the reader scroll past days that have not happened to reach the one
+/// that has. (A day that has not happened is not information -- the strip
+/// draws it as nothing for the same reason.) That is not a grade on the
+/// future; it is where the timeline starts.
+///
+/// The month's title stays ABOVE its grid. The alternative -- the name at the
+/// foot, so the month "grows up out of it" -- was weighed and refused: on open
+/// the first thing under the weekday header would be an unlabelled row of
+/// numerals, the year separators would have to move to the foot as well, and
+/// the title's hue would prime the cells only after they had been read. A
+/// heading is read before its body in whichever direction the body runs.
 struct JournalCalendarBrowserView: View {
     /// The same per-day map `JournalCalendarStrip` renders from, handed
     /// straight down from `JournalListView`.
@@ -256,7 +286,9 @@ struct JournalCalendarBrowserView: View {
         return Array(symbols[shift...] + symbols[..<shift])
     }
 
-    /// Newest month at the top, running back through the years.
+    /// Newest month at the top, running back through the years -- and inside
+    /// each month, newest week at the top too (see `MonthGrid`), so the whole
+    /// list is one line of time that runs upward.
     ///
     /// The direction is not arbitrary: the journal's own feed is newest-first
     /// (`JournalListView.dateSections` sorts `$0.key > $1.key`), so scrolling
@@ -264,7 +296,10 @@ struct JournalCalendarBrowserView: View {
     /// fastest possible arrangement — the month he most likely wants is the
     /// first item, so opening the browser needs no programmatic scroll into a
     /// lazy stack at all, and a lazy stack that is never asked to scroll to an
-    /// unrealised row never has to realise the rows in between.
+    /// unrealised row never has to realise the rows in between. Reversing the
+    /// weeks inside a month changes none of that: the first row of the lazy
+    /// stack is still the current month, and its first grid row is now the
+    /// week that contains today.
     private var monthList: some View {
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 24) {
@@ -409,12 +444,19 @@ struct JournalCalendarBrowserView: View {
         let yearLabel: String?
     }
 
-    /// One month, weekday-aligned.
+    /// One month, weekday-aligned, last week first.
     ///
     /// Its own `View` rather than a `@ViewBuilder` function so the grid
     /// arithmetic runs in `init` — once, when the month scrolls in — instead of
     /// on every evaluation of the parent's body. Nothing in here touches
     /// SwiftData, a `DateFormatter`, or `dayStats`.
+    ///
+    /// The weeks are laid out in the ordinary top-down way first -- leading
+    /// blanks, the days, trailing blanks, multiples of seven -- and then the
+    /// ROWS are reversed. Nothing inside a row moves, so a Monday-first locale
+    /// keeps its Monday-first columns and the padding lands where the ruling in
+    /// the type's doc comment says it must: before day 1 at the bottom-left,
+    /// after the last day at the top-right, for every `firstWeekday`.
     private struct MonthGrid: View {
         let month: Date
         let title: String
@@ -434,9 +476,11 @@ struct JournalCalendarBrowserView: View {
             let number: Int
         }
 
-        /// `nil` for the blanks that pad the first and last weeks. Length is
-        /// always a multiple of seven, so the rows below need no bounds math.
-        private let cells: [Slot?]
+        /// The month's weeks, LAST WEEK FIRST, each exactly seven wide with
+        /// `nil` for the blanks that pad the month's first and last weeks. The
+        /// reversal is done here, once, so `body` walks the array in order and
+        /// has no arithmetic to get wrong.
+        private let weeks: [[Slot?]]
 
         init(month: Date, title: String, hue: Color, written: Set<Date>,
              today: Date, cellHeight: CGFloat, markSize: CGFloat,
@@ -457,7 +501,17 @@ struct JournalCalendarBrowserView: View {
             // the calendar's own `firstWeekday`, so a Monday-first region gets
             // a Monday-first month with no second implementation.
             let leading = (weekday - calendar.firstWeekday + 7) % 7
-            let dayCount = calendar.range(of: .day, in: .month, for: month)?.count ?? 30
+            var dayCount = calendar.range(of: .day, in: .month, for: month)?.count ?? 30
+            // The current month ends at today. `today` is `startOfDay`, `month`
+            // is the month's first instant, and the anchor is never later than
+            // this month, so the only month that contains `today` is the one
+            // that gets cut -- and it is cut to today's own number, which makes
+            // today the last slot built and therefore the first cell drawn.
+            // Every other month is in the past and keeps every day.
+            if let interval = calendar.dateInterval(of: .month, for: month),
+               interval.contains(today) {
+                dayCount = min(dayCount, calendar.component(.day, from: today))
+            }
 
             var slots: [Slot?] = Array(repeating: nil, count: leading)
             slots.reserveCapacity(leading + dayCount + 6)
@@ -472,7 +526,12 @@ struct JournalCalendarBrowserView: View {
                 slots.append(day.map { Slot(date: $0, number: offset + 1) })
             }
             while slots.count % 7 != 0 { slots.append(nil) }
-            self.cells = slots
+            // Chunk into weeks, then reverse the WEEKS -- never the days inside
+            // one. `stride` over a length that is a multiple of seven gives
+            // exactly `slots.count / 7` full rows.
+            self.weeks = stride(from: 0, to: slots.count, by: 7)
+                .map { Array(slots[$0..<$0 + 7]) }
+                .reversed()
         }
 
         var body: some View {
@@ -485,11 +544,15 @@ struct JournalCalendarBrowserView: View {
                     .font(CobuxTypography.display(colorScheme, size: 17, weight: .semibold))
                     .foregroundStyle(hue)
 
+                // Top row is the month's newest week (in the current month,
+                // the week that holds today), bottom row is the week of the
+                // 1st. Identified by position: a row's slots are stable for
+                // the life of the view, and two rows can never be equal.
                 VStack(spacing: 2) {
-                    ForEach(0..<(cells.count / 7), id: \.self) { row in
+                    ForEach(weeks.indices, id: \.self) { row in
                         HStack(spacing: 2) {
                             ForEach(0..<7, id: \.self) { column in
-                                cell(cells[row * 7 + column])
+                                cell(weeks[row][column])
                             }
                         }
                     }
@@ -529,9 +592,10 @@ struct JournalCalendarBrowserView: View {
         ///
         /// A day without writing is a plain quiet numeral: no ring, no hollow
         /// circle, no red, no "nothing written" label sitting under it. A future
-        /// day is drawn identically to a past one, because marking "you have not
-        /// written here yet" on a day that has not happened is the purest form
-        /// of the thing this file will not do.
+        /// day never reaches here at all -- the current month is built up to
+        /// today and no later (see `init`) -- so there is no "you have not
+        /// written here yet" to draw on a day that has not happened, which is
+        /// the purest form of the thing this file will not do.
         private func mark(_ slot: Slot, hasEntries: Bool) -> some View {
             let isToday = slot.date == today
             return Text("\(slot.number)")

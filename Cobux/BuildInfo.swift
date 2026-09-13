@@ -31,6 +31,18 @@ enum BuildInfo {
     /// so testers can actually see what changed instead of guessing.
     static let changelog: [ChangelogEntry] = [
         ChangelogEntry(
+            version: "3.3.1",
+            build: "61",
+            date: "Sep 13, 2026",
+            changes: [
+                "Flow's ground is opaque again; nothing shows through it",
+                "The icon keeps its violet haze, with the red kept to one corner",
+                "Quiz and Wisdom are ready before you switch to them: their counts are built after launch and read in the first frame",
+                "Wisdom no longer reads every line in the library to count a theme",
+                "The streak lives in one place, More, in the quiz's wording",
+                "The widget changes in one beat, from what it already prepared, and its bottom controls never drop out",
+            ]),
+        ChangelogEntry(
             version: "3.3.0",
             build: "60",
             date: "Sep 13, 2026",

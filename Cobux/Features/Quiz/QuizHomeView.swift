@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct QuizHomeView: View {
     @Bindable var claudeService: ClaudeService
@@ -74,8 +75,21 @@ struct QuizHomeView: View {
         guard !SeedingStatus.shared.isSeeding, path.isEmpty,
               dailyReviewNavigation == nil, quickModeNavigation == nil, spokenQuizNavigation == nil
         else { return }
-        let probe = QuizHomeProbe(modelContainer: modelContext.container)
-        counts = await probe.counts()
+        let container = modelContext.container
+        // (61) The cache first. `TabWarmCache` ran this same probe ~1.2 s
+        // after launch, off the main actor, and again after every save that
+        // could move a number -- so on the ordinary first tap the counts are
+        // already here and this is one dictionary read, no probe. Past
+        // `quizMaxAge` the cached numbers stay on screen and the probe runs
+        // behind them: cards come due with the clock, not with a save.
+        if let cached = TabWarmCache.shared.quizCounts(for: container, maxAge: TabWarmCache.quizMaxAge) {
+            counts = cached
+            return
+        }
+        let generation = TabWarmCache.shared.generation
+        let fresh = await TabWarmCache.shared.fillQuiz(container: container)
+        counts = fresh
+        TabWarmCache.shared.storeQuiz(fresh, for: container, ifGeneration: generation)
     }
 
     /// Fetched at the tap, for the two pools that need them. These were
@@ -101,7 +115,13 @@ struct QuizHomeView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .navigationTitle("Quiz")
             } else {
-                quizContent(counts)
+                // `counts ?? cache`: the FIRST body of this tab reads the
+                // warm cache synchronously, so the screen's anchor card is
+                // drawn with its real numbers on frame one -- no redacted
+                // placeholder, no probe -- whenever the cache has them. The
+                // `.task` below then either confirms them (a dictionary read)
+                // or, when the cache is empty, runs the probe as before.
+                quizContent(counts ?? TabWarmCache.shared.quizCounts(for: modelContext.container, maxAge: nil))
                     .task(id: probeKey) { await loadCounts() }
             }
         }
@@ -123,12 +143,11 @@ struct QuizHomeView: View {
                 // greyed bars, never a number that has not been read), so the
                 // screen's anchor is on frame one and fills in rather than
                 // arriving a beat later and pushing the shelf down.
-                if !books.isEmpty && (streak > 0 || counts == nil || counts?.primary != nil) {
+                // 61: no streak here -- "the streak is already displayed in
+                // the more section". The chip's wording moved there.
+                if !books.isEmpty && (counts == nil || counts?.primary != nil) {
                     Section {
                         VStack(alignment: .leading, spacing: 12) {
-                            if streak > 0 {
-                                streakChip
-                            }
                             if let counts {
                                 if let primary = counts.primary {
                                     primaryActionCard(for: primary, counts: counts)
@@ -623,6 +642,7 @@ actor QuizHomeProbe {
 
 private struct QuizBookRow: View {
     let book: Book
+    @Environment(\.modelContext) private var modelContext
 
     /// The counts, computed once per appearance in `.task` — never in `body`.
     ///
@@ -643,71 +663,16 @@ private struct QuizBookRow: View {
     /// integers. Only *when* it runs changed: once, after this row has already
     /// laid out, on the same `.task` convention `BookCard` uses for its
     /// highlight count and `JournalThumbnailImage` uses for its bitmap.
-    @State private var counts: RowCounts?
-
-    /// Same one-pass treatment as `QuizHomeView.Counts`, at row scale. The two
-    /// counts below were computed properties read seven times between them per
-    /// row render (`readyChaptersDescription` alone touches `readyChapterCount`
-    /// three times), each one re-walking this book's chapters — and
-    /// `readyChapterCount` re-runs `QuizGenerationService.needsGeneration` per
-    /// chapter while it's at it.
-    private struct RowCounts {
-        var chapters = 0
-        var ready = 0
-        var due = 0
-
-        /// Softer than the old "N/M chapters ready to quiz" fraction -- clinical, exam-bank
-        /// phrasing that reads fine to a med student but odd to a population-generic user
-        /// browsing a plain reading app. Same three states (nothing ready / partly ready /
-        /// fully ready), plainer words.
-        var readyChaptersDescription: String {
-            guard chapters > 0 else { return "No chapters yet" }
-            if ready == 0 { return "Not ready to quiz yet" }
-            if ready == chapters { return "All \(ready) chapters ready" }
-            return "\(ready) of \(chapters) chapters ready"
-        }
-    }
-
-    /// Must stay on the main actor: it reads `@Model` rows bound to the main
-    /// context, and reading those from another actor is this codebase's known
-    /// crash class. A `nonisolated` async function would NOT inherit the
-    /// caller's actor (SE-0338), so the annotation is load-bearing, not
-    /// decorative.
-    @MainActor
-    private func makeRowCounts() -> RowCounts {
-        var counts = RowCounts()
-        let now = Date.now
-        // Bucketed ONCE for the whole book instead of re-filtering every
-        // highlight in the book, twice, for each of its chapters -- see
-        // `QuizGenerationService.highlightsByChapterID`. This row is the Quiz
-        // shelf's per-book row, so the old shape ran that filter for every
-        // visible row on every body evaluation of the shelf.
-        let highlightsByChapter = QuizGenerationService.highlightsByChapterID(in: book)
-        for chapter in book.chapters {
-            counts.chapters += 1
-            // Read once, used twice below. Also REORDERED: the cheap
-            // "has any questions at all" test now comes first, so a chapter
-            // that has never been generated skips the content hash entirely --
-            // and that is most chapters in most libraries. Both operands are
-            // pure reads, so the answer is unchanged; only the work is.
-            let questions = chapter.quizQuestions
-            if !questions.isEmpty,
-               !QuizGenerationService.needsGeneration(
-                   chapter: chapter,
-                   highlights: highlightsByChapter[chapter.persistentModelID] ?? []) {
-                counts.ready += 1
-            }
-            // FSRS-based, not the legacy per-highlight `HighlightMemory` -- must
-            // match `DailyReviewService.dueQuestions`'s exact filter, or this
-            // row's badge and the Daily Review count above it show two
-            // different due counts.
-            for question in questions
-            where !question.isSuspended && (question.dueDate.map { $0 <= now } ?? false) {
-                counts.due += 1
-            }
-        }
-        return counts
-    }
+    ///
+    /// (61) And now WHERE: the traversal runs on `QuizBookRowProbe`'s own
+    /// executor, not the main actor. It faults the book's whole highlight
+    /// array -- for a reference text, ~700 rows with a 2 KB vector each --
+    /// and `.task`'s closure runs on the main actor, so a synchronous
+    /// `makeRowCounts()` there still blocked the frame after the row laid
+    /// out, once per visible row, on every first appearance. The first
+    /// screen's rows are also in `TabWarmCache`, filled ~1.2 s after launch,
+    /// so on the ordinary first tap this is a dictionary read.
+    @State private var counts: QuizBookRowCounts?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -758,6 +723,501 @@ private struct QuizBookRow: View {
         // After layout, not during it. Keyed on the book so a recycled row
         // recomputes for whichever book it now represents rather than showing
         // the previous one's numbers.
-        .task(id: book.id) { counts = makeRowCounts() }
+        .task(id: book.id) { await loadRowCounts() }
+    }
+
+    /// `@MainActor` explicitly, the way `QuizHomeView.loadCounts` is: this
+    /// assigns `@State`, and only a `Sendable` value comes back from the
+    /// probe. The book's id crosses, never the `Book`.
+    @MainActor
+    private func loadRowCounts() async {
+        let container = modelContext.container
+        let bookID = book.id
+        if let cached = TabWarmCache.shared.quizRowCounts(bookID: bookID, for: container) {
+            counts = cached
+            return
+        }
+        // The probe faults `book.highlights` on its executor; never against
+        // a store the seed merge is mutating (the Build-5 crash class). The
+        // shelf is behind a "Syncing" placeholder while seeding, so this is
+        // belt to that braces.
+        guard !SeedingStatus.shared.isSeeding else { return }
+        let generation = TabWarmCache.shared.generation
+        // One probe per row, released with this task -- so the rows it
+        // registered (that book's highlights) do not stay resident.
+        let probe = QuizBookRowProbe(modelContainer: container)
+        guard let loaded = await probe.counts(bookID: bookID, now: .now), !Task.isCancelled else { return }
+        counts = loaded
+        TabWarmCache.shared.storeQuizRow(loaded, bookID: bookID, for: container, ifGeneration: generation)
+    }
+}
+
+/// One Quiz shelf row's numbers, as a value. Same one-pass treatment as
+/// `QuizHomeCounts`, at row scale: the two counts below were computed
+/// properties read seven times between them per row render
+/// (`readyChaptersDescription` alone touches `readyChapterCount` three
+/// times), each one re-walking this book's chapters — and `readyChapterCount`
+/// re-ran `QuizGenerationService.needsGeneration` per chapter while it was at
+/// it. `Sendable`, so it is the only thing that crosses back from
+/// `QuizBookRowProbe`.
+struct QuizBookRowCounts: Equatable, Sendable {
+    var chapters = 0
+    var ready = 0
+    var due = 0
+
+    /// Softer than the old "N/M chapters ready to quiz" fraction -- clinical, exam-bank
+    /// phrasing that reads fine to a med student but odd to a population-generic user
+    /// browsing a plain reading app. Same three states (nothing ready / partly ready /
+    /// fully ready), plainer words.
+    var readyChaptersDescription: String {
+        guard chapters > 0 else { return "No chapters yet" }
+        if ready == 0 { return "Not ready to quiz yet" }
+        if ready == chapters { return "All \(ready) chapters ready" }
+        return "\(ready) of \(chapters) chapters ready"
+    }
+}
+
+/// Reads one shelf row's counts off the main actor -- `QuizHomeProbe`'s
+/// shape, one level down. The traversal is `QuizBookRow.makeRowCounts` as it
+/// was through build 60, moved onto this actor's own context: the `Book` it
+/// walks is this context's row, resolved by stored id (`$0.id == bookID`,
+/// the shape `WisdomBookDestination` and `ContentView.shareText` ship), and
+/// nothing but `QuizBookRowCounts` comes back.
+@ModelActor
+actor QuizBookRowProbe {
+    func counts(bookID: UUID, now: Date) -> QuizBookRowCounts? {
+        var descriptor = FetchDescriptor<Book>(predicate: #Predicate<Book> { $0.id == bookID })
+        descriptor.fetchLimit = 1
+        guard let book = (try? modelContext.fetch(descriptor))?.first else { return nil }
+        return rowCounts(for: book, now: now)
+    }
+
+    /// The rows the shelf shows first -- `QuizHomeView`'s `@Query` order,
+    /// newest book first -- for `TabWarmCache` to fill before the tab is
+    /// ever opened. `limit` is the cache's own budget, not this probe's.
+    func firstScreenCounts(limit: Int, now: Date) -> [UUID: QuizBookRowCounts] {
+        var descriptor = FetchDescriptor<Book>(sortBy: [SortDescriptor(\Book.dateAdded, order: .reverse)])
+        descriptor.fetchLimit = limit
+        var result: [UUID: QuizBookRowCounts] = [:]
+        for book in (try? modelContext.fetch(descriptor)) ?? [] {
+            result[book.id] = rowCounts(for: book, now: now)
+        }
+        return result
+    }
+
+    private func rowCounts(for book: Book, now: Date) -> QuizBookRowCounts {
+        var counts = QuizBookRowCounts()
+        // Bucketed ONCE for the whole book instead of re-filtering every
+        // highlight in the book, twice, for each of its chapters -- see
+        // `QuizGenerationService.highlightsByChapterID`. This row is the Quiz
+        // shelf's per-book row, so the old shape ran that filter for every
+        // visible row on every body evaluation of the shelf.
+        let highlightsByChapter = QuizGenerationService.highlightsByChapterID(in: book)
+        for chapter in book.chapters {
+            counts.chapters += 1
+            // Read once, used twice below. Also REORDERED: the cheap
+            // "has any questions at all" test now comes first, so a chapter
+            // that has never been generated skips the content hash entirely --
+            // and that is most chapters in most libraries. Both operands are
+            // pure reads, so the answer is unchanged; only the work is.
+            let questions = chapter.quizQuestions
+            if !questions.isEmpty,
+               !QuizGenerationService.needsGeneration(
+                   chapter: chapter,
+                   highlights: highlightsByChapter[chapter.persistentModelID] ?? []) {
+                counts.ready += 1
+            }
+            // FSRS-based, not the legacy per-highlight `HighlightMemory` -- must
+            // match `DailyReviewService.dueQuestions`'s exact filter, or this
+            // row's badge and the Daily Review count above it show two
+            // different due counts.
+            for question in questions
+            where !question.isSuspended && (question.dueDate.map { $0 <= now } ?? false) {
+                counts.due += 1
+            }
+        }
+        return counts
+    }
+}
+
+// MARK: - The warm cache
+
+/// Wisdom's per-theme counts, the hero card's one boolean, and the book
+/// scope they were computed under -- as values. A snapshot is served only
+/// when the tab's own `excludedBookIDs` is exactly this set; otherwise it is
+/// as if nothing were cached.
+struct WisdomCountsSnapshot: Sendable, Equatable {
+    let hasAnyVisibleHighlight: Bool
+    let counts: [UUID: Int]
+    let excludedBookIDs: Set<UUID>
+}
+
+/// The numbers the Quiz and Wisdom tabs show on their first frame, read
+/// before the tabs are ever opened and kept as values independent of any
+/// view's lifetime.
+///
+/// WHY 60's WARM FRAMES DID NOT REACH THESE TWO TABS. `PagingTabView`'s
+/// warm-up gives each unloaded host one frame in the window so its
+/// `.onAppear`/`.task` fire -- and then removes it, which CANCELS every
+/// `.task` the appearance started (SwiftUI cancels a `.task` on disappear).
+/// Library's and More's first frames are cheap and their tasks are short, so
+/// they came out warm. Quiz's `QuizHomeProbe` and Wisdom's `WisdomProbe` are
+/// the two tasks that take longer than a frame, so they were cancelled every
+/// launch and ran again, from zero, under the thumb on the real first tap:
+/// "moving onto the quiz and the wisdom tabs is still pretty slow at the
+/// first". The warm frames stay (they pre-render layout); the WORK now runs
+/// here, on the probes' own executors, ~1.2 s after launch and after the
+/// shell's warm-up, and the tabs read the answer synchronously in their
+/// first body -- no placeholder, no probe -- falling back to the probe only
+/// when the cache is empty.
+///
+/// WHAT IS CACHED. `QuizHomeCounts` (the four counts and two booleans), the
+/// first screen's `QuizBookRowCounts` (`rowWarmBudget` rows, newest book
+/// first -- the shelf's own order), and `WisdomCountsSnapshot`. All values,
+/// all small: a few hundred integers. So every phone class fills the whole
+/// cache; what `DeviceClass.compact` changes is only the heavy part -- how
+/// many shelf rows are walked (each faults one book's highlights) -- never
+/// whether the tabs get their numbers.
+///
+/// INVALIDATION mirrors `FlowWarmCache` and `SemanticVectorCache`: a
+/// `ModelContext.didSave` from any context whose payload names a watched
+/// table drops everything and re-warms `saveDebounce` later while the app is
+/// active and no seed merge is writing. A save that DELETES `Highlight` or
+/// `Book` rows also marks the stored theme counts for verification
+/// (`Theme.cachedHighlightCount` can only go stale by a deletion -- a new
+/// highlight carries no theme until the next rebuild, which rewrites the
+/// counts), persisted in `UserDefaults` so a kill between the deletion and
+/// the repair cannot lose it. The repair is `WisdomProbe.visibleCounts`'s
+/// relationship read, once, which writes the corrected columns back; its
+/// own save is ignored here through `writeBackGate` so it cannot re-trigger
+/// itself.
+///
+/// Nothing here grades anything: these are the same numbers the tabs
+/// showed on 60, read earlier.
+@MainActor
+final class TabWarmCache {
+    static let shared = TabWarmCache()
+
+    struct Stamped<Value: Sendable>: Sendable {
+        let value: Value
+        let at: Date
+    }
+
+    /// After the launch tab's first frame and the shell's warm-up passes
+    /// (`PagingTabView.Coordinator.scheduleWarmUp` starts at 0.9 s and this
+    /// also waits for `shellWarmUpInFlight` to clear), before Flow's own deck
+    /// at 1.5 s.
+    nonisolated static let launchDelay: Duration = .milliseconds(1200)
+    /// How long after a store save the cache is rebuilt. The seed merge and
+    /// the embedding backfill save in bursts; this folds a burst into one.
+    nonisolated static let saveDebounce: Duration = .milliseconds(1500)
+    /// Past this age the Quiz tab's appearance re-probes behind the cached
+    /// numbers: cards come due with the clock, and no save marks that.
+    nonisolated static let quizMaxAge: TimeInterval = 5 * 60
+    /// The shelf rows walked at warm time. Ten is more than a first screen
+    /// holds at any text size; six on a compact phone, where each row's
+    /// fault of a reference text's highlights is the heavy part.
+    nonisolated static var rowWarmBudget: Int { DeviceClass.current.isCompact ? 6 : 10 }
+    /// Every table a cached number is read from. `QuizAttempt` is not here:
+    /// an attempt row changes no count on either tab.
+    nonisolated static let watchedEntities: Set<String> = [
+        "QuizQuestion", "QuizAnswerRecord", "Theme", "Highlight", "Chapter", "Figure", "Book"
+    ]
+    /// Whether a deletion since the last repair means the stored theme
+    /// counts must be re-read from the relationship once. Persisted, not a
+    /// flag in memory: see the type comment.
+    nonisolated static let verificationKey = "cobux.wisdom.themeCountsNeedVerification"
+
+    private(set) var quiz: Stamped<QuizHomeCounts>?
+    private(set) var wisdom: Stamped<WisdomCountsSnapshot>?
+    private var quizRows: [UUID: QuizBookRowCounts] = [:]
+    private var container: ModelContainer?
+    private var warmTask: Task<Void, Never>?
+    /// Bumped on every invalidation. A probe result is stored only if the
+    /// cache was not invalidated while the probe ran, so a save that landed
+    /// mid-probe cannot be papered over by the probe's older answer.
+    private(set) var generation = 0
+    /// Set by the tab shell around its warm-up passes, so the probes here
+    /// do not contend with the tabs' first bodies for the store.
+    var shellWarmUpInFlight = false
+    private var observers: [NSObjectProtocol] = []
+
+    private init() {
+        observers.append(NotificationCenter.default.addObserver(
+            forName: ModelContext.didSave, object: nil, queue: nil
+        ) { note in
+            guard !Self.writeBackGate.isWritingBack, Self.touchesWatchedTables(note) else { return }
+            if Self.deletesHighlightRows(note) {
+                UserDefaults.standard.set(true, forKey: Self.verificationKey)
+            }
+            Task { @MainActor in
+                TabWarmCache.shared.invalidate(rebuildAfter: TabWarmCache.saveDebounce)
+            }
+        })
+    }
+
+    // MARK: Reading
+
+    /// The Quiz home's counts, if cached for this store and, when `maxAge`
+    /// is given, no older than that.
+    func quizCounts(for container: ModelContainer, maxAge: TimeInterval?) -> QuizHomeCounts? {
+        guard self.container === container, let quiz else { return nil }
+        if let maxAge, Date.now.timeIntervalSince(quiz.at) > maxAge { return nil }
+        return quiz.value
+    }
+
+    /// Wisdom's counts, if cached for this store under exactly this scope.
+    func wisdomCounts(for container: ModelContainer, excluding excludedBookIDs: Set<UUID>) -> WisdomCountsSnapshot? {
+        guard self.container === container, let wisdom,
+              wisdom.value.excludedBookIDs == excludedBookIDs else { return nil }
+        return wisdom.value
+    }
+
+    func quizRowCounts(bookID: UUID, for container: ModelContainer) -> QuizBookRowCounts? {
+        guard self.container === container else { return nil }
+        return quizRows[bookID]
+    }
+
+    /// Whether the next Wisdom count must take the relationship path once.
+    var themeCountsNeedVerification: Bool {
+        UserDefaults.standard.bool(forKey: Self.verificationKey)
+    }
+
+    // MARK: Storing -- the tabs' own probe results feed the cache too
+
+    func storeQuiz(_ counts: QuizHomeCounts, for container: ModelContainer, ifGeneration expected: Int) {
+        guard generation == expected, self.container === container || self.container == nil else { return }
+        self.container = container
+        quiz = Stamped(value: counts, at: .now)
+    }
+
+    /// `verified` says the snapshot came from the relationship read that
+    /// repairs the stored counts; the verification flag is cleared only if
+    /// no deletion landed while that read ran (every deletion invalidates,
+    /// so `generation` is the witness).
+    func storeWisdom(_ snapshot: WisdomCountsSnapshot, for container: ModelContainer,
+                     ifGeneration expected: Int, verified: Bool) {
+        guard generation == expected, self.container === container || self.container == nil else { return }
+        self.container = container
+        wisdom = Stamped(value: snapshot, at: .now)
+        // `verified` is informational now: the flag is read and cleared
+        // BEFORE a verifying probe starts (see `fillWisdom`).
+        _ = verified
+    }
+
+    func storeQuizRow(_ counts: QuizBookRowCounts, bookID: UUID, for container: ModelContainer, ifGeneration expected: Int) {
+        guard generation == expected, self.container === container || self.container == nil else { return }
+        self.container = container
+        quizRows[bookID] = counts
+    }
+
+    // MARK: Shared fills
+
+    /// One probe per question at a time. The tab's own `.task` and the
+    /// launch warm both want the same counts; on the first launch after 61,
+    /// with every `Theme.cachedHighlightCount` still nil, two Wisdom probes
+    /// running at once each walked the whole join in their own context --
+    /// twice the peak memory on a compact phone. Callers await the fill
+    /// that is already running instead of starting a second one.
+    private var quizFill: Task<QuizHomeCounts, Never>?
+    private var quizFillID = 0
+    private var wisdomFill: Task<WisdomCountsSnapshot, Never>?
+    private var wisdomFillID = 0
+    private var wisdomFillKey = ""
+
+    func fillQuiz(container: ModelContainer, now: Date = .now) async -> QuizHomeCounts {
+        if let quizFill { return await quizFill.value }
+        quizFillID += 1
+        let id = quizFillID
+        let task = Task<QuizHomeCounts, Never> {
+            await QuizHomeProbe(modelContainer: container).counts(now: now)
+        }
+        quizFill = task
+        let value = await task.value
+        if quizFillID == id { quizFill = nil }
+        return value
+    }
+
+    /// The verification flag is read AND CLEARED before the probe starts:
+    /// a deletion that lands while it runs re-arms the flag (every deletion
+    /// does), so the next fill verifies again. Read after the probe, a
+    /// deletion in the last main-actor hop went unverified.
+    func fillWisdom(container: ModelContainer, excludedRaw: String, includedRaw: String) async -> WisdomCountsSnapshot {
+        let key = excludedRaw + "|" + includedRaw
+        if let wisdomFill, wisdomFillKey == key { return await wisdomFill.value }
+        wisdomFillID += 1
+        let id = wisdomFillID
+        wisdomFillKey = key
+        let verify = themeCountsNeedVerification
+        if verify { UserDefaults.standard.set(false, forKey: Self.verificationKey) }
+        let task = Task<WisdomCountsSnapshot, Never> {
+            await WisdomProbe(modelContainer: container)
+                .countsSnapshot(excludedRaw: excludedRaw, includedRaw: includedRaw, verifyCache: verify)
+        }
+        wisdomFill = task
+        let value = await task.value
+        if wisdomFillID == id { wisdomFill = nil }
+        return value
+    }
+
+    // MARK: Warming
+
+    /// Fills whatever is empty after `delay`, replacing any pending warm.
+    /// The call site that matters is `ContentView`'s launch chain; every
+    /// invalidation re-schedules it.
+    func scheduleWarm(container: ModelContainer, after delay: Duration = TabWarmCache.launchDelay) {
+        if self.container !== container {
+            quiz = nil
+            wisdom = nil
+            quizRows = [:]
+        }
+        self.container = container
+        warmTask?.cancel()
+        warmTask = Task { @MainActor [weak self] in
+            if delay > .zero { try? await Task.sleep(for: delay) }
+            guard !Task.isCancelled, let self else { return }
+            // Never while a seed/upgrade merge is writing (the Build-5
+            // crash class), never in the background, never under the
+            // shell's own warm-up. Re-checked at the moment of use.
+            while SeedingStatus.shared.isSeeding || !Self.appIsActive || self.shellWarmUpInFlight {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+            }
+            await self.warm(container: container)
+        }
+    }
+
+    /// Drops everything; rebuilds after `delay` when a store is known.
+    func invalidate(rebuildAfter delay: Duration) {
+        generation += 1
+        quiz = nil
+        wisdom = nil
+        quizRows = [:]
+        guard let container else { return }
+        scheduleWarm(container: container, after: delay)
+    }
+
+    /// Cheapest first, and each step re-checks the world before it runs:
+    /// the Quiz counts (four `COUNT`s and the answer records), then Wisdom's
+    /// (one `Theme` fetch of stored columns), then the shelf's first rows
+    /// (the only step that faults highlight rows, bounded by
+    /// `rowWarmBudget`). A step whose result arrives after an invalidation
+    /// is discarded; the re-warm that invalidation scheduled fills it.
+    private func warm(container: ModelContainer) async {
+        let now = Date.now
+        if quiz == nil {
+            guard Self.mayRead(self, container: container) else { return }
+            let expected = generation
+            let counts = await fillQuiz(container: container, now: now)
+            guard !Task.isCancelled, generation == expected, self.container === container else { return }
+            quiz = Stamped(value: counts, at: now)
+        }
+        if wisdom == nil {
+            guard Self.mayRead(self, container: container) else { return }
+            let expected = generation
+            let excludedRaw = UserDefaults.standard.string(forKey: BookSourceFilter.excludedKey) ?? ""
+            let includedRaw = UserDefaults.standard.string(forKey: BookSourceFilter.includedKey) ?? ""
+            let snapshot = await fillWisdom(container: container, excludedRaw: excludedRaw, includedRaw: includedRaw)
+            guard !Task.isCancelled, generation == expected, self.container === container else { return }
+            wisdom = Stamped(value: snapshot, at: now)
+        }
+        if quizRows.isEmpty {
+            guard Self.mayRead(self, container: container) else { return }
+            let expected = generation
+            // A fresh probe, released with this call: the highlight rows it
+            // registers walking the first books do not stay resident on
+            // any phone, compact or not.
+            let rows = await QuizBookRowProbe(modelContainer: container)
+                .firstScreenCounts(limit: Self.rowWarmBudget, now: now)
+            guard !Task.isCancelled, generation == expected, self.container === container else { return }
+            quizRows = rows
+        }
+    }
+
+    private static func mayRead(_ cache: TabWarmCache, container: ModelContainer) -> Bool {
+        !Task.isCancelled && !SeedingStatus.shared.isSeeding && appIsActive && cache.container === container
+    }
+
+    private static var appIsActive: Bool {
+        #if canImport(UIKit)
+        // Not `scenePhase`: a process-wide cache has no view to read it
+        // from. `applicationState` is the same fact for a single-scene app.
+        return UIApplication.shared.applicationState == .active
+        #else
+        return true
+        #endif
+    }
+
+    // MARK: The save listener's reading of the payload
+
+    /// `SemanticVectorCache.touchesHighlights`' defensive reading:
+    /// identifiers under the enum key or its raw string, as an array or a
+    /// set; a payload with no identifier lists, or one that says everything
+    /// was invalidated, counts as touching. A needless re-warm costs
+    /// background time; a stale count is a wrong number on screen.
+    nonisolated static func touchesWatchedTables(_ note: Notification) -> Bool {
+        guard let info = note.userInfo else { return true }
+        if identifiers(in: info, for: .invalidatedAllIdentifiers) != nil { return true }
+        var sawAnyKey = false
+        for key in [ModelContext.NotificationKey.insertedIdentifiers, .updatedIdentifiers, .deletedIdentifiers] {
+            guard let ids = identifiers(in: info, for: key) else { continue }
+            sawAnyKey = true
+            if ids.contains(where: { watchedEntities.contains($0.entityName) }) { return true }
+        }
+        return !sawAnyKey
+    }
+
+    /// Whether the save deleted rows that a stored theme count could have
+    /// counted. Same conservatism: an unreadable payload reads as yes.
+    nonisolated static func deletesHighlightRows(_ note: Notification) -> Bool {
+        guard let info = note.userInfo else { return true }
+        if identifiers(in: info, for: .invalidatedAllIdentifiers) != nil { return true }
+        guard let deleted = identifiers(in: info, for: .deletedIdentifiers) else { return false }
+        return deleted.contains { $0.entityName == "Highlight" || $0.entityName == "Book" }
+    }
+
+    private nonisolated static func identifiers(in info: [AnyHashable: Any],
+                                                for key: ModelContext.NotificationKey) -> [PersistentIdentifier]? {
+        let value = info[key] ?? info[key.rawValue]
+        if let array = value as? [PersistentIdentifier] { return array }
+        if let set = value as? Set<PersistentIdentifier> { return Array(set) }
+        return nil
+    }
+
+    // MARK: The write-back gate
+
+    /// Raised by `WisdomProbe` around the save that repairs
+    /// `Theme.cachedHighlightCount`, on the probe's own thread, so the
+    /// listener above -- which runs synchronously inside that save -- can
+    /// tell the repair from a real change and leave the cache alone. A lock,
+    /// not an actor: the listener is not on any actor.
+    nonisolated static let writeBackGate = ThemeCountWriteBackGate()
+}
+
+/// See `TabWarmCache.writeBackGate`. Top-level on purpose: it is raised on
+/// `WisdomProbe`'s executor and read inside the save notification, neither
+/// of which is the main actor, so it must not live under the cache's
+/// `@MainActor`. `NSLock`, the lock this codebase already uses
+/// (`SemanticVectorCache`, `DiagnosticLog`).
+final class ThemeCountWriteBackGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var depth = 0
+
+    var isWritingBack: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return depth > 0
+    }
+
+    func withWriteBack<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock()
+        depth += 1
+        lock.unlock()
+        defer {
+            lock.lock()
+            depth -= 1
+            lock.unlock()
+        }
+        return try body()
     }
 }

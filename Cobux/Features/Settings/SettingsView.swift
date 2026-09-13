@@ -349,6 +349,20 @@ struct SettingsView: View {
                         label: "Estimated spend this month",
                         value: formattedChatEstimate
                     )
+                    // 61: "1 all time, 2 this month, 3 each reload cycle".
+                    CobuxSettingsRow(icon: "sum", iconTint: Color.cobuxMuted,
+                                     label: "All time", value: String(format: "~$%.2f", UsageTracker.allTimeEstimate()))
+                    CobuxSettingsRow(icon: "calendar", iconTint: Color.cobuxMuted,
+                                     label: "This month", value: String(format: "~$%.2f", UsageTracker.currentMonthEstimate()))
+                    CobuxSettingsRow(icon: "arrow.clockwise", iconTint: Color.cobuxMuted,
+                                     label: cycleLabel, value: String(format: "~$%.2f", UsageTracker.cycleEstimate()))
+                    Button("I just reloaded credits") {
+                        UsageTracker.beginCycle()
+                        cycleTick += 1
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(Color.cobuxAccent)
+                    .accessibilityHint("Starts the since-reload figure again from zero")
                 }
                 .onAppear {
                     hasStoredKey = KeychainManager.load(key: KeychainManager.anthropicAPIKey)?.isEmpty == false
@@ -1250,6 +1264,17 @@ struct SettingsView: View {
     /// process, and this was a dictionary lookup on every body evaluation of a
     /// screen whose body re-runs on every toggle it holds.
     private static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+
+    /// Bumped by the reload button so the rows re-read their totals.
+    @State private var cycleTick = 0
+
+    private var cycleLabel: String {
+        _ = cycleTick
+        if let started = UsageTracker.cycleStartedAt {
+            return "Since reload · " + started.formatted(.dateTime.month(.abbreviated).day())
+        }
+        return "Since last reload"
+    }
 
     private var formattedChatEstimate: String {
         String(format: "~$%.2f", UsageTracker.currentMonthEstimate(for: .chat))

@@ -708,9 +708,9 @@ struct ChatView: View {
             if symposiumModeEnabled {
                 symposiumBadge
             }
-            if monthlyEstimate >= budgetWarningThreshold {
-                budgetWarningBanner
-            }
+            // 61: no spend line in the chat. His words: "the estimated spend
+            // should not be shown in the chat, it kinda looks weird. It could
+            // be shown in the settings." Settings and Diagnostics carry it.
 
             ScrollViewReader { proxy in
                 ScrollView {

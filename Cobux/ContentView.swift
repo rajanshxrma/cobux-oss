@@ -756,6 +756,15 @@ struct ContentView: View {
             // after the FIRST Flow close, so the first open of every launch
             // took the cold path.
             FlowWarmCache.shared.scheduleWarm(container: modelContext.container)
+            // (61) The Quiz and Wisdom tabs' first-frame numbers, read on
+            // the probes' own executors after the shell's warm-up passes
+            // and before Flow's deck. The warm frames above build those
+            // tabs' trees but cancel their `.task`s on removal, so the two
+            // probes never finished during warm-up and ran again on the
+            // real first tap; `TabWarmCache` holds their answers as values,
+            // independent of any view's lifetime, and the tabs read them
+            // synchronously in their first body.
+            TabWarmCache.shared.scheduleWarm(container: modelContext.container)
 
             // Everything below is background housekeeping -- detached so a slow
             // or unreachable iCloud can never again hold the first screen

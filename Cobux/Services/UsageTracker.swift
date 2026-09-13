@@ -76,8 +76,33 @@ struct UsageTracker {
         let key = monthKey()
         let current = defaults.double(forKey: key)
         defaults.set(current + cost, forKey: key)
+        // 61, his words: "the estimated spend should be displayed: 1 all
+        // time, 2 this month, 3 each reload cycle". Two more running sums on
+        // the same recording path, so they can never disagree with the month.
+        defaults.set(defaults.double(forKey: allTimeKey) + cost, forKey: allTimeKey)
+        defaults.set(defaults.double(forKey: cycleKey) + cost, forKey: cycleKey)
 
         recordByPurpose(purpose, cost: cost)
+    }
+
+    // MARK: All time, and since the last reload of credits
+
+    private static let allTimeKey = "cobux.usage.allTime"
+    private static let cycleKey = "cobux.usage.cycle"
+    private static let cycleStartedKey = "cobux.usage.cycleStartedAt"
+
+    /// Every dollar this install has estimated, across months.
+    static func allTimeEstimate() -> Double { defaults.double(forKey: allTimeKey) }
+
+    /// Since the last reload of credits: reset when the app sees credits
+    /// return after an outage (`CreditStatusMonitor.recordSuccess`), or when
+    /// he says he reloaded (Settings). Started at first use otherwise.
+    static func cycleEstimate() -> Double { defaults.double(forKey: cycleKey) }
+    static var cycleStartedAt: Date? { defaults.object(forKey: cycleStartedKey) as? Date }
+
+    static func beginCycle(at date: Date = .now) {
+        defaults.set(0.0, forKey: cycleKey)
+        defaults.set(date, forKey: cycleStartedKey)
     }
 
     /// This calendar month's running estimated spend, in US dollars.

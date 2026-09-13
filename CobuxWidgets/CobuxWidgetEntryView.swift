@@ -412,6 +412,16 @@ struct CobuxWidgetEntryView: View {
     /// Chevrons still render only when their tap would do something, so a fresh
     /// widget shows just the open control and the capsule shrinks to fit rather
     /// than reserving space for buttons that aren't there.
+    ///
+    /// The arrow is unconditional: it renders on every home-family entry,
+    /// placeholder included. The chevrons follow `entry.canGoBack` /
+    /// `canGoForward`, which every real entry now carries from the lane's
+    /// live history whichever path built it (see `HighlightEntry.canGoBack`).
+    /// His report on 60 -- "sometimes when it refreshes it loses the bottom
+    /// icons" -- was a build that fell back to the placeholder (no history,
+    /// no book, so no chevrons and no Share); `HighlightProvider.timeline`
+    /// now falls back to the last shown card instead, and nothing here needed
+    /// to change for the cluster to stay.
     @ViewBuilder
     private var controlCluster: some View {
         HStack(spacing: 2) {

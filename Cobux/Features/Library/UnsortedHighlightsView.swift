@@ -93,6 +93,9 @@ struct UnsortedHighlightsView: View {
 
     private func file(_ highlight: Highlight, to book: Book) {
         highlight.book = book
+        // Filing changes which book a theme's line counts under; the cached
+        // per-book breakdown verifies on its next fill (61).
+        UserDefaults.standard.set(true, forKey: TabWarmCache.verificationKey)
         try? modelContext.save()
         withAnimation {
             unsortedHighlights.removeAll { $0.id == highlight.id }

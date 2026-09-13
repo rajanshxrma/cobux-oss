@@ -192,14 +192,10 @@ enum WidgetHighlightPool {
             // book-scoped pick and the final whole-pool fallback -- both went on
             // serving books he had switched off. Reported as "I have two of the
             // biology books turned off for my app, but I still see their
-            // highlights in my iOS widget."
-            guard !BookSourceSharing.excludedBookIDs().contains(candidateBook.id) else { continue }
-            // A line he hid in Flow ("Don't show this again", 58) stays hidden
-            // here too. The widget target does not compile `FlowQueueBuilder`,
-            // where `FlowSuppression` lives, so the key is read by value; the
-            // two must stay identical.
-            let hiddenInFlow = CobuxSchema.groupDefaults.stringArray(forKey: "cobux.flow.suppressedHighlights") ?? []
-            guard !hiddenInFlow.contains(candidate.id.uuidString) else { continue }
+            // highlights in my iOS widget." Since 61 the same check is also
+            // re-run at SHOW time on a pre-drawn card (`WidgetHighlightCard.
+            // isShowableWithoutStore`), which is why it is one function.
+            guard !isHiddenWithoutStore(bookID: candidateBook.id, highlightID: candidate.id) else { continue }
 
             // Too long to render on this widget family. Kept as the fallback
             // rather than rejected outright, so a library of nothing but long
@@ -213,6 +209,19 @@ enum WidgetHighlightPool {
             if candidate.id != excludedID { return candidate }
         }
         return fallback
+    }
+
+    /// The two exclusions that need no store: a book the user switched off in
+    /// the app (`BookSourceSharing`, App-Group defaults) and a line hidden in
+    /// Flow ("Don't show this again", 58). The widget target does not compile
+    /// `FlowQueueBuilder`, where `FlowSuppression` lives, so that key is read
+    /// by value; the two must stay identical. Applied at draw time by
+    /// `randomHighlight` and again at show time by `WidgetHighlightCard`, so
+    /// a card pre-drawn before a book was turned off is dropped, not shown.
+    static func isHiddenWithoutStore(bookID: UUID, highlightID: UUID) -> Bool {
+        if BookSourceSharing.excludedBookIDs().contains(bookID) { return true }
+        let hiddenInFlow = CobuxSchema.groupDefaults.stringArray(forKey: "cobux.flow.suppressedHighlights") ?? []
+        return hiddenInFlow.contains(highlightID.uuidString)
     }
 
     /// Resolves a specific id — used for the one-shot override armed by the

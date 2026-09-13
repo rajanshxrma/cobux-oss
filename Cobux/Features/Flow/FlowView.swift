@@ -146,6 +146,12 @@ struct FlowView: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
+            // 61: an opaque ground under the atmosphere. The atmosphere's top
+            // and bottom stops are the accent at 22 % and 8 %; a cover used to
+            // paint the system background beneath them, the in-place overlay
+            // paints nothing -- so the tabs showed through ("the background
+            // is transparent so things behind it is visible. That's a bug").
+            Color.cobuxBackground.ignoresSafeArea()
             atmosphere
 
             if items.isEmpty {

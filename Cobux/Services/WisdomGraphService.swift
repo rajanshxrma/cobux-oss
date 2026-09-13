@@ -134,6 +134,12 @@ struct WisdomGraphService {
         var highlightsByTag: [String: [Highlight]] = [:]
         var displayNameByTag: [String: String] = [:]
         var coOccurrence: [String: [String: Int]] = [:]
+        // (61) Per theme, how many of its highlights each book owns -- the
+        // number `Theme.cachedBookCounts` stores so the Wisdom grid can
+        // narrow a count to the books switched on without a query. Tallied
+        // here, where every highlight is already in hand, rather than by
+        // walking `theme.highlights` again afterwards.
+        var bookCountsByTag: [String: [UUID: Int]] = [:]
 
         for highlight in highlights {
             let trimmedTags = highlight.tags
@@ -141,6 +147,9 @@ struct WisdomGraphService {
                 .filter { !$0.isEmpty }
 
             guard !trimmedTags.isEmpty else { continue }
+            // One to-one read per highlight; the Book rows themselves are
+            // faulted once each and answered from the row cache after that.
+            let bookID = highlight.book?.id
 
             // Dedupe tags within a single highlight (e.g. "Discipline" and "discipline")
             // so it doesn't get double-counted into the same theme.
@@ -162,6 +171,9 @@ struct WisdomGraphService {
                 if seenOnThisHighlight.insert(normalized).inserted {
                     distinctNormalizedThisHighlight.append(normalized)
                     highlightsByTag[normalized, default: []].append(highlight)
+                    if let bookID {
+                        bookCountsByTag[normalized, default: [:]][bookID, default: 0] += 1
+                    }
                 }
             }
 
@@ -195,6 +207,12 @@ struct WisdomGraphService {
             // Theme.highlights carries `@Relationship(inverse: \Highlight.themes)`, so
             // setting this side is sufficient — SwiftData maintains highlight.themes automatically.
             theme.highlights = taggedHighlights
+            // (61) The count the Wisdom grid shows, stored on the row at the
+            // one moment it is free to know. `taggedHighlights` is
+            // de-duplicated per highlight above, so this is exactly what
+            // `theme.highlights.count` would read back. See `Theme`.
+            theme.cachedHighlightCount = taggedHighlights.count
+            theme.cachedBookCounts = bookCountsByTag[normalizedTag] ?? [:]
 
             modelContext.insert(theme)
         }

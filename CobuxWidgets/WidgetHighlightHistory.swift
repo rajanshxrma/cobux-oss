@@ -15,6 +15,10 @@ import Foundation
 /// - `widgetHistoryOverride` — one-shot flag: when set, the very next timeline
 ///   build's "now" entry resolves `history[index]` instead of a fresh pick,
 ///   then the flag clears so normal rotation resumes.
+/// - `widgetHighlightNextCards` — the cards drawn ahead for the cycle tap
+///   (`WidgetHighlightCard`, JSON, at most `nextCardDepth`), and
+///   `widgetHighlightShown` — the card last put on screen, which is both what
+///   the tap's rebuild is served from and the provider's last good entry.
 ///
 /// Keeping every mutation in this one type is what stops the intents and the
 /// provider from drifting apart on key names or index semantics.
@@ -163,20 +167,82 @@ enum WidgetHighlightHistory {
     //    that the app's Diagnostics screen shows. The next report carries the
     //    answer to the one question nobody could answer tonight: did the tap
     //    reach the intent at all.
-    static let nextKey = "widgetHighlightNext"
+    // MARK: Pre-drawn CARDS, and the card last shown (61)
+    //
+    // 58 parked only the next quote's ID. That made the tap store-free but
+    // not the rebuild it triggers: the provider still had to open the
+    // container to turn that ID into text, and to draw the following card,
+    // before it could return -- and that is the whole length of the blink he
+    // measured on 60 ("that blinking is taking a little bit of time"). What
+    // is parked now is the full `WidgetHighlightCard`, so the rebuild after
+    // a tap is a defaults read and nothing else. Two are kept, not one: the
+    // refill after a fast build runs off the critical path, in a task that
+    // outlives `timeline(for:)`, and a second card in hand means one lost
+    // refill costs nothing -- the tap after it is still served from here.
+    //
+    // The card last shown is written on every successful build and by the
+    // intent the instant it moves the pointer. It is the provider's fallback
+    // when a build fails, replacing the placeholder -- see
+    // `HighlightProvider.timeline(for:)` for the report that made it one.
+    static let nextCardsKey = "widgetHighlightNextCards"
+    static let shownCardKey = "widgetHighlightShown"
+    /// 58's id-only key. Cleared on sight; a 60 install upgrading mid-lane
+    /// takes one ordinary store-path tap and is then on cards.
+    static let legacyNextIDKey = "widgetHighlightNext"
+    /// How many cards a lane keeps drawn ahead.
+    static let nextCardDepth = 2
+
     static let tapAtKey = "widgetTap.lastAt"
     static let tapOutcomeKey = "widgetTap.outcome"
+    static let buildAtKey = "widgetBuild.lastAt"
+    static let buildOutcomeKey = "widgetBuild.outcome"
 
-    static func storeNext(_ id: UUID, scope: String?) {
-        defaults?.set(id.uuidString, forKey: key(nextKey, scope: scope))
+    static func nextCards(scope: String?) -> [WidgetHighlightCard] {
+        guard let data = defaults?.data(forKey: key(nextCardsKey, scope: scope)) else { return [] }
+        return (try? JSONDecoder().decode([WidgetHighlightCard].self, from: data)) ?? []
     }
 
-    /// Consumes the pre-drawn id, so one tap cannot be served twice from it.
-    static func takeNext(scope: String?) -> UUID? {
-        let k = key(nextKey, scope: scope)
-        guard let raw = defaults?.string(forKey: k), let id = UUID(uuidString: raw) else { return nil }
-        defaults?.removeObject(forKey: k)
-        return id
+    /// Replaces the lane's pre-drawn cards, oldest-drawn first, capped at
+    /// `nextCardDepth`. An empty array clears the key rather than storing
+    /// `[]`, so a lane that has nothing drawn reads the same as one that
+    /// never had anything.
+    static func storeNext(_ cards: [WidgetHighlightCard], scope: String?) {
+        let k = key(nextCardsKey, scope: scope)
+        let kept = Array(cards.prefix(nextCardDepth))
+        guard !kept.isEmpty, let data = try? JSONEncoder().encode(kept) else {
+            defaults?.removeObject(forKey: k)
+            return
+        }
+        defaults?.set(data, forKey: k)
+    }
+
+    /// Consumes the first pre-drawn card that is not `excluding` (the quote
+    /// already showing) and may still be shown without the store, dropping
+    /// any it passes over, so one tap can never be served twice from the
+    /// same card and a card drawn before its book was switched off is never
+    /// served at all.
+    static func takeNext(scope: String?, excluding excludedID: UUID?) -> WidgetHighlightCard? {
+        defaults?.removeObject(forKey: key(legacyNextIDKey, scope: scope))
+        var remaining = nextCards(scope: scope)
+        var taken: WidgetHighlightCard?
+        while taken == nil, !remaining.isEmpty {
+            let candidate = remaining.removeFirst()
+            guard candidate.highlightID != excludedID, candidate.isShowableWithoutStore else { continue }
+            taken = candidate
+        }
+        storeNext(remaining, scope: scope)
+        return taken
+    }
+
+    /// The card the lane last put on screen -- the provider's last good entry.
+    static func shownCard(scope: String?) -> WidgetHighlightCard? {
+        guard let data = defaults?.data(forKey: key(shownCardKey, scope: scope)) else { return nil }
+        return try? JSONDecoder().decode(WidgetHighlightCard.self, from: data)
+    }
+
+    static func storeShown(_ card: WidgetHighlightCard, scope: String?) {
+        guard let data = try? JSONEncoder().encode(card) else { return }
+        defaults?.set(data, forKey: key(shownCardKey, scope: scope))
     }
 
     static func trace(_ outcome: String) {
@@ -188,6 +254,22 @@ enum WidgetHighlightHistory {
     static func lastTrace() -> (at: Date, outcome: String)? {
         guard let at = defaults?.object(forKey: tapAtKey) as? Date,
               let outcome = defaults?.string(forKey: tapOutcomeKey) else { return nil }
+        return (at, outcome)
+    }
+
+    /// The provider's counterpart to `trace`: which path the last timeline
+    /// build took ("card", "store", "last shown", "placeholder"). Separate keys
+    /// from the tap trace so a rebuild never overwrites what the tap reported.
+    /// Read by nothing in the app yet; parked here so the next report can be
+    /// answered from the device rather than reasoned about.
+    static func buildTrace(_ outcome: String) {
+        defaults?.set(Date.now, forKey: buildAtKey)
+        defaults?.set(outcome, forKey: buildOutcomeKey)
+    }
+
+    static func lastBuildTrace() -> (at: Date, outcome: String)? {
+        guard let at = defaults?.object(forKey: buildAtKey) as? Date,
+              let outcome = defaults?.string(forKey: buildOutcomeKey) else { return nil }
         return (at, outcome)
     }
 

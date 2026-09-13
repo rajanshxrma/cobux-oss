@@ -373,9 +373,21 @@ struct PagingTabView: UIViewControllerRepresentable {
         /// selection may re-run one layout with the real ones. That is a
         /// layout pass over a built tree, not the build; the build is what
         /// this moves.
+        ///
+        /// WHAT A WARM FRAME CANNOT DO (build 61). Removing the host after
+        /// its frame CANCELS every `.task` that appearance started -- SwiftUI
+        /// cancels `.task` on disappear -- so a tab whose first task takes
+        /// longer than a frame (Quiz's and Wisdom's probes) ran it again,
+        /// from zero, on the real first tap. The frame still buys the tree
+        /// and the layout; the numbers those two tabs need are read by
+        /// `TabWarmCache` instead, which waits for this pass to finish
+        /// (`shellWarmUpInFlight`) so the probes never contend with the
+        /// tabs' first bodies for the store.
         func scheduleWarmUp() {
             warmUpTask?.cancel()
             warmUpTask = Task { @MainActor [weak self] in
+                TabWarmCache.shared.shellWarmUpInFlight = true
+                defer { TabWarmCache.shared.shellWarmUpInFlight = false }
                 // The launch tab's first frame and `ContentView`'s launch
                 // `.task` chain go first.
                 try? await Task.sleep(for: .milliseconds(900))

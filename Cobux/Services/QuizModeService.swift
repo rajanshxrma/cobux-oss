@@ -53,31 +53,55 @@ enum QuizModeService {
     }
 
     static func weakestThemes(themes: [Theme], answerRecords: [QuizAnswerRecord]) -> [WeakTheme] {
-        // Each record's source-highlight IDs, resolved exactly once. This used
-        // to be rebuilt inside the per-theme loop, so every record's
-        // `question` relationship and its whole `sourceHighlights` list was
-        // faulted again for each theme — O(themes × records × highlights) of
-        // pure repeat work, on the main thread, from a SwiftUI computed
-        // property. Records whose `question` has gone away are dropped here,
-        // matching the old `guard let question ... else { return false }`.
-        let scoredRecords = answerRecords.compactMap { record in
-            record.question.map {
-                (isCorrect: record.isCorrect, highlightIDs: Set($0.sourceHighlights.map(\.id)))
+        // Nothing answered means nothing can be weak -- and, until 61, this
+        // guard was missing, so the loop below still faulted every theme's
+        // highlights to intersect them with an empty set.
+        guard !themes.isEmpty, !answerRecords.isEmpty else { return [] }
+
+        // WALKED FROM THE RECORDS TO THE THEMES, not from the themes to
+        // their highlights (build 61). The old shape read
+        // `Set(theme.highlights.map(\.id))` for EVERY theme -- the whole tag
+        // join, every highlight row with its full text and 2 KB vector,
+        // ~33,000 rows across the library -- to decide which of a few
+        // hundred answered questions touched it. `QuizHomeProbe` ran that on
+        // every appearance of the Quiz tab, which is what was still slow on
+        // 60 after everything else had moved off the frame. `Theme.highlights`
+        // and `Highlight.themes` are inverses of one relationship, so
+        // "record R touches theme T" is the same fact read either way; this
+        // reads it from the side that is bounded by what he has answered: one
+        // `themes` fault per DISTINCT source highlight of an answered
+        // question (a handful of small `Theme` rows each), never per theme.
+        // Same `matched`/`wrongCount` per theme, same threshold, same order.
+        //
+        // Records whose `question` has gone away are dropped, matching the
+        // old `guard let question ... else { return false }`.
+        var themeIDsByHighlight: [UUID: [UUID]] = [:]
+        var matched: [UUID: Int] = [:]
+        var wrongCount: [UUID: Int] = [:]
+        for record in answerRecords {
+            guard let question = record.question else { continue }
+            var touched: Set<UUID> = []
+            for highlight in question.sourceHighlights {
+                let themeIDs: [UUID]
+                if let known = themeIDsByHighlight[highlight.id] {
+                    themeIDs = known
+                } else {
+                    themeIDs = highlight.themes.map(\.id)
+                    themeIDsByHighlight[highlight.id] = themeIDs
+                }
+                touched.formUnion(themeIDs)
+            }
+            for themeID in touched {
+                matched[themeID, default: 0] += 1
+                if !record.isCorrect { wrongCount[themeID, default: 0] += 1 }
             }
         }
 
         return themes.compactMap { theme -> WeakTheme? in
-            let highlightIDs = Set(theme.highlights.map(\.id))
-            var matched = 0
-            var wrongCount = 0
-            for record in scoredRecords where !record.highlightIDs.isDisjoint(with: highlightIDs) {
-                matched += 1
-                if !record.isCorrect { wrongCount += 1 }
-            }
-            guard matched >= minSampleSizeForWeakTopic else { return nil }
+            guard let sample = matched[theme.id], sample >= minSampleSizeForWeakTopic else { return nil }
             return WeakTheme(theme: theme,
-                             wrongRate: Double(wrongCount) / Double(matched),
-                             sampleSize: matched)
+                             wrongRate: Double(wrongCount[theme.id] ?? 0) / Double(sample),
+                             sampleSize: sample)
         }
         .sorted { $0.wrongRate > $1.wrongRate }
     }

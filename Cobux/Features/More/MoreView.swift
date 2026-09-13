@@ -185,8 +185,11 @@ struct MoreView: View {
                         CobuxSettingsRow(
                             icon: "flame.fill",
                             iconTint: Color.cobuxWarning,
-                            label: "Current streak",
-                            value: "\(streak) day\(streak == 1 ? "" : "s")",
+                            // 61: his words -- "remove the current streak text and the
+                            // days on the right, and instead display the number of days
+                            // and then streak the way it says in quiz", keeping this row.
+                            label: "\(streak) day\(streak == 1 ? "" : "s") streak",
+                            value: nil,
                             valueNumericTransition: true
                         )
                         .animation(.easeOut(duration: 0.3), value: streak)

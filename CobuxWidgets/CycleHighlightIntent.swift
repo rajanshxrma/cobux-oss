@@ -78,11 +78,18 @@ struct CycleHighlightIntent: AppIntent {
 
     func perform() async throws -> some IntentResult {
         WidgetHighlightHistory.trace("started")
-        // Fast path (58): the provider pre-drew the next quote when it built
-        // what is showing. Moving the pointer is all a tap has to do.
-        if let next = WidgetHighlightHistory.takeNext(scope: scope),
-           next != WidgetHighlightHistory.currentID(scope: scope) {
-            WidgetHighlightHistory.push(next, scope: scope)
+        // Fast path (58, whole card since 61): the provider pre-drew the next
+        // quote when it built what is showing. Moving the pointer is all a tap
+        // has to do -- and since the card carries the full display payload,
+        // the rebuild this triggers is store-free too (`HighlightProvider.
+        // fastEntry`). Order matters: the card is parked as "shown" BEFORE
+        // `push` arms the override, so a rebuild racing in between sees no
+        // override and re-shows the current quote rather than a half-moved
+        // lane.
+        let current = WidgetHighlightHistory.currentID(scope: scope)
+        if let next = WidgetHighlightHistory.takeNext(scope: scope, excluding: current) {
+            WidgetHighlightHistory.storeShown(next, scope: scope)
+            WidgetHighlightHistory.push(next.highlightID, scope: scope)
             StreakTracker.recordActivityToday()
             WidgetHighlightHistory.trace("pre-drawn")
             WidgetCenter.shared.reloadTimelines(ofKind: "CobuxHighlightWidget")
@@ -96,11 +103,15 @@ struct CycleHighlightIntent: AppIntent {
         guard let picked = WidgetHighlightPool.randomHighlight(
             in: context,
             bookID: scope.flatMap(UUID.init(uuidString:)),
-            excluding: WidgetHighlightHistory.currentID(scope: scope)
-        ) else {
+            excluding: current
+        ), let pickedBook = picked.book else {
             WidgetHighlightHistory.trace("no pick")
             return .result()
         }
+        // Parked as the shown card for the same reason as the fast path: the
+        // rebuild can then be served from it, and a failed rebuild falls back
+        // to it rather than to the placeholder.
+        WidgetHighlightHistory.storeShown(WidgetHighlightCard(highlight: picked, book: pickedBook), scope: scope)
         WidgetHighlightHistory.push(picked.id, scope: scope)
         StreakTracker.recordActivityToday()
         WidgetHighlightHistory.trace("picked from store")
