@@ -109,6 +109,7 @@ enum AutoBackupService {
         let personalWritingEntries = (try? context.fetch(FetchDescriptor<PersonalWritingEntry>())) ?? []
         let quizAttempts = (try? context.fetch(FetchDescriptor<QuizAttempt>())) ?? []
         let journalKeeps = (try? context.fetch(FetchDescriptor<JournalKeep>())) ?? []
+        let journalPeople = (try? context.fetch(FetchDescriptor<JournalPerson>())) ?? []
         let situations = (try? context.fetch(FetchDescriptor<SituationThread>())) ?? []
 
         // Never write an empty snapshot -- a degraded/in-memory store or a
@@ -124,6 +125,7 @@ enum AutoBackupService {
             quizAttempts: quizAttempts,
             journalKeeps: journalKeeps,
             situations: situations,
+            journalPeople: journalPeople,
             attachmentPolicy: .sidecar
         ) else { return }
 
@@ -188,7 +190,8 @@ enum AutoBackupService {
             latestDate: .now,
             bookCount: books.count,
             personalWritingEntryCount: personalWritingEntries.count,
-            attachmentsPending: attachmentsPending
+            attachmentsPending: attachmentsPending,
+            personCount: journalPeople.count
         ).write(to: backupsDir)
     }
 

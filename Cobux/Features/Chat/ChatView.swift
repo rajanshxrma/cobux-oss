@@ -1199,7 +1199,13 @@ struct ChatView: View {
     }
 
     private var emptyStateView: some View {
-        CobuxEmptyStateView(
+        // Resolved ONCE for the whole empty state, for the same reason the
+        // transcript hoists `threadAccent` above its ForEach: this scans
+        // the book library, and the empty state is re-evaluated with every
+        // composer keystroke (see `cachedTopTag`). One scan feeds the icon
+        // and every chip.
+        let accent = currentThreadAccent
+        return CobuxEmptyStateView(
             icon: isJournalThread ? "text.book.closed" : "book.pages",
             title: "How can I help?",
             // Not "Ask about the wisdom in your library". His reading of that
@@ -1211,7 +1217,16 @@ struct ChatView: View {
             // bring. Same door the Situations feature was built for.
             message: isJournalThread
                 ? "Ask about what you've been writing"
-                : "Ask about a book, or about whatever you're working through"
+                : "Ask about a book, or about whatever you're working through",
+            // The thread's own hue, not the component's generic default.
+            // The room is already washed from this value (`atmosphereAccent`),
+            // the bubbles and the send arrow already wear it; the empty
+            // state was the one thing in the room still painted violet. For
+            // the general thread there is no accent to borrow and
+            // `currentThreadAccent` already answers `.cobuxAccent` -- the
+            // exact default this used to fall through to, so nothing there
+            // changes.
+            tint: accent
         ) {
             VStack(spacing: 10) {
                 let chips = suggestedPrompts()
@@ -1226,6 +1241,24 @@ struct ChatView: View {
                             .padding()
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .cobuxCard()
+                            // The chip's spine: a 2pt capsule in the thread's
+                            // hue along the leading edge -- the journal's
+                            // day-thread hairline (`JournalListView`) and the
+                            // calendar's bars, the same mark on a chip. Ink,
+                            // not chrome: a mark beside the words, never a
+                            // wash over the card, which stays `.cobuxCard()`
+                            // exactly as it was. Inset past the corner arc so
+                            // it never meets the border. An overlay takes part
+                            // in no layout, so the chip's size, the stack and
+                            // the bar beneath it do not move by a point.
+                            .overlay(alignment: .leading) {
+                                Capsule()
+                                    .fill(accent)
+                                    .frame(width: 2)
+                                    .padding(.vertical, CobuxSpacing.md)
+                                    .padding(.leading, CobuxSpacing.sm)
+                                    .allowsHitTesting(false)
+                            }
                     }
                     .buttonStyle(PlainButtonStyle())
                 }

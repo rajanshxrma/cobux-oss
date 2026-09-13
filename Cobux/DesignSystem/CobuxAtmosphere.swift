@@ -68,10 +68,11 @@ struct CobuxAtmosphere: View {
         /// Dark-theme stops. Only `.ground` and `.room` differ from light --
         /// see the type's doc comment for why the other two must not.
         var darkTop: Double {
-            switch self { case .card: 0.22; case .reading: 0.10; case .ground: 0.26; case .room: 0.18 }
+            // `.room` 0.18 → 0.10 (63): "the red thing in the dark mode, I think it's too much in the app now" -- the journal keeps its 0.26.
+            switch self { case .card: 0.22; case .reading: 0.10; case .ground: 0.26; case .room: 0.10 }
         }
         var darkBottom: Double {
-            switch self { case .card: 0.08; case .reading: 0.04; case .ground: 0.10; case .room: 0.08 }
+            switch self { case .card: 0.08; case .reading: 0.04; case .ground: 0.10; case .room: 0.05 }
         }
 
         func top(dark: Bool) -> Double { dark ? darkTop : top }

@@ -16,7 +16,12 @@ enum CobuxSchema {
         Book.self, Highlight.self, Chapter.self, ChatMessage.self, Theme.self, Figure.self,
         QuizQuestion.self, HighlightMemory.self, QuizAttempt.self, QuizAnswerRecord.self,
         PersonalWritingEntry.self, JournalAttachment.self, SituationThread.self,
-        JournalKeep.self
+        JournalKeep.self,
+        // People (build 62): a new model, no changed fields -- lightweight
+        // migration. Listed here so every process opens the store with the
+        // same schema; the extensions must never FETCH it
+        // (`swiftui-regression-lint.py`, `people-index-in-extension`).
+        JournalPerson.self
     ]
 
     static let appGroupID = "group.com.rajansharma.Cobux"

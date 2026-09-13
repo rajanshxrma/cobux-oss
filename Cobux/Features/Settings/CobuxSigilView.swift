@@ -55,7 +55,7 @@ struct CobuxSigilView: View {
     @State private var showingDialog = false
 
     var body: some View {
-        SigilMark(snapshot: snapshot, height: 190)
+        SigilMark(onTap: { showingDialog = true }, snapshot: snapshot, height: 190)
             // THE FIX FOR "eventually it stops", half one. See `SigilMark`'s
             // own note for the mechanism; the barrier has to be installed
             // here, at the parent, because only the parent can promise not to
@@ -194,6 +194,8 @@ struct CobuxSigilView: View {
 /// so the mask Canvas that carries the light strokes the SAME paths without
 /// rebuilding them.
 private struct SigilMark: View, Equatable {
+    /// Not part of `==` (which compares only the snapshot and height).
+    var onTap: () -> Void = {}
     let snapshot: DeltaLedger.Snapshot
     let height: CGFloat
 
@@ -444,12 +446,12 @@ private struct SigilMark: View, Equatable {
         return livingRings(geometry: geometry, still: still, paused: paused, layer: .rings)
             .frame(height: height)
             .overlay(ambientBand(geometry: geometry, paused: paused))
-            .overlay(SigilTouchSurface(live: live) { down in
+            .overlay(SigilTouchSurface(live: live, onPress: { down in
                 // Only under Reduce Motion is a touch SwiftUI state of this
                 // view: the clock is paused there and has to be woken, and
                 // there is no animation running for a body pass to disturb.
                 if reduceMotion { reduceMotionTouching = down }
-            })
+            }, onTap: onTap))
             .clipped()
             // Floating, the way he described it: a slow breath, three points of
             // travel, the same idiom as the Flow button's float.
@@ -845,6 +847,10 @@ private final class SigilLiveInput: @unchecked Sendable {
 private struct SigilTouchSurface: View {
     let live: SigilLiveInput
     let onPress: (Bool) -> Void
+    /// A press that ends within a few points and a third of a second is a
+    /// tap (63: "on clicking it nothing opens anymore!" -- the drag gesture
+    /// beneath the wrapper's `.onTapGesture` was taking every touch).
+    var onTap: () -> Void = {}
 
     @GestureState private var pressed = false
 
@@ -856,6 +862,10 @@ private struct SigilTouchSurface: View {
                     .updating($pressed) { value, state, _ in
                         state = true
                         live.press(at: value.location)
+                    }
+                    .onEnded { value in
+                        let moved = hypot(value.translation.width, value.translation.height)
+                        if moved < 10 { onTap() }
                     }
             )
             .onChange(of: pressed) { _, down in

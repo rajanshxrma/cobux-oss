@@ -58,6 +58,8 @@ struct MoreView: View {
     let notificationManager: NotificationManager
     @Binding var path: NavigationPath
     @State private var streak = StreakTracker.currentStreak
+    /// The mark's inputs, read once on appear and again after a save (63).
+    @State private var deltaSnapshot = DeltaLedger.Snapshot()
 
     /// Used until a real line lands, and on a library that genuinely has none.
     /// Meditations is public domain, so this ships as itself rather than as an
@@ -170,6 +172,15 @@ struct MoreView: View {
                 // header over a Journal card is noise. The screen's one tip
                 // rides above it (`moreTips`), in the same row, so the list
                 // keeps its rhythm.
+                // 0. His Cobux. 63, his words: "the user's Cobux not under
+                // settings but directly under the More section, above the
+                // Journal -- user's Cobux at the top."
+                Section {
+                    CobuxSigilView(snapshot: deltaSnapshot)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
                 Section {
                     VStack(spacing: 12) {
                         CobuxFeatureTipHost(firstOf: moreTips)
@@ -205,17 +216,30 @@ struct MoreView: View {
                 // More is a menu, not content, so this is the one place that
                 // convention doesn't apply, and this NavigationLink is fine
                 // pushing onto More's own reset-on-leave path.
+                // Every row below the Journal card wears the same face as the
+                // Progress row above it: `CobuxSettingsRow`'s tinted icon
+                // badge, as LABEL CONTENT inside the native control that was
+                // already there (the component's own rule -- it never replaces
+                // a `NavigationLink`/`Button`, only restyles what sits inside
+                // the tap target; `SettingsView`'s "A note on advice" row is
+                // the precedent). The rows used to be bare `Label`s, so the
+                // one row with a badge read as the odd one out and the rest
+                // read as the stock Form look this screen was redesigned away
+                // from. Uniformly the interactive accent: these are the app's
+                // own doors, not content, so none of them gets a hue of its
+                // own -- variety on More comes from the Journal card's month
+                // and the mark, never from the tools.
                 CobuxFormSection(title: "Saved") {
                     NavigationLink(destination: LikedHighlightsView()) {
-                        Label("Liked", systemImage: "heart.fill")
+                        CobuxSettingsRow(icon: "heart.fill", label: "Liked")
                     }
                     NavigationLink(destination: HeldView()) {
-                        Label("Held", systemImage: "bookmark")
+                        CobuxSettingsRow(icon: "bookmark.fill", label: "Held")
                     }
                     // Opening Volumes is the feature being used, so its hint
                     // retires itself.
                     NavigationLink(destination: VolumesView().onAppear { CobuxTip.boundVolumes.markUsed() }) {
-                        Label("Volumes", systemImage: "books.vertical")
+                        CobuxSettingsRow(icon: "books.vertical.fill", label: "Volumes")
                     }
                 }
 
@@ -226,17 +250,22 @@ struct MoreView: View {
                 // holds unchanged).
                 CobuxFormSection(title: "App") {
                     Button { showingWidgetHelp = true } label: {
-                        Label("Home Screen Widgets", systemImage: "square.grid.2x2.fill")
+                        CobuxSettingsRow(icon: "square.grid.2x2.fill", label: "Home Screen Widgets")
+                            // The whole row, not just the glyph and the words:
+                            // the badge row has a `Spacer` in it, and the tap
+                            // must land across that gap the way it does on the
+                            // link rows beside it.
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     NavigationLink(destination: RemindersView(notificationManager: notificationManager)) {
-                        Label("Reminders", systemImage: "bell.fill")
+                        CobuxSettingsRow(icon: "bell.fill", label: "Reminders")
                     }
                     NavigationLink(destination: SettingsView()) {
-                        Label("Settings", systemImage: "gearshape")
+                        CobuxSettingsRow(icon: "gearshape.fill", label: "Settings")
                     }
                     NavigationLink(destination: ChangelogView()) {
-                        Label("What's New", systemImage: "sparkles")
+                        CobuxSettingsRow(icon: "sparkles", label: "What's New")
                     }
                     // Not #if DEBUG. DiagnosticLog writes in Release too, and its whole
                     // purpose is letting a tester share what happened after a crash -- but
@@ -244,7 +273,7 @@ struct MoreView: View {
                     // so the log had no way out of the device. The launch-crash hunt this
                     // was built for had to fall back to pulling logs off the phone by hand.
                     NavigationLink(destination: DiagnosticsView()) {
-                        Label("Diagnostics", systemImage: "stethoscope")
+                        CobuxSettingsRow(icon: "stethoscope", label: "Diagnostics")
                     }
                 }
             }
@@ -283,6 +312,7 @@ struct MoreView: View {
             }
             .onAppear {
                 streak = StreakTracker.currentStreak
+                deltaSnapshot = DeltaLedger.snapshot(context: modelContext)
                 refreshJournalFacts()
             }
             // Off the tap path AND off the main actor. The first `await` hops
@@ -344,10 +374,21 @@ struct MoreView: View {
     /// The stand-in is applied only once the probe has actually LOOKED, so
     /// `widgetSample` stops being nil by either route and the sheet's redaction
     /// always clears. Nil never lingers.
+    ///
+    /// (61, N71) The cache first. `WidgetSampleCache` holds the probe's answer
+    /// as a value for the life of the process, invalidated only by a
+    /// `Highlight`/`Book` save, so this is a synchronous read of three strings
+    /// on every appearance of More but the first -- the probe used to re-run
+    /// here on EVERY appearance, in the window where the row gets tapped. The
+    /// fill is coalesced and off-main; its result is stored for the next time.
     @MainActor
     private func refreshWidgetSample() async {
-        let probe = WidgetSampleProbe(modelContainer: modelContext.container)
-        widgetSample = (await probe.sample()) ?? Self.fallbackWidgetSample
+        let container = modelContext.container
+        if let known = WidgetSampleCache.shared.sample(for: container) {
+            widgetSample = known.sample ?? Self.fallbackWidgetSample
+            return
+        }
+        widgetSample = (await WidgetSampleCache.shared.fill(container: container)) ?? Self.fallbackWidgetSample
     }
 }
 

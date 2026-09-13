@@ -31,6 +31,25 @@ enum BuildInfo {
     /// so testers can actually see what changed instead of guessing.
     static let changelog: [ChangelogEntry] = [
         ChangelogEntry(
+            version: "3.4.0",
+            build: "62",
+            date: "Sep 13, 2026",
+            changes: [
+                "People. The journal notices who keeps appearing in your writing and gives each a page: when you first wrote about them, when last, and every entry that names them with the sentence that does",
+                "Names are recognised on the phone. Nothing about anyone is stored except your own choices — rename, merge, split, not a person, this is me — and the entries",
+                "Link a person to a contact for their photo, through the picker, with no address-book permission",
+                "People sits beside Volumes under the calendar, behind the journal's Face ID. Settings can turn it off or forget the index",
+                "The summary of a person from your own words comes next build",
+                "Your Cobux opens on a tap again, and it now sits at the top of More",
+                "The COBUX wordmark is violet again, leaning red only at the X",
+                "The journal thread has your whole journal: ask about a year and that year comes in",
+                "The widget's text takes the tap, changes without a blink, and never opens the app unless you ask",
+                "The dark room's red is halved on every tab; the journal keeps its own",
+                "Spend in Settings is three rows, All time, This month and Since reload, and all time is never the smallest",
+                "Home Screen Widgets in More opens at once, from what it already had",
+                "Library, Quiz, Wisdom, Chat, Flow and More share one face: the kickers, the cover-colour marks and the row badges are the same grammar everywhere",
+            ]),
+        ChangelogEntry(
             version: "3.3.1",
             build: "61",
             date: "Sep 13, 2026",

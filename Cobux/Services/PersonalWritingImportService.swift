@@ -532,6 +532,11 @@ enum PersonalWritingImportService {
                 await CobuxApp.backfillPersonalWritingEmbeddings(container: container)
             }
         }
+        // People (build 62): new entries mean new mentions -- one debounced,
+        // bounded pass, whichever embedding path ran.
+        if imported > 0 {
+            JournalPeopleIndexer.schedule(container: modelContext.container)
+        }
 
         return ImportResult(imported: imported, skippedDuplicates: skipped)
     }

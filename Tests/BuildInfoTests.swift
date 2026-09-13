@@ -25,8 +25,8 @@ final class BuildInfoTests: XCTestCase {
         // and additionally enforces that the version string moves every build.
         // Keep these literals current anyway, so this says something true if
         // the suite is ever run somewhere it can be.
-        let expectedVersion = "3.3.1"
-        let expectedBuild = "61"
+        let expectedVersion = "3.4.0"
+        let expectedBuild = "62"
 
         guard let newest = BuildInfo.changelog.first else {
             XCTFail("BuildInfo.changelog is empty")

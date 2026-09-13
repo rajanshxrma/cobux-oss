@@ -77,6 +77,21 @@ struct DiagnosticsView: View {
                 diagnosticRow("Estimated this month", String(format: "$%.2f", UsageTracker.currentMonthEstimate()), isHealthy: true)
             }
 
+            // The People calibration row (build 62, `docs/people-in-the-journal.md`
+            // §2 "Calibration before trust"): the two tiers as counts and the
+            // last pass's duration, read from the indexer's report in
+            // `UserDefaults.standard` -- never the app group. Counts only, no
+            // names: this screen sits outside the journal's Face ID gate.
+            // `isHealthy: true` on purpose -- a measurement, not a mark.
+            Section("People") {
+                if let report = PeopleIndexReport.read() {
+                    diagnosticRow("Listed / Noticed", "\(report.listed) / \(report.noticed)", isHealthy: true)
+                    diagnosticRow("Last pass", Self.peoplePassSummary(report), isHealthy: true)
+                } else {
+                    diagnosticRow("Last pass", "never", isHealthy: true)
+                }
+            }
+
             Section("Build") {
                 diagnosticRow("Version", "\(Self.appVersion) (\(Self.appBuild))", isHealthy: true)
                 diagnosticRow("TestFlight renews in", "\(BuildInfo.daysUntilExpiry) day(s)", isHealthy: BuildInfo.daysUntilExpiry > 14)
@@ -220,6 +235,22 @@ struct DiagnosticsView: View {
     /// A tab-switch sample with no layout time means the incoming tab's
     /// warm layout was reused unchanged -- said in words, because that
     /// absence is the warm-up doing its job.
+    /// "0.66 s · 246 entries · 3 min ago". Built once per body from a
+    /// dictionary read; the relative formatter is hoisted like every other
+    /// formatter on this screen.
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
+
+    private static func peoplePassSummary(_ report: PeopleIndexReport) -> String {
+        let seconds = String(format: report.durationSeconds < 1 ? "%.2f s" : "%.1f s", report.durationSeconds)
+        let scanned = report.scanned == 1 ? "1 entry" : "\(report.scanned) entries"
+        guard report.date > .distantPast else { return "\(seconds) · \(scanned)" }
+        return "\(seconds) · \(scanned) · \(relativeFormatter.localizedString(for: report.date, relativeTo: .now))"
+    }
+
     @MainActor
     private static func describe(_ sample: SpeedTrace.Sample?, layout: Bool) -> String {
         guard let sample else { return "not yet" }

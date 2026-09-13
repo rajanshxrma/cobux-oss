@@ -94,11 +94,16 @@ private struct FlowCardScaffold<Header: View, Content: View, Footer: View>: View
         // vertically is the failure mode now, never overlapped.
         FlowCardLayout(gutter: CobuxSpacing.lg) {
             VStack(spacing: 6) {
+                // The kicker grammar through its token, not a copy of it.
+                // This used to set the four modifiers by hand -- the same
+                // font, the same 1.2 kerning as `CobuxKickerScale.screen`,
+                // matching by coincidence rather than by reference -- while
+                // Ebb already went through `.cobuxKicker`. Three copies of
+                // the grammar with one of them not routed through the token
+                // is exactly the drift `View+CobuxControls` exists to
+                // prevent. Zero visual change; one place to tune.
                 Label(kicker, systemImage: kickerIcon)
-                    .font(.caption.weight(.semibold))
-                    .kerning(1.2)
-                    .textCase(.uppercase)
-                    .foregroundStyle(accent)
+                    .cobuxKicker(tint: accent, scale: .screen)
                 header
             }
             .padding(.top, 68)

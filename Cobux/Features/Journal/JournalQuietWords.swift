@@ -38,6 +38,13 @@ enum JournalQuietWords {
     /// whose entire purpose is protecting it.
     nonisolated(unsafe) static var store: UserDefaults = .standard
 
+    /// Called after every change to the list. The People index registers
+    /// here (`JournalPeopleIndexer`) so quieting a name removes its page on
+    /// the next pass and un-quieting lets it return -- this file stays pure
+    /// Foundation (it travels to the test harness), so it cannot name the
+    /// indexer itself. Nil until something registers; tests leave it nil.
+    nonisolated(unsafe) static var onChange: (@Sendable () -> Void)?
+
     static func all() -> [String] {
         (store.stringArray(forKey: key) ?? [])
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
@@ -51,12 +58,14 @@ enum JournalQuietWords {
         else { return }
         stored.append(trimmed)
         store.set(stored, forKey: key)
+        onChange?()
     }
 
     static func remove(_ word: String) {
         let stored = (store.stringArray(forKey: key) ?? [])
             .filter { $0.caseInsensitiveCompare(word) != .orderedSame }
         store.set(stored, forKey: key)
+        onChange?()
     }
 
     /// Whether this text may be shown on an ambient surface at all.

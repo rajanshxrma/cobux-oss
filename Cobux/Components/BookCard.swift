@@ -92,10 +92,34 @@ struct BookCard: View {
         // the offscreen pass might otherwise have been reused from. Every
         // visible card was paying that offscreen pass on every frame of every
         // scroll.
+        //
+        // The shadow is the book's own ink, not flat black (beauty checklist,
+        // Library 2). Every card used to cast the same grey regardless of
+        // what was on it -- generic chrome under content that carries its own
+        // hue everywhere else in this app (the spine in `BookListRow` and
+        // `QuizBookRow`, the gradient fallback, all from this same
+        // `coverColorHex`). Now a crimson cover casts crimson and an ochre
+        // one ochre, so a scroll past four books reads as four books rather
+        // than four tiles. Two guards keep it a shadow and not a glow: the
+        // hue is pulled 40 % toward black first, so a near-white cover
+        // (`#FEE9BC`, the palest seed) still separates from the light
+        // ground instead of vanishing into it; and the opacity rises to
+        // compensate for the ink being lighter than black. Measured in
+        // `check-contrast.py`'s own arithmetic, shadow-over-ground against
+        // the light Background: the old black at 0.2 was 1.60:1 under every
+        // card; this is 1.44:1 under the palest seed cover, 1.99:1 at the
+        // median and 2.4:1 under a near-black one -- above the 1.3:1 the
+        // gate's rule 2 calls "visibly distinct" for every cover on the
+        // shelf, and darker than before for most. In dark it is the faintest
+        // lift of the cover's own hue off the near-black ground (1.0-1.7:1),
+        // where the old black shadow was 1.01:1 -- invisible. Same shape,
+        // same path-based shadow, same single blur per card -- the cost is
+        // identical, only the colour changed.
         .background {
             RoundedRectangle(cornerRadius: CobuxRadius.card)
                 .fill(Color.black)
-                .shadow(color: .black.opacity(0.2), radius: 5, x: 0, y: 3)
+                .shadow(color: Color(hex: book.coverColorHex).mix(with: .black, by: 0.4).opacity(0.36),
+                        radius: 6, x: 0, y: 3)
         }
         .task(id: book.id) {
             await loadHighlightCount()

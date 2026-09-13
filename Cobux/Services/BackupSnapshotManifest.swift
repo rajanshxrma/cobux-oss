@@ -7,6 +7,11 @@ import Foundation
 /// Cheap enough that a restore or a Settings screen can check "is there
 /// anything worth downloading" without ever touching the big file.
 struct BackupSnapshotManifest: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, latestFilename, latestDigest, latestDate, bookCount
+        case personalWritingEntryCount, attachmentsPending, personCount
+    }
+
     var schemaVersion: Int
     var latestFilename: String
     var latestDigest: String
@@ -17,6 +22,10 @@ struct BackupSnapshotManifest: Codable {
     /// copying (see `AutoBackupService`'s per-run cap) -- lets a resumable
     /// pass know there's more to do without re-scanning every entry.
     var attachmentsPending: Int
+    /// `JournalPerson` rows in the snapshot (People, build 62). Defaulted so
+    /// a manifest written before the field existed still decodes, and so the
+    /// writer that predates it still compiles until it passes the count.
+    var personCount: Int = 0
 
     private static let filename = "manifest.json"
 
@@ -35,5 +44,21 @@ struct BackupSnapshotManifest: Codable {
         encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(self) else { return }
         try? data.write(to: url, options: .atomic)
+    }
+}
+
+/// In an extension, not the struct body, so the memberwise initialiser
+/// `AutoBackupService` builds the manifest with survives.
+extension BackupSnapshotManifest {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        latestFilename = try container.decode(String.self, forKey: .latestFilename)
+        latestDigest = try container.decode(String.self, forKey: .latestDigest)
+        latestDate = try container.decode(Date.self, forKey: .latestDate)
+        bookCount = try container.decode(Int.self, forKey: .bookCount)
+        personalWritingEntryCount = try container.decode(Int.self, forKey: .personalWritingEntryCount)
+        attachmentsPending = try container.decode(Int.self, forKey: .attachmentsPending)
+        personCount = try container.decodeIfPresent(Int.self, forKey: .personCount) ?? 0
     }
 }

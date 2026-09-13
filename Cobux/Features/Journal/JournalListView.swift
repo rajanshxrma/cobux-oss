@@ -177,6 +177,14 @@ struct JournalListView: View {
     /// `composeSession`. Pushed from two doors (the filter menu and the row
     /// under the calendar) via one `.navigationDestination(item:)`.
     @State private var volumesSession: VolumesSession?
+    /// Identity, not a Bool, for the push into `PeopleView` -- the same two
+    /// doors as Volumes (the filter menu and the row under the calendar),
+    /// one `.navigationDestination(item:)`.
+    @State private var peopleSession: PeopleSession?
+    /// "Notice people in my journal" (Settings). Absent means ON. Off removes
+    /// both doors and stops the pass; the rows stay, so turning it back on
+    /// is instant (`docs/people-in-the-journal.md` §6).
+    @AppStorage(JournalPeopleIndexer.enabledKey) private var peopleEnabled: Bool = true
     /// The entry a tapped card is opening. An id rather than the model, so the
     /// destination is a value the navigation stack can hold and the `@Model` is
     /// re-resolved on the main actor where it lives -- the same shape `HeldView`
@@ -333,6 +341,23 @@ struct JournalListView: View {
         }
         .buttonStyle(.plain)
         .accessibilityHint("A season of your writing, set as a book")
+    }
+
+    /// The door into People, beside Volumes, in the same caption grammar.
+    /// Pull only: no count of people, no "new", nothing on this screen
+    /// announces the section -- it waits to be looked for.
+    private var peopleDoor: some View {
+        Button {
+            peopleSession = PeopleSession()
+        } label: {
+            Label("People", systemImage: "person.2")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.cobuxAccent)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Who keeps appearing in your writing")
     }
 
     private struct DateSection: Identifiable {
@@ -611,6 +636,13 @@ struct JournalListView: View {
                     } label: {
                         Label("Volumes", systemImage: "books.vertical")
                     }
+                    if peopleEnabled {
+                        Button {
+                            peopleSession = PeopleSession()
+                        } label: {
+                            Label("People", systemImage: "person.2")
+                        }
+                    }
                 } label: {
                     // The glyph fills in when a filter is active, so a narrowed
                     // list can never look like an empty journal.
@@ -674,6 +706,9 @@ struct JournalListView: View {
         // declared inside the gate's subtree is lost mid-push on a relock.
         .navigationDestination(item: $volumesSession) { _ in
             VolumesView()
+        }
+        .navigationDestination(item: $peopleSession) { _ in
+            PeopleView()
         }
         .sheet(item: $composeSession) { session in
             if let target = session.answeringEntryID,
@@ -839,6 +874,7 @@ struct JournalListView: View {
                         }
                         .buttonStyle(.plain)
                         volumesDoor
+                        if peopleEnabled { peopleDoor }
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, CobuxSpacing.screenMargin)
@@ -1395,6 +1431,12 @@ struct JournalThumbnailImage: View {
 /// `ComposeSession`: a value is new on every tap, so a push dropped by the
 /// lock gate swapping its subtree costs one tap, not the session.
 struct VolumesSession: Identifiable, Hashable {
+    let id = UUID()
+}
+
+/// A single "the user asked to open People" event -- `VolumesSession`'s
+/// shape, for the same reason.
+struct PeopleSession: Identifiable, Hashable {
     let id = UUID()
 }
 

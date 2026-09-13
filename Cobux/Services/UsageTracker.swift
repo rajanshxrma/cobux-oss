@@ -91,14 +91,39 @@ struct UsageTracker {
     private static let cycleKey = "cobux.usage.cycle"
     private static let cycleStartedKey = "cobux.usage.cycleStartedAt"
 
-    /// Every dollar this install has estimated, across months.
-    static func allTimeEstimate() -> Double { defaults.double(forKey: allTimeKey) }
+    /// Every dollar this install has estimated, across months. The running
+    /// sum began in 61; months before it live only in their own keys, so the
+    /// figure is never less than the sum of every month on record (63: "all
+    /// time and since reload show the same data which cannot be true").
+    static func allTimeEstimate() -> Double {
+        let running = defaults.double(forKey: allTimeKey)
+        let months = defaults.dictionaryRepresentation()
+            .filter { $0.key.hasPrefix("cobux.usageEstimate.") }
+            .compactMap { $0.value as? Double }
+            .reduce(0, +)
+        return max(running, months)
+    }
 
     /// Since the last reload of credits: reset when the app sees credits
     /// return after an outage (`CreditStatusMonitor.recordSuccess`), or when
     /// he says he reloaded (Settings). Started at first use otherwise.
-    static func cycleEstimate() -> Double { defaults.double(forKey: cycleKey) }
-    static var cycleStartedAt: Date? { defaults.object(forKey: cycleStartedKey) as? Date }
+    static func cycleEstimate() -> Double {
+        ensureCycle()
+        return defaults.double(forKey: cycleKey)
+    }
+    static var cycleStartedAt: Date? {
+        ensureCycle()
+        return defaults.object(forKey: cycleStartedKey) as? Date
+    }
+
+    /// A cycle that was never begun starts at this month's first day with
+    /// this month's spend, so "since reload" is never a copy of all-time.
+    private static func ensureCycle() {
+        guard defaults.object(forKey: cycleStartedKey) == nil else { return }
+        let start = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: .now)) ?? .now
+        defaults.set(start, forKey: cycleStartedKey)
+        defaults.set(currentMonthEstimate(), forKey: cycleKey)
+    }
 
     static func beginCycle(at date: Date = .now) {
         defaults.set(0.0, forKey: cycleKey)

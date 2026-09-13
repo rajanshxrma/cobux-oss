@@ -118,6 +118,10 @@ enum AutoRestoreService {
         let container = modelContext.container
         await CobuxApp.backfillEmbeddingsAndReindex(container: container)
         await CobuxApp.backfillPersonalWritingEmbeddings(container: container)
+        // People (build 62): restored rows carry his decisions and entry ids;
+        // the ledger does not ride a backup, so a pass rebuilds it and folds
+        // the restored entries in.
+        JournalPeopleIndexer.schedule(container: container)
     }
 
     /// The real guard against restoring over a deliberately-cleared local

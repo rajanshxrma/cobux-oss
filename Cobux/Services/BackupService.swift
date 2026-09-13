@@ -66,6 +66,7 @@ enum BackupService {
         var quizAttempts: [QuizAttemptDTO]
         var journalKeeps: [JournalKeepDTO]
         var situations: [SituationThreadDTO]
+        var journalPeople: [JournalPersonDTO]
 
         init(
             schemaVersion: Int = 1,
@@ -77,7 +78,8 @@ enum BackupService {
             personalWritingEntries: [PersonalWritingEntryDTO] = [],
             quizAttempts: [QuizAttemptDTO] = [],
             journalKeeps: [JournalKeepDTO] = [],
-            situations: [SituationThreadDTO] = []
+            situations: [SituationThreadDTO] = [],
+            journalPeople: [JournalPersonDTO] = []
         ) {
             self.schemaVersion = schemaVersion
             self.exportDate = exportDate
@@ -89,6 +91,7 @@ enum BackupService {
             self.quizAttempts = quizAttempts
             self.journalKeeps = journalKeeps
             self.situations = situations
+            self.journalPeople = journalPeople
         }
 
         /// Custom decode so an older backup file (missing any of these keys
@@ -107,6 +110,7 @@ enum BackupService {
             quizAttempts = try container.decodeIfPresent([QuizAttemptDTO].self, forKey: .quizAttempts) ?? []
             journalKeeps = try container.decodeIfPresent([JournalKeepDTO].self, forKey: .journalKeeps) ?? []
             situations = try container.decodeIfPresent([SituationThreadDTO].self, forKey: .situations) ?? []
+            journalPeople = try container.decodeIfPresent([JournalPersonDTO].self, forKey: .journalPeople) ?? []
         }
     }
 
@@ -382,6 +386,77 @@ enum BackupService {
         var lastActivityDate: Date
     }
 
+    /// One person the journal noticed and everything HE decided about them
+    /// (`JournalPerson`): the name he confirmed, the forms he folded in,
+    /// whether it is him or not a person at all, the contact he linked, and
+    /// the summary he asked for. Pointers to his entries ride as ids and
+    /// resolve after a restore because `PersonalWritingEntryDTO.id`
+    /// round-trips -- `JournalKeepDTO`'s exact reasoning. What the machine
+    /// derived on its own (the scan ledger) never rides: it is regenerable.
+    /// `decodeIfPresent` throughout, so a snapshot from before any of these
+    /// fields restores.
+    struct JournalPersonDTO: Codable {
+        var id: UUID
+        var name: String
+        var aliases: [String]
+        var kind: String
+        var entryIDs: [UUID]
+        var firstSeen: Date?
+        var lastSeen: Date?
+        var contactIdentifier: String?
+        var contactLinkedDate: Date?
+        var summary: String?
+        var summaryFingerprint: String?
+        var summaryBasis: String?
+        var summaryGeneratedDate: Date?
+        var confirmedAt: Date?
+        var createdAt: Date
+        var updatedAt: Date
+
+        init(id: UUID, name: String, aliases: [String], kind: String, entryIDs: [UUID],
+             firstSeen: Date?, lastSeen: Date?, contactIdentifier: String?, contactLinkedDate: Date?,
+             summary: String?, summaryFingerprint: String?, summaryBasis: String?, summaryGeneratedDate: Date?,
+             confirmedAt: Date?, createdAt: Date, updatedAt: Date) {
+            self.id = id
+            self.name = name
+            self.aliases = aliases
+            self.kind = kind
+            self.entryIDs = entryIDs
+            self.firstSeen = firstSeen
+            self.lastSeen = lastSeen
+            self.contactIdentifier = contactIdentifier
+            self.contactLinkedDate = contactLinkedDate
+            self.summary = summary
+            self.summaryFingerprint = summaryFingerprint
+            self.summaryBasis = summaryBasis
+            self.summaryGeneratedDate = summaryGeneratedDate
+            self.confirmedAt = confirmedAt
+            self.createdAt = createdAt
+            self.updatedAt = updatedAt
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+            name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+            aliases = try container.decodeIfPresent([String].self, forKey: .aliases) ?? []
+            kind = try container.decodeIfPresent(String.self, forKey: .kind) ?? JournalPersonKind.person.rawValue
+            entryIDs = try container.decodeIfPresent([UUID].self, forKey: .entryIDs) ?? []
+            firstSeen = try container.decodeIfPresent(Date.self, forKey: .firstSeen)
+            lastSeen = try container.decodeIfPresent(Date.self, forKey: .lastSeen)
+            contactIdentifier = try container.decodeIfPresent(String.self, forKey: .contactIdentifier)
+            contactLinkedDate = try container.decodeIfPresent(Date.self, forKey: .contactLinkedDate)
+            summary = try container.decodeIfPresent(String.self, forKey: .summary)
+            summaryFingerprint = try container.decodeIfPresent(String.self, forKey: .summaryFingerprint)
+            summaryBasis = try container.decodeIfPresent(String.self, forKey: .summaryBasis)
+            summaryGeneratedDate = try container.decodeIfPresent(Date.self, forKey: .summaryGeneratedDate)
+            confirmedAt = try container.decodeIfPresent(Date.self, forKey: .confirmedAt)
+            let created = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? .now
+            createdAt = created
+            updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? created
+        }
+    }
+
     private static func chapterDTO(from chapter: Chapter) -> ChapterDTO {
         ChapterDTO(title: chapter.title, summary: chapter.summary, keyLessons: chapter.keyLessons, chapterNumber: chapter.chapterNumber, isCompleted: chapter.isCompleted)
     }
@@ -501,6 +576,27 @@ enum BackupService {
         )
     }
 
+    private static func journalPersonDTO(from person: JournalPerson) -> JournalPersonDTO {
+        JournalPersonDTO(
+            id: person.id,
+            name: person.name,
+            aliases: person.aliases,
+            kind: person.kindRaw,
+            entryIDs: person.entryIDs,
+            firstSeen: person.firstSeen,
+            lastSeen: person.lastSeen,
+            contactIdentifier: person.contactIdentifier,
+            contactLinkedDate: person.contactLinkedDate,
+            summary: person.summary,
+            summaryFingerprint: person.summaryFingerprint,
+            summaryBasis: person.summaryBasis,
+            summaryGeneratedDate: person.summaryGeneratedDate,
+            confirmedAt: person.confirmedAt,
+            createdAt: person.createdAt,
+            updatedAt: person.updatedAt
+        )
+    }
+
     private static func situationThreadDTO(from situation: SituationThread) -> SituationThreadDTO {
         SituationThreadDTO(
             id: situation.id,
@@ -549,6 +645,7 @@ enum BackupService {
         quizAttempts: [QuizAttempt] = [],
         journalKeeps: [JournalKeep] = [],
         situations: [SituationThread] = [],
+        journalPeople: [JournalPerson] = [],
         attachmentPolicy: AttachmentPolicy = .inline
     ) throws -> Data {
         let bookDTOs: [BookDTO] = books.map(bookDTO(from:))
@@ -566,6 +663,7 @@ enum BackupService {
         let quizAttemptDTOs = quizAttempts.map(quizAttemptDTO(from:))
         let keepDTOs = journalKeeps.map(journalKeepDTO(from:))
         let situationDTOs = situations.map(situationThreadDTO(from:))
+        let personDTOs = journalPeople.map(journalPersonDTO(from:))
         let document = BackupDocument(
             exportDate: .now,
             books: bookDTOs,
@@ -575,7 +673,8 @@ enum BackupService {
             personalWritingEntries: personalWritingDTOs,
             quizAttempts: quizAttemptDTOs,
             journalKeeps: keepDTOs,
-            situations: situationDTOs
+            situations: situationDTOs,
+            journalPeople: personDTOs
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -619,12 +718,14 @@ enum BackupService {
         /// still holds in memory.
         var journalKeeps: [UUID] = []
         var situations: [UUID] = []
+        /// `JournalPerson.id`, preserved by `importData` like a keep's.
+        var journalPeople: [UUID] = []
 
         var isEmpty: Bool {
             books.isEmpty && chapters.isEmpty && highlights.isEmpty && quizQuestions.isEmpty
                 && highlightMemories.isEmpty && chatMessages.isEmpty && personalWritingEntries.isEmpty
                 && journalAttachments.isEmpty && quizAttempts.isEmpty
-                && journalKeeps.isEmpty && situations.isEmpty
+                && journalKeeps.isEmpty && situations.isEmpty && journalPeople.isEmpty
         }
     }
 
@@ -695,6 +796,7 @@ enum BackupService {
         var quizAttemptsImported: Int = 0
         var journalKeepsImported: Int = 0
         var situationsImported: Int = 0
+        var journalPeopleImported: Int = 0
         var insertedIdentifiers = InsertedIdentifiers()
     }
 
@@ -1140,6 +1242,44 @@ enum BackupService {
             }
         }
 
+        // People: his decisions about who is who, keyed by the row's own
+        // stable id like a keep. A row already here by id is left alone --
+        // it is his, possibly edited since. Entry ids go through the remap
+        // so a page points at the local twins of its entries; an id that
+        // resolves to nothing is kept as-is and simply renders no card
+        // (the next indexer pass recomputes every `person` row's ids from
+        // the entries that actually exist). The scan ledger is not in the
+        // backup and is rebuilt by that pass.
+        var journalPeopleImported = 0
+        if !document.journalPeople.isEmpty {
+            var knownPersonIDs = Set(((try? modelContext.fetch(FetchDescriptor<JournalPerson>())) ?? []).map(\.id))
+            for personDTO in document.journalPeople {
+                guard !knownPersonIDs.contains(personDTO.id) else { continue }
+                knownPersonIDs.insert(personDTO.id)
+                let person = JournalPerson(
+                    name: personDTO.name,
+                    kind: JournalPersonKind(rawValue: personDTO.kind) ?? .person,
+                    aliases: personDTO.aliases,
+                    entryIDs: personDTO.entryIDs.map { entryIDRemap[$0] ?? $0 },
+                    firstSeen: personDTO.firstSeen,
+                    lastSeen: personDTO.lastSeen
+                )
+                person.id = personDTO.id
+                person.contactIdentifier = personDTO.contactIdentifier
+                person.contactLinkedDate = personDTO.contactLinkedDate
+                person.summary = personDTO.summary
+                person.summaryFingerprint = personDTO.summaryFingerprint
+                person.summaryBasis = personDTO.summaryBasis
+                person.summaryGeneratedDate = personDTO.summaryGeneratedDate
+                person.confirmedAt = personDTO.confirmedAt
+                person.createdAt = personDTO.createdAt
+                person.updatedAt = personDTO.updatedAt
+                modelContext.insert(person)
+                inserted.journalPeople.append(person.id)
+                journalPeopleImported += 1
+            }
+        }
+
         // Attempts are pure history -- always import regardless of whether
         // their book was new or already existed, since nothing local can
         // conflict with a past quiz session. Dedupe on (book, scope,
@@ -1220,6 +1360,7 @@ enum BackupService {
             quizAttemptsImported: quizAttemptsImported,
             journalKeepsImported: journalKeepsImported,
             situationsImported: situationsImported,
+            journalPeopleImported: journalPeopleImported,
             insertedIdentifiers: inserted
         )
     }
@@ -1302,6 +1443,17 @@ enum BackupService {
                     continue
                 }
                 modelContext.delete(keep)
+            }
+        }
+
+        // Restored people rows go unconditionally: they are decisions the
+        // backup carried, not his writing, and the indexer's next pass
+        // rebuilds every `person` row from the entries that remain.
+        if !identifiers.journalPeople.isEmpty {
+            let restoredPersonIDs = Set(identifiers.journalPeople)
+            let livePeople = (try? modelContext.fetch(FetchDescriptor<JournalPerson>())) ?? []
+            for person in livePeople where restoredPersonIDs.contains(person.id) {
+                modelContext.delete(person)
             }
         }
 

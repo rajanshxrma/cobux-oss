@@ -190,8 +190,11 @@ extension ShapeStyle where Self == LinearGradient {
     static var cobuxWordmark: LinearGradient {
         LinearGradient(
             stops: [
-                .init(color: Color.cobuxInk, location: 0.0),
-                .init(color: Color.cobuxInk, location: 0.62),
+                // 63: "I still don't see the Cobux name reflecting the old purple
+                // color." Ink was the wrong base -- the wordmark was violet before
+                // 60 and stays violet, leaning red only at the X.
+                .init(color: Color.cobuxAccent, location: 0.0),
+                .init(color: Color.cobuxAccent, location: 0.66),
                 .init(color: Color.cobuxCrimson, location: 1.0),
             ],
             startPoint: .leading, endPoint: .trailing)

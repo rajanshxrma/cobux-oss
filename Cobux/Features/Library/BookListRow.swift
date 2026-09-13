@@ -11,6 +11,20 @@ import UIKit
 /// No highlight count, no progress, no tick -- the same standing ruling
 /// `BookCard` and `LibraryView.shelfFooter` already follow: Cobux never
 /// grades what's on the shelf, in either layout.
+///
+/// **Hue as identity (beauty checklist, Library 1 and 4).** His verdict on
+/// this shelf, near-verbatim: *"the Library kinda looks dull, for the light
+/// theme too; learn from the journal section."* The journal's grammar is the
+/// day numeral in the month's own hue; the Quiz shelf already translated it
+/// for books (`QuizBookRow`: a 4pt spine in `coverColorHex`). This row had
+/// no equivalent -- thumbnail, title, grey line, grey chevron -- so the one
+/// thing on it that carried the book's own colour was a 44pt thumbnail. The
+/// spine leads now, before the cover, in the book's own ink; and the chevron
+/// is `cobuxAccent`, because `Color.cobuxMuted` on the one interactive
+/// affordance read as more inert text beside the secondary line
+/// (`CobuxColor.swift`: violet "keeps every interactive accent it already
+/// owns"). Content owns its hue; machinery stays violet. Both are static
+/// fills -- nothing here costs a frame.
 struct BookListRow: View {
     let book: Book
 
@@ -24,6 +38,15 @@ struct BookListRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: CobuxSpacing.md) {
+            // The book's spine: the same 4pt mark `QuizBookRow` draws, in
+            // the same hue, so the Library list and the Quiz shelf read as
+            // one grammar for "this is that book" rather than two. As tall
+            // as its own cover here (Quiz's is 36pt beside two lines of
+            // type) -- a spine is the height of the book it belongs to.
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color(hex: book.coverColorHex))
+                .frame(width: 4, height: Self.coverHeight)
+
             cover
                 .frame(width: Self.coverWidth, height: Self.coverHeight)
                 .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.iconBadge))
@@ -38,9 +61,12 @@ struct BookListRow: View {
 
             Spacer(minLength: CobuxSpacing.sm)
 
+            // Violet, not `cobuxMuted`: this is the row's one interactive
+            // affordance, and painted the same grey as the author line it
+            // read as caption text. The accent is what says "this opens".
             Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundStyle(Color.cobuxMuted)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.cobuxAccent)
         }
         .padding(.vertical, CobuxSpacing.sm)
         .contentShape(Rectangle())

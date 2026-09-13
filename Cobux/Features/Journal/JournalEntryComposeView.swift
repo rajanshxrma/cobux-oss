@@ -1405,6 +1405,10 @@ struct JournalEntryComposeView: View {
         // complaint; every other trigger is a timer, and a timer is what made
         // it feel broken next to Reminders.
         JournalAutoExportService.exportAfterWrite(modelContext: modelContext)
+        // People (build 62): this one entry, on the next debounced pass, off
+        // main on its own @ModelActor -- the save itself never waits on it,
+        // `exportAfterWrite`'s rule.
+        JournalPeopleIndexer.schedule(container: container)
         // The context, not a `@Query books` held only to reach it.
         WatchSyncService.sync(modelContext: modelContext)
         WidgetCenter.shared.reloadAllTimelines()

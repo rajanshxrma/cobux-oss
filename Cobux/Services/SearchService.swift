@@ -1387,7 +1387,19 @@ struct SearchService {
 
         var pool = entries
         var narrowedToMonth: Int?
-        if reach == .period, let month = monthMentioned(in: query) {
+        // A year in the question is a period too (63): "all of 2023" pulls
+        // 2023's entries in, and the budget widens so a year is not eight
+        // excerpts. He asked for the thread to simply HAVE the journal.
+        var narrowedToYear: Int?
+        if let year = yearMentioned(in: query) {
+            let calendar = Calendar.current
+            let matching = entries.filter { calendar.component(.year, from: stamp($0)) == year }
+            if !matching.isEmpty {
+                pool = matching
+                narrowedToYear = year
+            }
+        }
+        if narrowedToYear == nil, reach == .period, let month = monthMentioned(in: query) {
             let calendar = Calendar.current
             let matching = entries.filter { calendar.component(.month, from: stamp($0)) == month }
             if !matching.isEmpty {
@@ -1396,7 +1408,7 @@ struct SearchService {
             }
         }
 
-        let topK = journalThreadTopK
+        let topK = narrowedToYear != nil || narrowedToMonth != nil ? journalThreadTopK * 2 : journalThreadTopK
         var chosen: [PersonalWritingEntry] = []
         var chosenIDs = Set<UUID>()
         func take(_ candidates: [PersonalWritingEntry], upTo limit: Int) {
@@ -1460,6 +1472,15 @@ struct SearchService {
                 : "[\(date)] \"\(title)\"\n\(excerpt)\n\n"
         }
         return block
+    }
+
+    /// A four-digit year the query names (2000-2099), or nil.
+    static func yearMentioned(in query: String) -> Int? {
+        let tokens = query.components(separatedBy: CharacterSet.decimalDigits.inverted).filter { $0.count == 4 }
+        for token in tokens {
+            if let year = Int(token), (2000...2099).contains(year) { return year }
+        }
+        return nil
     }
 
     /// The 1-12 month number a query names, or nil. Whole-word match against

@@ -177,6 +177,12 @@ struct WisdomGraphView: View {
         }
     }
 
+    /// The grid's kicker. Plural by count and nothing else -- no "of", no
+    /// "so far", nothing that could turn a library fact into a score.
+    static func themeCountKicker(_ count: Int) -> String {
+        "\(count) theme\(count == 1 ? "" : "s")"
+    }
+
     /// What the probe's answer depends on: which books are in scope, and what
     /// the theme table currently holds.
     ///
@@ -274,7 +280,19 @@ struct WisdomGraphView: View {
                     } else if scope.filteredThemes.isEmpty {
                         noSearchResultsState
                     } else {
-                        LazyVGrid(columns: columns, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            // The screen's own voice, before it shows the
+                            // thing -- the journal's kicker grammar, the way
+                            // Library names its shelf. A fact about the
+                            // graph, never about him: the number is the one
+                            // `filteredThemes` already holds, said once, in
+                            // small caps, in the interactive accent. Never a
+                            // target, never a total to reach.
+                            Text(Self.themeCountKicker(scope.filteredThemes.count))
+                                .cobuxKicker(tint: .cobuxAccent, scale: .screen)
+                                .monospacedDigit()
+                                .accessibilityAddTraits(.isHeader)
+                            LazyVGrid(columns: columns, spacing: 14) {
                             ForEach(scope.filteredThemes) { theme in
                                 // `allThemes:` passes the scoped list, not the
                                 // search-filtered one — related-theme navigation
@@ -290,6 +308,7 @@ struct WisdomGraphView: View {
                                     ThemeCard(theme: theme, highlightCount: scope.visibleHighlightCount(in: theme))
                                 }
                                 .buttonStyle(.plain)
+                            }
                             }
                         }
                         .padding(.horizontal)
@@ -734,7 +753,8 @@ actor WisdomProbe {
                 chapter: highlight.chapter,
                 tags: highlight.tags,
                 bookID: book?.id,
-                bookTitle: book?.title))
+                bookTitle: book?.title,
+                bookCoverHex: book?.coverColorHex))
         }
         return WisdomThemeRows(totalCount: all.count, visible: visible)
     }
@@ -885,8 +905,14 @@ struct WisdomThemeDetailView: View {
 
                 if !visibleRelatedNames.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Related Themes")
-                            .font(.headline)
+                        // A kicker, not a headline: the journal never sets a
+                        // bare system heading, and Ebb names its own
+                        // mechanism lines exactly this way
+                        // (`EbbCardViews.swift`, "Another tradition"). Same
+                        // token, same scale, same accent.
+                        Text("Related themes")
+                            .cobuxKicker(tint: .cobuxAccent, scale: .inline)
+                            .accessibilityAddTraits(.isHeader)
                             .padding(.top, 8)
 
                         RelatedThemeChips(
@@ -947,6 +973,11 @@ struct WisdomThemeRow: Identifiable, Sendable, Equatable {
     /// opened, never held here.
     let bookID: UUID?
     let bookTitle: String?
+    /// The book's own cover colour, as the hex it is stored as -- for the
+    /// spine on the citation card. A string and not a `Color`, so the value
+    /// stays `Sendable` and crosses back from the probe like everything else
+    /// here.
+    let bookCoverHex: String?
 }
 
 /// A theme's lines, scoped to the books switched on, plus how many the theme
@@ -969,6 +1000,19 @@ private struct HighlightCitationCard: View {
             if let bookID = row.bookID, let bookTitle = row.bookTitle {
                 NavigationLink(destination: WisdomBookDestination(bookID: bookID)) {
                     HStack(spacing: 4) {
+                        // The book's spine, in its own cover colour -- the
+                        // same 4pt mark `QuizBookRow` sets beside a title and
+                        // Library's list row now carries, so "this line
+                        // belongs to that book" is drawn one way everywhere.
+                        // Content owns its hue; the link stays violet. A
+                        // static fill, no per-frame cost.
+                        if let hex = row.bookCoverHex {
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(Color(hex: hex))
+                                .frame(width: 4, height: 14)
+                                .padding(.trailing, 2)
+                                .accessibilityHidden(true)
+                        }
                         Image(systemName: "book.closed.fill")
                             .font(.caption2)
                         Text(bookTitle)

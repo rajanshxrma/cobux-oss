@@ -325,14 +325,14 @@ struct QuizHomeView: View {
                 // crimson glyph -- one of three badge treatments on one
                 // screen. The card's glass keeps its violet tint: the card is
                 // the interactive surface, the badge is the machinery.
-                ZStack {
-                    Circle()
-                        .fill(Color.cobuxCrimson.opacity(0.14))
-                        .frame(width: 56, height: 56)
-                    Image(systemName: primaryIcon(for: recommendation))
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(Color.cobuxCrimson)
-                }
+                //
+                // And it breathes (beauty checklist, Quiz 1) -- behind an
+                // `.equatable()` barrier, for the reason `QuizPrimaryWell`'s
+                // own comment gives: `counts` landing re-evaluates THIS body,
+                // and a `repeatForever` re-applied from a re-evaluated body
+                // is how the Sigil died three builds running.
+                QuizPrimaryWell(icon: primaryIcon(for: recommendation))
+                    .equatable()
                 VStack(alignment: .leading, spacing: 4) {
                     Text(primaryTitle(for: recommendation))
                         .font(CobuxTypography.cobuxTitle)
@@ -640,6 +640,114 @@ actor QuizHomeProbe {
     }
 }
 
+/// The primary card's icon well, alive (beauty checklist, Quiz 1).
+///
+/// The one card on Quiz that is meant to feel alive -- everything under it is
+/// deliberately flat list rows -- and until now its crimson circle was as
+/// still as they are. It breathes now: the well swells and settles on a slow
+/// 3.4 s ease, the same period as the Sigil's float, and a fainter halo
+/// behind it breathes the other way, so the pair reads as light moving
+/// through the mark rather than a dot pulsing. The glyph itself holds
+/// still; it is the thing being lit, not the light.
+///
+/// **The Sigil's discipline, copied -- not its rig.** `CobuxSigilView`'s
+/// doc comment records exactly how an ambient `repeatForever` dies: a parent
+/// re-evaluates the body inside a live transaction, the animatable modifier
+/// is re-applied, and the in-flight loop is re-targeted to a one-shot ease
+/// to where it already is. The flag stays `true`, so nothing ever restarts
+/// it. On this screen the parent transaction is `counts` landing from
+/// `loadCounts` -- once per appearance, and again after every save that
+/// moves a number -- which re-evaluates `primaryActionCard` every time. So:
+///
+/// 1. This is its own view whose only input is the icon name, it is
+///    `Equatable` on that alone, and the parent applies `.equatable()`. A
+///    `counts` update that keeps the same recommendation does not
+///    re-evaluate this body at all; one that changes it swaps the icon, and
+///    the phase flag is reset properly rather than re-applied.
+/// 2. The animation is a literal constant, never a `reduceMotion ? nil :`
+///    ternary. Under Reduce Motion the breathing layers are conditionally
+///    ABSENT -- the well is the same static circle it was before this
+///    change -- exactly as the Sigil's band and `FlowLaunchButton.ground`
+///    do it.
+/// 3. Restarting is a real reset (`restartBreath`, the Sigil's
+///    `restartAmbientMotion` in miniature): force the flag false with
+///    animations disabled, then true on the next turn, so a well torn down
+///    and rebuilt with its `@State` intact, or one returning from the
+///    background, sees an actual change to animate rather than a flag that
+///    is already `true`.
+///
+/// Not a `TimelineView`. The Sigil pays a per-tick redraw because a Canvas
+/// cannot read an animated value without its closure re-running; a
+/// `scaleEffect` on a `Circle` needs none of that. One state flip on appear,
+/// then the render server interpolates two transforms with this body never
+/// running again -- no timer, no clock, nothing per frame. The first frame
+/// costs what it cost before: two circles and a glyph.
+private struct QuizPrimaryWell: View, Equatable {
+    let icon: String
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var breathPhase = false
+
+    /// The icon is the whole identity; `@State` and environment are not
+    /// inputs, and comparing them would defeat the barrier.
+    static func == (lhs: QuizPrimaryWell, rhs: QuizPrimaryWell) -> Bool {
+        lhs.icon == rhs.icon
+    }
+
+    var body: some View {
+        ZStack {
+            if reduceMotion {
+                well
+            } else {
+                // The halo: fainter, wider, breathing against the well so
+                // the two never read as one dot growing. It lives inside the
+                // card's own 18pt padding at its widest (68pt against a 56pt
+                // well) and is never a tap target -- the Button is the card.
+                Circle()
+                    .fill(Color.cobuxCrimson.opacity(0.07))
+                    .frame(width: 68, height: 68)
+                    .scaleEffect(breathPhase ? 0.96 : 1.04)
+                well
+                    .scaleEffect(breathPhase ? 1.05 : 0.95)
+            }
+            Image(systemName: icon)
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(Color.cobuxCrimson)
+        }
+        // Applied to the stack, not to each circle: one animation, one phase,
+        // both layers move on it. The glyph reads no animatable value.
+        .animation(.easeInOut(duration: 3.4).repeatForever(autoreverses: true),
+                   value: breathPhase)
+        .onAppear(perform: restartBreath)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { restartBreath() }
+        }
+        // A changed recommendation swaps the glyph and re-evaluates this
+        // body; the reset makes that a fresh start rather than a re-applied
+        // offset the Sigil's comment warns about.
+        .onChange(of: icon) { _, _ in restartBreath() }
+    }
+
+    /// The circle exactly as it was before this view existed.
+    private var well: some View {
+        Circle()
+            .fill(Color.cobuxCrimson.opacity(0.14))
+            .frame(width: 56, height: 56)
+    }
+
+    /// Reduce Motion short-circuits it: the breathing layers are not in the
+    /// tree, so there is nothing to restart and flipping the flag would only
+    /// cost a body evaluation.
+    @MainActor private func restartBreath() {
+        guard !reduceMotion else { return }
+        var reset = Transaction()
+        reset.disablesAnimations = true
+        withTransaction(reset) { breathPhase = false }
+        Task { @MainActor in breathPhase = true }
+    }
+}
+
 private struct QuizBookRow: View {
     let book: Book
     @Environment(\.modelContext) private var modelContext
@@ -707,7 +815,22 @@ private struct QuizBookRow: View {
                     // informational, not a deadline. The same machinery
                     // badge as the mode rows: crimson on a crimson wash (it
                     // was crimson type on a violet wash, a third treatment).
-                    Label("\(counts.due) to review", systemImage: "circle.fill")
+                    //
+                    // The mark before the words is the app's own capsule,
+                    // not SF's `circle.fill` (beauty checklist, Quiz 2): the
+                    // calendar's day bars and the streak underline mark a
+                    // day or a count with a `Capsule()`, and this was the
+                    // one place a stock dot did that job. Same crimson,
+                    // same words, same meaning; only the shape joined the
+                    // family. Still a `Label`, so VoiceOver reads it as one
+                    // element exactly as before.
+                    Label {
+                        Text("\(counts.due) to review")
+                    } icon: {
+                        Capsule()
+                            .fill(Color.cobuxCrimson)
+                            .frame(width: 10, height: 4)
+                    }
                         .font(.caption2)
                         .fontWeight(.medium)
                         .padding(.horizontal, 6)

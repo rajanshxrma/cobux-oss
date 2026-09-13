@@ -627,10 +627,16 @@ struct JournalCalendarBrowserView: View {
                 .overlay {
                     // Today, in both states. A locator, not a nudge: it says
                     // where you are, the way the strip's baseline numeral does.
+                    // The ring breathes -- the one thing on this page that
+                    // moves, and it moves in BOTH states, so it stays a
+                    // locator (a "you are here" that is awake, the way a map's
+                    // own dot is) and never becomes a third state or a nudge
+                    // at an unwritten day. Its own view, behind `.equatable()`,
+                    // for the reason `SigilMark` exists: a parent pass must
+                    // not be able to reach a `repeatForever` mid-flight.
                     if isToday {
-                        Capsule()
-                            .strokeBorder(hue, lineWidth: 1.5)
-                            .frame(maxWidth: markSize, maxHeight: markSize)
+                        TodayRing(hue: hue, markSize: markSize)
+                            .equatable()
                     }
                 }
                 // The whole cell, not the 34pt mark inside it. The strip
@@ -644,6 +650,58 @@ struct JournalCalendarBrowserView: View {
             // Says what IS there, and stays silent about what is not — the
             // spoken surface follows the same rule as the drawn one.
             return hasEntries ? "\(date), has writing" : date
+        }
+    }
+
+    /// Today's ring, breathing. Same `Capsule().strokeBorder(hue, 1.5)` at the
+    /// same capped frame as before -- nothing about its shape or its two-state
+    /// rule moved; only its opacity now eases 0.55 ↔ 1.0 over 2.5 s.
+    ///
+    /// `Equatable` on its two inputs and applied with `.equatable()`, so the
+    /// month grid re-evaluating (a Dynamic Type change, a rebuild after
+    /// `anchorYear` moves) does not re-apply the animated modifier inside a
+    /// transaction -- the exact bug that killed the Sigil's float three builds
+    /// running (`CobuxSigilView.swift`, "Why it stopped"). The phase is reset
+    /// without animation and re-armed a turn later on every appearance, the
+    /// way `SigilMark.restartAmbientMotion()` does it, because a `LazyVStack`
+    /// cell that scrolls away and back may keep its `@State` while its
+    /// in-flight animation was dropped.
+    ///
+    /// Reduce Motion is a gate, not a slowdown: the ring is drawn at full
+    /// opacity with no animation attached at all, and a switch mid-flight
+    /// lands it there with a `nil` animation. First frame: one stored Bool
+    /// read, no work.
+    private struct TodayRing: View, Equatable {
+        let hue: Color
+        let markSize: CGFloat
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+        @Environment(\.scenePhase) private var scenePhase
+        @State private var breathing = false
+
+        static func == (lhs: TodayRing, rhs: TodayRing) -> Bool {
+            lhs.hue == rhs.hue && lhs.markSize == rhs.markSize
+        }
+
+        var body: some View {
+            Capsule()
+                .strokeBorder(hue, lineWidth: 1.5)
+                .frame(maxWidth: markSize, maxHeight: markSize)
+                .opacity(reduceMotion ? 1 : (breathing ? 1 : 0.55))
+                .animation(reduceMotion ? nil
+                           : .easeInOut(duration: 2.5).repeatForever(autoreverses: true),
+                           value: breathing)
+                .onAppear(perform: restartBreath)
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active { restartBreath() }
+                }
+        }
+
+        @MainActor private func restartBreath() {
+            guard !reduceMotion else { return }
+            var reset = Transaction()
+            reset.disablesAnimations = true
+            withTransaction(reset) { breathing = false }
+            Task { @MainActor in breathing = true }
         }
     }
 }

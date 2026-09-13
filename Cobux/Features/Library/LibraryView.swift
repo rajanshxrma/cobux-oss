@@ -252,9 +252,16 @@ struct LibraryView: View {
     /// SwiftUI's `.tertiary` is neither. That is the same blind spot the same
     /// script was extended for in build 54 (it measured month hues as pill
     /// fills and never as type).
+    ///
+    /// AND IT HAS A FACE NOW (beauty checklist, Library 5): a small
+    /// `books.vertical` in `cobuxAccent` before the words, the way the
+    /// journal's streak banner puts a flame before its number
+    /// (`JournalCalendarStrip.streakBanner`). Furniture, not a stat -- the
+    /// glyph adds no information, changes no number and is hidden from
+    /// VoiceOver; it only stops the one line that says what the library
+    /// holds from being bare caption text at the end of a scroll.
     @ViewBuilder
     private var shelfFooter: some View {
-        let narrowed = !searchText.isEmpty || filteredBooks.count != books.count
         VStack(spacing: CobuxSpacing.md) {
             // The end of the shelf, said as a rule rather than implied by
             // running out of cards. It is also what keeps the line below from
@@ -262,23 +269,72 @@ struct LibraryView: View {
             Rectangle()
                 .fill(Color.cobuxLine)
                 .frame(height: 1)
-            Text(narrowed
-                 ? "\(filteredBooks.count.formatted()) of \(Self.plural(books.count, "book", "books")) shown"
-                 : shelfSummary)
-                .font(.footnote)
-                .fontWeight(.medium)
-                .foregroundStyle(Color.cobuxMuted)
-                .monospacedDigit()
-                .multilineTextAlignment(.center)
+            HStack(spacing: CobuxSpacing.sm - 2) {
+                Image(systemName: "books.vertical")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(Color.cobuxAccent)
+                    .accessibilityHidden(true)
+                Text(shelfLine)
+                    .font(.footnote)
+                    .fontWeight(.medium)
+                    .foregroundStyle(Color.cobuxMuted)
+                    .monospacedDigit()
+                    .multilineTextAlignment(.center)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, CobuxSpacing.screenMargin)
         .padding(.top, CobuxSpacing.sm)
         .padding(.bottom, CobuxSpacing.lg)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(narrowed
+        .accessibilityLabel(shelfNarrowed
                             ? "Showing \(filteredBooks.count) of \(books.count) books"
                             : shelfSummary)
+    }
+
+    /// The shelf's own voice, at the top (beauty checklist, Library 3).
+    ///
+    /// The footer above is deliberately quiet -- `cobuxMuted`, at the very
+    /// end, a fact about the library and never about him -- and that
+    /// reasoning stands untouched. But nothing on this screen said anything
+    /// at the TOP: the journal opens with the month's hue and a kicker
+    /// naming what it is showing, and Library opened with a tip host and a
+    /// grid. So the same sentence is said twice: once here as the screen's
+    /// own kicker (`.cobuxKicker(tint:scale:)`, the journal's grammar, the
+    /// `.screen` scale `PersonView` uses for its span line), once at the
+    /// bottom as before. Same string, same number, no badge, no target -- a
+    /// count of what is on the shelf is a description of a room, not a
+    /// score. It is `shelfLine` rather than `shelfSummary` so a search
+    /// narrowing the grid narrows both ends of the sentence together; a
+    /// kicker claiming the whole library over three results would be the
+    /// footer's own "lie with a number in it" moved to the top.
+    ///
+    /// Not shown on an empty shelf: "0 books" over "Add your first book" is
+    /// the empty state saying the same thing twice, once as a number.
+    @ViewBuilder
+    private var shelfKicker: some View {
+        if !books.isEmpty {
+            Text(shelfLine)
+                .cobuxKicker(tint: .cobuxAccent, scale: .screen)
+                .monospacedDigit()
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, CobuxSpacing.screenMargin)
+                .padding(.top, CobuxSpacing.md)
+        }
+    }
+
+    /// Whether a search is narrowing what the shelf shows.
+    private var shelfNarrowed: Bool {
+        !searchText.isEmpty || filteredBooks.count != books.count
+    }
+
+    /// The one sentence both the kicker and the footer set: the whole
+    /// library's fact, or the narrowed one while a search is on.
+    private var shelfLine: String {
+        shelfNarrowed
+            ? "\(filteredBooks.count.formatted()) of \(Self.plural(books.count, "book", "books")) shown"
+            : shelfSummary
     }
 
     /// Two facts, or one while the second is still being counted. Never a
@@ -395,6 +451,8 @@ struct LibraryView: View {
                 CobuxFeatureTipHost(firstOf: libraryTips)
                     .padding(.horizontal, CobuxSpacing.screenMargin)
                     .padding(.top, CobuxSpacing.sm)
+
+                shelfKicker
 
                 if unsortedCount > 0 {
                     unsortedRow

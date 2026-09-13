@@ -255,11 +255,6 @@ struct CobuxWidgetEntryView: View {
             Text(entry.quote)
                 .font(.system(.footnote, design: .serif))
                 .italic()
-                // Tap acknowledgement (58): WidgetKit dims invalidatable
-                // content the moment a Button(intent:) fires and holds it until
-                // the new timeline lands -- the first visible proof a tap was
-                // received, which four dead-tap reports never had.
-                .invalidatableContent()
                 // WidgetKit cannot scroll -- there is no interactive scroll
                 // view in a widget, full stop -- so a long highlight can only
                 // fit by shrinking. Rajan: "some of the highlights in the iOS
@@ -486,11 +481,6 @@ struct CobuxWidgetEntryView: View {
                     Text(entry.quote)
                         .font(.system(.subheadline, design: .serif))
                         .italic()
-                        // Tap acknowledgement (58): WidgetKit dims invalidatable
-                        // content the moment a Button(intent:) fires and holds it until
-                        // the new timeline lands -- the first visible proof a tap was
-                        // received, which four dead-tap reports never had.
-                        .invalidatableContent()
                         .lineLimit(7)
                         .minimumScaleFactor(0.6)
                         .frame(maxWidth: .infinity, maxHeight: .infinity,
@@ -543,11 +533,6 @@ struct CobuxWidgetEntryView: View {
                     Text(entry.quote)
                         .font(.system(.body, design: .serif))
                         .italic()
-                        // Tap acknowledgement (58): WidgetKit dims invalidatable
-                        // content the moment a Button(intent:) fires and holds it until
-                        // the new timeline lands -- the first visible proof a tap was
-                        // received, which four dead-tap reports never had.
-                        .invalidatableContent()
                         .lineLimit(14)
                         .minimumScaleFactor(0.6)
                         .frame(maxWidth: .infinity, alignment: .leading)

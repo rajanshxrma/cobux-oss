@@ -101,6 +101,14 @@ struct CobuxApp: App {
                         // fix, not just this `.task` setting it early.
                         .task {
                             await Self.seedDatabase(container: sharedModelContainer)
+                            // People (build 62): the first index pass, once
+                            // seeding has settled. Debounced, off-main on
+                            // its own @ModelActor, bounded per pass, and it
+                            // waits out `SeedingStatus` itself; the long
+                            // delay gives the first seconds of a session to
+                            // the person, the way the embedding backfill's
+                            // head start does.
+                            JournalPeopleIndexer.schedule(container: sharedModelContainer, after: .seconds(15))
                         }
                 } else {
                     OnboardingView()

@@ -65,6 +65,11 @@ struct SettingsView: View {
     @State private var quietWords: [String] = JournalQuietWords.all()
     @State private var showingQuietWordPrompt = false
     @State private var newQuietWord = ""
+    /// "Notice people in my journal". Absent means ON (his decision, Q4 of
+    /// the People spec) -- `@AppStorage`'s default is what an absent key
+    /// reads as, and `JournalPeopleIndexer` reads the same key the same way.
+    @AppStorage(JournalPeopleIndexer.enabledKey) private var noticePeople: Bool = true
+    @State private var showingForgetPeople = false
     @AppStorage(ClaudeService.extendedThinkingKey) private var extendedThinking: Bool = false
     @State private var crashReports: [CrashReportCollector.StoredReport] = []
     private let updateStatus = UpdateAvailabilityStatus.shared
@@ -143,7 +148,11 @@ struct SettingsView: View {
                     title: displayName.isEmpty ? "Your Cobux" : "\(displayName)'s Cobux",
                     footer: "Grown from everything you've written and asked here. It never leaves this device, and it only ever grows."
                 ) {
-                    CobuxSigilView(snapshot: deltaSnapshot)
+                    // The mark itself lives on More now (63: "user's Cobux at
+                    // the top, above the Journal"); this section keeps the name.
+                    Text("Your Cobux is at the top of More.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     if displayName.isEmpty {
                         Button {
                             nameDraft = ""
@@ -234,6 +243,30 @@ struct SettingsView: View {
                         showingQuietWordPrompt = true
                     } label: {
                         Label("Quiet a word or name", systemImage: "plus")
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                // People (`docs/people-in-the-journal.md` §6). The toggle
+                // removes the doors and stops the pass; the rows stay so
+                // turning it back on is instant. "Forget" deletes the rows,
+                // the scan ledger and the thumbnails -- derivations, never
+                // entries. The no-delete rule on entries is untouched.
+                CobuxFormSection(
+                    title: "People",
+                    footer: "Cobux notices, on this device only, which names keep appearing in your entries and gives each a page inside the journal. Nothing leaves your phone. Forgetting the index removes those pages and any linked photos; your entries are untouched."
+                ) {
+                    Toggle("Notice people in my journal", isOn: $noticePeople)
+                        .onChange(of: noticePeople) { _, enabled in
+                            guard enabled else { return }
+                            // Back on: the rows are still there, and a pass
+                            // picks up whatever was written while it was off.
+                            JournalPeopleIndexer.schedule(container: modelContext.container)
+                        }
+                    Button(role: .destructive) {
+                        showingForgetPeople = true
+                    } label: {
+                        Label("Forget the people index", systemImage: "person.2.slash")
                     }
                     .buttonStyle(.plain)
                 }
@@ -344,11 +377,6 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    CobuxSettingsRow(
-                        icon: "dollarsign.circle.fill",
-                        label: "Estimated spend this month",
-                        value: formattedChatEstimate
-                    )
                     // 61: "1 all time, 2 this month, 3 each reload cycle".
                     CobuxSettingsRow(icon: "sum", iconTint: Color.cobuxMuted,
                                      label: "All time", value: String(format: "~$%.2f", UsageTracker.allTimeEstimate()))
@@ -387,11 +415,6 @@ struct SettingsView: View {
                         "Generation budget: $\(String(format: "%.2f", budgetCapDollars))",
                         value: $budgetCapDollars, in: 0.50...20.0, step: 0.50
                     )
-                    CobuxSettingsRow(
-                        icon: "sparkles",
-                        label: "Estimated generation spend this month",
-                        value: formattedGenerationEstimate
-                    )
                 }
 
                 CobuxFormSection(
@@ -422,7 +445,8 @@ struct SettingsView: View {
                             let quizAttempts = try modelContext.fetch(FetchDescriptor<QuizAttempt>())
                             let keeps = (try? modelContext.fetch(FetchDescriptor<JournalKeep>())) ?? []
                             let situations = (try? modelContext.fetch(FetchDescriptor<SituationThread>())) ?? []
-                            let data = try BackupService.exportData(books: allBooks(), chatMessages: chatMessages, personalWritingEntries: personalWritingEntries, quizAttempts: quizAttempts, journalKeeps: keeps, situations: situations)
+                            let journalPeople = (try? modelContext.fetch(FetchDescriptor<JournalPerson>())) ?? []
+                            let data = try BackupService.exportData(books: allBooks(), chatMessages: chatMessages, personalWritingEntries: personalWritingEntries, quizAttempts: quizAttempts, journalKeeps: keeps, situations: situations, journalPeople: journalPeople)
                             exportDocument = BackupFileDocument(data: data)
                             showExporter = true
                         } catch {
@@ -887,6 +911,12 @@ struct SettingsView: View {
             } message: {
                 Text("Entries containing it will stop appearing on their own. Nothing is deleted.")
             }
+            .alert("Forget the people index?", isPresented: $showingForgetPeople) {
+                Button("Cancel", role: .cancel) { }
+                Button("Forget", role: .destructive) { forgetPeopleIndex() }
+            } message: {
+                Text("Every person page, linked photo and the names Cobux noticed are removed. Your entries are exactly as they were, and the index can be rebuilt any time.")
+            }
             .alert("Add Journal to Contacts", isPresented: $showingAddContact) {
                 TextField("Your number or Apple ID", text: $contactAddress)
                     .textInputAutocapitalization(.never)
@@ -1276,13 +1306,7 @@ struct SettingsView: View {
         return "Since last reload"
     }
 
-    private var formattedChatEstimate: String {
-        String(format: "~$%.2f", UsageTracker.currentMonthEstimate(for: .chat))
-    }
 
-    private var formattedGenerationEstimate: String {
-        String(format: "~$%.2f", UsageTracker.currentMonthEstimate(for: .generation))
-    }
 }
 
 /// One row per crash report used to live directly in Settings, growing the
@@ -1341,6 +1365,25 @@ private struct CrashReportsListView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+}
+
+// MARK: - People
+
+private extension SettingsView {
+    /// The rows, the scan ledger and the last-pass report go through the
+    /// indexer (`JournalPeopleIndexer.forget`, off-main on its own actor);
+    /// the thumbnails are `PeopleThumbnailStore`'s to clear (one folder,
+    /// which also holds the ledger); the one-time "which of these is you?"
+    /// flag resets so a rebuilt list asks again. Rows are derivations; no
+    /// entry is touched.
+    func forgetPeopleIndex() {
+        let container = modelContext.container
+        Task {
+            await JournalPeopleIndexer.forget(container: container)
+            PeopleThumbnailStore.removeAll()
+            PeopleSelfPrompt.reset()
         }
     }
 }
