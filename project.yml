@@ -13,8 +13,8 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     TARGETED_DEVICE_FAMILY: "1"
-    MARKETING_VERSION: "3.2.0"
-    CURRENT_PROJECT_VERSION: "58"
+    MARKETING_VERSION: "3.2.1"
+    CURRENT_PROJECT_VERSION: "59"
     DEVELOPMENT_TEAM: "58Q76NHADF"
     CODE_SIGN_STYLE: "Automatic"
 
@@ -117,7 +117,7 @@ targets:
         NSMicrophoneUsageDescription: "Cobux uses your microphone in Voice Mode and Spoken Quiz so you can talk to your book wisdom hands-free."
         NSContactsUsageDescription: "Cobux can add itself as a contact so a chat with yourself is named Cobux instead of your own name. It only ever writes that one contact, and never reads your address book."
         NSLocationWhenInUseUsageDescription: "Cobux uses your approximate location to note the temperature and, when you're somewhere unusual, the city beside a journal entry's date. City-level only -- Cobux never stores your coordinates and never reads location in the background."
-        NSSpeechRecognitionUsageDescription: "Cobux uses speech recognition to turn what you say into a question for Cobux AI or a graded quiz answer."
+        NSSpeechRecognitionUsageDescription: "Cobux uses speech recognition on your phone to turn what you say into a question for Cobux AI, a graded quiz answer, or the transcript of a journal voice note. Audio never leaves your device."
         NSFaceIDUsageDescription: "Cobux uses Face ID to keep your journal entries private."
         # Apple requires BOTH Health purpose strings the moment the HealthKit
         # entitlement is present -- its static check keys off the entitlement,

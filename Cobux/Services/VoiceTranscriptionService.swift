@@ -120,13 +120,14 @@ final class VoiceTranscriptionService {
         guard !candidates.isEmpty else { return }
         Task.detached(priority: .utility) {
             let states = await TranscriptWriter(modelContainer: container).states(of: candidates)
-            let permissionNowOK = !usesSpeechAuthorization
+            let permissionNowOK = !Self.usesSpeechAuthorization
                 || SFSpeechRecognizer.authorizationStatus() == .authorized
             let due = candidates.filter { id in
-                switch states[id] {
-                case nil, State.pending.rawValue, State.failed.rawValue: return true
-                case State.unavailable.rawValue: return permissionNowOK
-                default: return false
+                guard let raw = states[id], let state = State(rawValue: raw) else { return true }
+                switch state {
+                case .pending, .failed: return true
+                case .unavailable: return permissionNowOK
+                case .done: return false
                 }
             }
             guard !due.isEmpty else { return }

@@ -48,7 +48,7 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Cobux uses your microphone in Voice Mode and Spoken Quiz so you can talk to your book wisdom hands-free.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Cobux uses speech recognition to turn what you say into a question for Cobux AI or a graded quiz answer.</string>
+	<string>Cobux uses speech recognition on your phone to turn what you say into a question for Cobux AI, a graded quiz answer, or the transcript of a journal voice note. Audio never leaves your device.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

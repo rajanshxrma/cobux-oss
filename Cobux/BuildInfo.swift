@@ -15,7 +15,7 @@ enum BuildInfo {
         var components = DateComponents()
         components.year = 2026
         components.month = 9
-        components.day = 12
+        components.day = 13
         return Calendar.current.date(from: components) ?? .now
     }()
 
@@ -30,6 +30,19 @@ enum BuildInfo {
     /// `uploadDate`: add one entry here as part of shipping each new build,
     /// so testers can actually see what changed instead of guessing.
     static let changelog: [ChangelogEntry] = [
+        ChangelogEntry(
+            version: "3.2.1",
+            build: "59",
+            date: "Sep 13, 2026",
+            changes: [
+                "The Wisdom tab opens again. 58 asked the database a question in a shape it could not answer, and it fell over instead of saying so",
+                "A voice note shows up the moment you stop recording — with play and remove — and sits at the bottom of the entry once saved. The entry's line says how long it is instead of counting its words",
+                "Voice notes get a transcript, written on the phone after you save, with your names and book titles spelled your way",
+                "Tapping a tab no longer redraws all five tabs, and the other four are ready before you get to them",
+                "The mark on the settings page: the rings breathe and turn on their own now, and the dialog is titled with your name",
+                "The archive deck turns so you can see it turn from the corner of your eye",
+                "Weather and place, smart reminder timing, the advice note and the rest of 58 carry forward",
+            ]),
         ChangelogEntry(
             version: "3.2.0",
             build: "58",

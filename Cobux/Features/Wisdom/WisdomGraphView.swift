@@ -601,38 +601,29 @@ actor WisdomProbe {
 
     /// Highlights per theme, narrowed to the books currently switched on.
     ///
-    /// One fetch per excluded book to learn which highlight ids are out of
-    /// scope, then one query per theme against the tag join -- a `COUNT`
-    /// when nothing is excluded, an id-only fetch when something is. It used
-    /// to read `theme.highlights` for this, which materialises the whole
-    /// relationship, and `.reduce` over it then faulted every row -- text,
-    /// tags and the 2 KB embedding vector -- to read one `id` each. The
-    /// `themes.contains` predicate asks the store the same question without
-    /// registering a single highlight. `propertiesToFetch` on both id passes
-    /// keeps them to the id column.
+    /// THE 58 CRASH ON THE WISDOM TAB. Build 58 asked the store this question
+    /// with `#Predicate<Highlight> { $0.themes.contains { $0.name == name } }`
+    /// -- a subquery through the many-to-many tag join -- so that no highlight
+    /// row would be registered. His report on 58, within the hour: "clicking
+    /// on the wisdom making it crash". SwiftData does not throw when it cannot
+    /// translate a predicate shape; it traps inside the fetch, on whatever
+    /// executor asked, and `try?` never sees it. A to-many `contains` with a
+    /// nested closure is exactly such a shape. Back to the relationship read
+    /// that shipped in 57: `theme.highlights` faulted HERE, on the probe's
+    /// executor, never on the main actor. It costs the rows' bytes off-main;
+    /// it cannot trap. The build-53 record that moved this off the main actor
+    /// stands; the 58 record that swapped the read for a predicate is
+    /// reversed, and says so.
     func visibleCounts(excluding excludedBookIDs: Set<UUID>) -> [UUID: Int] {
-        var excludedHighlightIDs: Set<UUID> = []
-        for bookID in excludedBookIDs {
-            var descriptor = FetchDescriptor<Highlight>(
-                predicate: #Predicate<Highlight> { $0.book?.id == bookID })
-            descriptor.propertiesToFetch = [\.id]
-            for highlight in (try? modelContext.fetch(descriptor)) ?? [] {
-                excludedHighlightIDs.insert(highlight.id)
-            }
-        }
-
         var counts: [UUID: Int] = [:]
         for theme in (try? modelContext.fetch(FetchDescriptor<Theme>())) ?? [] {
-            let name = theme.name
-            var inTheme = FetchDescriptor<Highlight>(
-                predicate: #Predicate<Highlight> { $0.themes.contains { $0.name == name } })
-            guard !excludedHighlightIDs.isEmpty else {
-                counts[theme.id] = count(inTheme)
-                continue
-            }
-            inTheme.propertiesToFetch = [\.id]
-            counts[theme.id] = ((try? modelContext.fetch(inTheme)) ?? []).reduce(into: 0) { total, highlight in
-                if !excludedHighlightIDs.contains(highlight.id) { total += 1 }
+            if excludedBookIDs.isEmpty {
+                counts[theme.id] = theme.highlights.count
+            } else {
+                counts[theme.id] = theme.highlights.reduce(into: 0) { total, highlight in
+                    if let book = highlight.book, excludedBookIDs.contains(book.id) { return }
+                    total += 1
+                }
             }
         }
         return counts
@@ -640,26 +631,21 @@ actor WisdomProbe {
 
     /// One theme's lines as values, for `WisdomThemeDetailView`.
     ///
-    /// A single fetch: predicate on the theme NAME (stable across a graph
-    /// rebuild, where ids are not -- the same reason the detail view resolves
-    /// its theme by name), sorted by `dateAdded` in the store rather than in
-    /// memory, `book` prefetched so the title read below is not a query per
-    /// row, and `embeddingData` left out of the columns -- the one thing a
-    /// citation card never shows. Should SwiftData need the rest of a
-    /// partially fetched row to follow `book`, it faults it here, on this
-    /// executor, never on the main actor.
+    /// Resolved by NAME (stable across a graph rebuild, where ids are not --
+    /// the same reason the detail view resolves its theme by name), then read
+    /// through the relationship on this executor and sorted here. Same
+    /// reversal as `visibleCounts`: the 58 predicate through the tag join
+    /// trapped; a relationship fault off-main cannot.
     ///
     /// The book filter is `BookSourceFilter.isVisible`'s rule applied to the
     /// snapshot: a line with no book is visible, a line whose book is
     /// switched off is not. `totalCount` is the unfiltered size, which is
     /// what lets the detail tell an empty theme from a switched-off one.
     func themeRows(named name: String, excluding excludedBookIDs: Set<UUID>) -> WisdomThemeRows {
-        var descriptor = FetchDescriptor<Highlight>(
-            predicate: #Predicate<Highlight> { $0.themes.contains { $0.name == name } },
-            sortBy: [SortDescriptor(\Highlight.dateAdded, order: .reverse)])
-        descriptor.propertiesToFetch = [\.id, \.text, \.chapter, \.tags, \.dateAdded]
-        descriptor.relationshipKeyPathsForPrefetching = [\.book]
-        let all = (try? modelContext.fetch(descriptor)) ?? []
+        let themes = (try? modelContext.fetch(
+            FetchDescriptor<Theme>(predicate: #Predicate<Theme> { $0.name == name }))) ?? []
+        guard let theme = themes.first else { return WisdomThemeRows(totalCount: 0, visible: []) }
+        let all = theme.highlights.sorted { $0.dateAdded > $1.dateAdded }
 
         var visible: [WisdomThemeRow] = []
         visible.reserveCapacity(all.count)

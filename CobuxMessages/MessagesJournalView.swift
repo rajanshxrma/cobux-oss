@@ -50,6 +50,8 @@ struct MessagesJournalView: View {
     @State private var saved = false
     @State private var failed = false
     @FocusState private var focused: Bool
+    /// For `Color.cobuxOnTint(_:in:)` on the selected mode segment.
+    @Environment(\.self) private var environment
 
     var body: some View {
         if isCompact {
@@ -157,6 +159,19 @@ struct MessagesJournalView: View {
                 // roomier surface was never seen. A quiet chip, the app's
                 // secondary-action grammar, so it stays subordinate to the send
                 // button that is the actual point of the strip.
+                // "Ask Cobux" gets its own door from the strip (N46): the
+                // second mode was reachable only through "More room" and then
+                // a chip, which is two steps to find a thing he wants seen.
+                Button {
+                    model.mode = .ask
+                    onRequestExpand()
+                } label: {
+                    Label("Ask Cobux", systemImage: "bubble.left.and.text.bubble.right")
+                        .foregroundStyle(Color.cobuxAccent)
+                        .cobuxQuietChip(tint: Color.cobuxAccent)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens the full pane in Ask Cobux")
                 Button(action: onRequestExpand) {
                     // The chip modifier goes on the LABEL, the way every other
                     // call site in the app applies it. Outside the button it
@@ -318,14 +333,24 @@ struct MessagesJournalView: View {
     }
 
     private var modeChips: some View {
-        HStack(spacing: CobuxSpacing.sm) {
-            modeChip("Journal", mode: .journal)
-            modeChip("Ask Cobux", mode: .ask)
-            Spacer(minLength: 0)
+        // Full width, two segments, an icon each. His words on 58, the day the
+        // second mode arrived: "the ask cobux and journal both working but
+        // should be much easier for the user to see and find them." The quiet
+        // chips this replaced were built to stay subordinate to the send
+        // button; that made the second mode invisible. The switch is now the
+        // first thing on the pane, at the size of the thing it switches.
+        HStack(spacing: 4) {
+            modeSegment("Journal", systemImage: "text.book.closed", mode: .journal)
+            modeSegment("Ask Cobux", systemImage: "bubble.left.and.text.bubble.right", mode: .ask)
         }
+        .padding(4)
+        .background(Color.cobuxSurface, in: RoundedRectangle(cornerRadius: CobuxRadius.card, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: CobuxRadius.card, style: .continuous).stroke(Color.cobuxLine, lineWidth: 1))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Mode")
     }
 
-    private func modeChip(_ title: String, mode: MessagesPaneModel.Mode) -> some View {
+    private func modeSegment(_ title: String, systemImage: String, mode: MessagesPaneModel.Mode) -> some View {
         let selected = model.mode == mode
         return Button {
             guard !selected else { return }
@@ -333,9 +358,16 @@ struct MessagesJournalView: View {
             // A mode he just chose should be ready to type into.
             model.requestFocus()
         } label: {
-            Text(title)
-                .foregroundStyle(selected ? Color.cobuxAccent : Color.cobuxMuted)
-                .cobuxQuietChip(tint: selected ? Color.cobuxAccent : Color.cobuxMuted)
+            Label(title, systemImage: systemImage)
+                .font(CobuxTypography.cobuxBody.weight(.semibold))
+                .foregroundStyle(selected ? Color.cobuxOnTint(Color.cobuxAccent, in: environment) : Color.cobuxMuted)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: CobuxRadius.card - 4, style: .continuous)
+                        .fill(selected ? Color.cobuxAccent : Color.clear)
+                )
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? [.isSelected] : [])
