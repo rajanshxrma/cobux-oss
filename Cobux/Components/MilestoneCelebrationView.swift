@@ -6,6 +6,10 @@ import SwiftUI
 struct MilestoneCelebrationView: View {
     let days: Int
     let onDismiss: () -> Void
+    /// Reduce Motion is a hard gate (`CobuxMotion`): the flame does not
+    /// bounce and the confetti does not fall. The card, the words and the
+    /// caller's haptic still land the moment.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var headline: String {
         switch days {
@@ -34,10 +38,7 @@ struct MilestoneCelebrationView: View {
                 .onTapGesture { onDismiss() }
 
             VStack(spacing: 18) {
-                Image(systemName: "flame.fill")
-                    .font(.system(size: 52))
-                    .foregroundStyle(Color.cobuxWarning.gradient)
-                    .symbolEffect(.bounce, value: days)
+                flame
 
                 Text("\(days)-day streak")
                     .font(.title.bold())
@@ -75,8 +76,27 @@ struct MilestoneCelebrationView: View {
             .cobuxGlassCard()
             .padding(.horizontal, 36)
 
-            ConfettiView()
-                .ignoresSafeArea()
+            // ConfettiView gates itself on Reduce Motion too; the explicit
+            // check here keeps the intent legible at the call site.
+            if !reduceMotion {
+                ConfettiView()
+                    .ignoresSafeArea()
+            }
+        }
+    }
+
+    /// The flame bounces on the milestone -- unless Reduce Motion is on, in
+    /// which case it simply stands there. `.bounce` with `value:` is the
+    /// discrete form; there is no `isActive:` on it, so the gate is a branch.
+    @ViewBuilder
+    private var flame: some View {
+        let glyph = Image(systemName: "flame.fill")
+            .font(.system(size: 52))
+            .foregroundStyle(Color.cobuxWarning.gradient)
+        if reduceMotion {
+            glyph
+        } else {
+            glyph.symbolEffect(.bounce, value: days)
         }
     }
 }

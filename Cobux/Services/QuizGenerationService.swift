@@ -63,16 +63,104 @@ enum QuizGenerationService {
     }
 
     static func contentHash(for chapter: Chapter, in book: Book) -> String {
-        book.highlights(in: chapter)
-            .sorted { $0.id.uuidString < $1.id.uuidString }
-            .map { "\($0.id)|\($0.text)|\($0.tags.joined(separator: ","))" }
+        contentHash(of: book.highlights(in: chapter))
+    }
+
+    /// The same hash, from highlights already in hand.
+    ///
+    /// Split out so a caller asking about many chapters does not pay for
+    /// `book.highlights(in:)` -- a filter over the book's ENTIRE highlight
+    /// array -- once per chapter, twice over (see
+    /// `highlightsByChapterID(in:)`). Byte-for-byte identical output to the
+    /// call above for the same chapter, which is load-bearing: this string is
+    /// compared against `Chapter.quizGenerationHash`, so any drift would tell
+    /// every chapter in the library it needs regenerating and put a paid API
+    /// call behind it.
+    static func contentHash(of highlights: [Highlight]) -> String {
+        // Decorate-sort-undecorate. The comparator here used to be
+        // `$0.id.uuidString < $1.id.uuidString`, which builds TWO fresh
+        // 36-character Strings on every single comparison -- so sorting n
+        // highlights allocated on the order of 2·n·log n throwaway strings
+        // before the first character of the hash was written. Each id is
+        // stringified exactly ONCE now, and that same string is reused as the
+        // row's own leading field, so the sort only compares keys already in
+        // hand.
+        //
+        // The output is byte-for-byte what it always was, which is
+        // load-bearing rather than merely nice: the ordering key is the same
+        // string, the row shape is the same "id|text|tags", the separator is
+        // the same "||", and `UUID.description` IS `uuidString` (so `$0.key`
+        // renders exactly what the `"\($0.id)"` interpolation it replaces
+        // did). This string is compared against the stored
+        // `Chapter.quizGenerationHash`; any drift at all would tell every
+        // chapter in the library it needs regenerating and put a paid API
+        // call behind each one.
+        highlights
+            .map { (key: $0.id.uuidString, highlight: $0) }
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)|\($0.highlight.text)|\($0.highlight.tags.joined(separator: ","))" }
             .joined(separator: "||")
     }
 
     static func needsGeneration(chapter: Chapter, in book: Book) -> Bool {
-        let highlights = book.highlights(in: chapter)
+        needsGeneration(chapter: chapter, highlights: book.highlights(in: chapter))
+    }
+
+    /// The batched form, for a caller walking every chapter of a book.
+    static func needsGeneration(chapter: Chapter, highlights: [Highlight]) -> Bool {
         guard !highlights.isEmpty else { return false }
-        return chapter.quizGenerationHash != contentHash(for: chapter, in: book)
+        // A chapter that has never been generated has no stored hash, and
+        // `nil != <any non-optional String>` is unconditionally true -- so the
+        // old shape built the entire content hash (every highlight's full
+        // text, concatenated) purely to throw the result away. That is most
+        // chapters in most libraries. Same answer, none of the string.
+        guard let stored = chapter.quizGenerationHash else { return true }
+        return stored != contentHash(of: highlights)
+    }
+
+    /// Every chapter's highlights, in ONE pass over the book.
+    ///
+    /// `book.highlights(in: chapter)` filters the book's whole highlight array.
+    /// Asking it per chapter is O(highlights x chapters), and
+    /// `needsGeneration` used to ask it TWICE per chapter -- once for the
+    /// emptiness guard and once inside `contentHash`. On the two medical
+    /// textbooks (~1,300 highlights, ~116 chapters) that is roughly 300,000
+    /// comparisons per book, and the Quiz shelf ran it for every book row on
+    /// every body evaluation, so scrolling the shelf did it again and again.
+    /// This does the same work once and hands out the buckets.
+    ///
+    /// Matching is deliberately identical to `Book.highlights(in:)`, including
+    /// the parts that look redundant: a highlight with a `chapterRef` is
+    /// matched ONLY by that relationship, and one without falls back to its
+    /// free-text chapter name. The title map holds an ARRAY of chapter ids
+    /// rather than one, because `highlights(in:)` would place a title-matched
+    /// highlight in every chapter sharing that title, and a book with two
+    /// same-named chapters must keep counting the way it counts today.
+    ///
+    /// Each bucket carries `highlights(in:)`'s `dateAdded` sort, so a bucket is
+    /// substitutable for that call anywhere, not only in the hash (which
+    /// re-sorts by id regardless).
+    ///
+    /// Main actor by inheritance -- these are `@Model` rows and they never
+    /// leave it.
+    static func highlightsByChapterID(in book: Book) -> [PersistentIdentifier: [Highlight]] {
+        var idsByTitle: [String: [PersistentIdentifier]] = [:]
+        for chapter in book.chapters {
+            idsByTitle[chapter.title, default: []].append(chapter.persistentModelID)
+        }
+
+        var buckets: [PersistentIdentifier: [Highlight]] = [:]
+        for highlight in book.highlights {
+            if let chapterRef = highlight.chapterRef {
+                buckets[chapterRef.persistentModelID, default: []].append(highlight)
+            } else if let title = highlight.chapter, let ids = idsByTitle[title] {
+                for id in ids { buckets[id, default: []].append(highlight) }
+            }
+        }
+        for key in buckets.keys {
+            buckets[key]?.sort { $0.dateAdded < $1.dateAdded }
+        }
+        return buckets
     }
 
     /// Rough one-time cost estimate shown before spending money -- same

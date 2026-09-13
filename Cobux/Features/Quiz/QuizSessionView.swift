@@ -178,13 +178,20 @@ struct QuizSessionView: View {
                     submitAnswer()
                 }
             } label: {
+                // The app's own primary-button grammar, which this screen was
+                // the last one not using: `cobuxPrimaryPill` resolves the type
+                // colour through `Color.cobuxOnTint` instead of hardcoding
+                // white. That matters here more than anywhere -- `sessionAccent`
+                // is the BOOK'S raw cover colour, and white on a pale cover is
+                // the exact 2.2:1 measurement that made the token exist. It was
+                // still hardcoded white on that fill on this screen.
+                //
+                // Disabled goes to a real surface token rather than
+                // `Color.secondary.opacity(0.3)`, which on the near-black
+                // ground painted a murky mid-grey slab with white type on it.
                 Text(submitButtonLabel)
-                    .fontWeight(.semibold)
                     .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(canSubmit ? sessionAccent : Color.secondary.opacity(0.3))
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.card))
+                    .cobuxPrimaryPill(tint: canSubmit ? sessionAccent : Color.cobuxSurface2)
             }
             .disabled(!canSubmit)
         }
@@ -222,17 +229,29 @@ struct QuizSessionView: View {
         }
     }
 
+    /// A quiet chip, selected or not -- never a filled one.
+    ///
+    /// The one-saturation rule (`View+CobuxControls`): *"full saturation
+    /// appears exactly once on a screen... if a surface wants two pills, one of
+    /// them is actually a chip."* This screen had two -- the submit button AND
+    /// a confidence chip that filled solid with the book's cover colour under
+    /// hardcoded white type. Selection now reads the way every badge in the app
+    /// reads: the hue's own wash under the hue's own type, which is legible on
+    /// any cover in either theme because no type ever sits on the saturated
+    /// fill. Nothing here grades the answer -- this is the user's own reading
+    /// of how sure they were, before any result is shown.
     private func confidenceChip(_ value: Int, label: String) -> some View {
-        Button {
+        let isSelected = confidence == value
+        return Button {
             confidence = value
         } label: {
             Text(label)
-                .font(.caption)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(confidence == value ? sessionAccent : Color.secondary.opacity(0.12))
-                .foregroundStyle(confidence == value ? .white : .primary)
-                .clipShape(Capsule())
+                .foregroundStyle(isSelected ? sessionAccent : Color.secondary)
+                .cobuxQuietChip(tint: isSelected ? sessionAccent : Color.secondary)
+                .overlay {
+                    Capsule().stroke(isSelected ? sessionAccent.opacity(0.55) : .clear,
+                                     lineWidth: 1)
+                }
         }
         .buttonStyle(.plain)
     }
@@ -488,7 +507,10 @@ private struct QuestionCardView: View {
             .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.structural))
             .overlay(
                 RoundedRectangle(cornerRadius: CobuxRadius.structural)
-                    .stroke(isSelected ? accentColor : Color.secondary.opacity(0.15), lineWidth: isSelected ? 2 : 1)
+                    // `cobuxLine` is the app's real hairline token and has its
+                    // own dark value; `Color.secondary.opacity(0.15)` was a
+                    // light-mode guess inherited into dark.
+                    .stroke(isSelected ? accentColor : Color.cobuxLine, lineWidth: isSelected ? 2 : 1)
             )
         }
         .buttonStyle(.plain)
@@ -500,6 +522,9 @@ private struct QuestionCardView: View {
             if isCorrectChoice { return Color.cobuxGood.opacity(0.12) }
             if isSelected { return Color.cobuxWarning.opacity(0.12) }
         }
-        return isSelected ? accentColor.opacity(0.08) : Color.secondary.opacity(0.06)
+        // An unanswered choice sits on the app's own elevated surface rather
+        // than a translucent grey guess -- `cobuxSurface2` carries the ground's
+        // crimson cast in dark and stays paper-white in light.
+        return isSelected ? accentColor.opacity(0.08) : Color.cobuxSurface2
     }
 }

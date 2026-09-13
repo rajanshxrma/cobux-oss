@@ -9,124 +9,74 @@ import CobuxCore
 /// Everything here is straightforward reads of data that already exists;
 /// no new model fields needed.
 struct QuizAnalyticsView: View {
-    @Query(sort: \QuizAttempt.startedAt, order: .reverse) private var attempts: [QuizAttempt]
-    @Query private var questions: [QuizQuestion]
-    @Query private var themes: [Theme]
-    @Query private var answerRecords: [QuizAnswerRecord]
-
-    private var completedAttempts: [QuizAttempt] {
-        attempts.filter { $0.completedAt != nil }
-    }
-
-    private var last30DaysAttempts: [QuizAttempt] {
-        let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: .now) ?? .distantPast
-        return completedAttempts.filter { $0.startedAt >= cutoff }
-    }
-
-    /// The number Anki users actually track — correct answers over answers
-    /// actually given, not over the full assigned count (see `QuizAttempt.
-    /// answeredCount` fix — ending a quiz early no longer distorts this).
-    private var retentionRate30Days: Double? {
-        let totalAnswered = last30DaysAttempts.reduce(0) { $0 + $1.answeredCount }
-        guard totalAnswered > 0 else { return nil }
-        let totalCorrect = last30DaysAttempts.reduce(0) { $0 + $1.correctCount }
-        return Double(totalCorrect) / Double(totalAnswered)
-    }
-
-    private struct ForecastDay: Identifiable {
-        let date: Date
-        let count: Int
-        var id: Date { date }
-    }
-
-    /// Next 14 days of due cards, from the real FSRS `dueDate` field —
-    /// distinct from any per-book due count since it spans every book.
-    private var reviewForecast: [ForecastDay] {
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: .now)
-        let dueDates = questions.compactMap { $0.isSuspended ? nil : $0.dueDate }
-
-        return (0..<14).map { offset in
-            let day = calendar.date(byAdding: .day, value: offset, to: today) ?? today
-            let nextDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day
-            let count = dueDates.filter { $0 >= day && $0 < nextDay }.count
-            return ForecastDay(date: day, count: count)
-        }
-    }
-
-    private struct BookMastery: Identifiable {
-        let bookTitle: String
-        /// Mean FSRS-predicted retrievability across this book's reviewed questions --
-        /// nil means nothing in this book has been reviewed yet, not "0% mastered".
-        /// Decays honestly with time since last review, same as any FSRS forgetting curve.
-        let meanRetrievability: Double?
-        var id: String { bookTitle }
-    }
-
-    /// One entry per book that has at least one question with real review history.
-    private var masteryByBook: [BookMastery] {
-        let byBook = Dictionary(grouping: questions.filter { $0.book != nil }, by: { $0.book!.id })
-        return byBook.compactMap { _, bookQuestions -> BookMastery? in
-            guard let title = bookQuestions.first?.book?.title else { return nil }
-            let reviewed = bookQuestions.filter { $0.fsrsReps > 0 && $0.lastReviewedAt != nil }
-            guard !reviewed.isEmpty else {
-                return BookMastery(bookTitle: title, meanRetrievability: nil)
-            }
-            let scores = reviewed.map { question -> Double in
-                let elapsedDays = max(0, Date.now.timeIntervalSince(question.lastReviewedAt ?? .now) / 86400)
-                return FSRS.retrievability(elapsedDays: elapsedDays, stability: max(question.fsrsStability, 0.01))
-            }
-            return BookMastery(bookTitle: title, meanRetrievability: scores.reduce(0, +) / Double(scores.count))
-        }
-        .sorted { ($0.meanRetrievability ?? -1) > ($1.meanRetrievability ?? -1) }
-    }
-
-    private struct TopicWeakness: Identifiable {
-        let themeName: String
-        let wrongRate: Double
-        let sampleSize: Int
-        var id: String { themeName }
-    }
-
-    /// Reuses `QuizModeService.weakestThemes` -- the same canonical-`Theme`-based weak-topic
-    /// detection the Weak Spots quiz mode pools from, so this panel and that mode always agree
-    /// on what "weak" means, the same way the due-count unification made Quiz Home and Daily
-    /// Review agree on what "due" means.
-    private var weakestTopics: [TopicWeakness] {
-        QuizModeService.weakestThemes(themes: themes, answerRecords: answerRecords)
-            .prefix(5)
-            .map { entry in
-                let sampleSize = answerRecords.filter { record in
-                    guard let question = record.question else { return false }
-                    let highlightIDs = Set(entry.theme.highlights.map(\.id))
-                    return !Set(question.sourceHighlights.map(\.id)).isDisjoint(with: highlightIDs)
-                }.count
-                return TopicWeakness(themeName: entry.theme.name, wrongRate: entry.wrongRate, sampleSize: sampleSize)
-            }
-    }
+    @Environment(\.modelContext) private var modelContext
+    /// Everything this screen draws, as plain values.
+    ///
+    /// This used to be four unbounded `@Query`s -- every `QuizAttempt`, every
+    /// `QuizQuestion`, every `Theme` and every `QuizAnswerRecord` in the
+    /// library, materialised on the main actor before the screen could draw --
+    /// feeding six computed properties that `body` then read TWICE each (once
+    /// to decide whether a section exists, once to fill it). `reviewForecast`
+    /// alone ran fourteen filter passes over every due date, twice: twenty-eight
+    /// full passes to draw one small chart.
+    ///
+    /// `DiagnosticsView`'s shape replaces it: a `@ModelActor` probe owns its own
+    /// context on its own executor, does the whole read there, and returns ONE
+    /// `Sendable` summary. No `@Model` object and no `ModelContext` crosses an
+    /// actor boundary, which is the rule this codebase has already paid for
+    /// twice.
+    ///
+    /// The one deliberate consequence: this is a snapshot taken when the screen
+    /// opens, not a live query. That is right for an analytics screen -- it is
+    /// pushed from Quiz Home, read, and left, and re-entering it re-runs the
+    /// probe. Nothing on this screen can be edited from this screen, so there
+    /// is no change here for a live query to reflect.
+    @State private var summary: QuizAnalyticsSummary?
+    private let seedingStatus = SeedingStatus.shared
 
     var body: some View {
         Group {
-            if SeedingStatus.shared.isSeeding {
-                // Same seed-merge guard as `BookCard`/`BookDetailView`/`QuizHomeView` --
-                // `masteryByBook` faults every `QuizQuestion.book` relationship and
-                // `weakestTopics` faults every `Theme.highlights` relationship,
-                // both synchronously in `body`. Landing that fault mid seed/upgrade
-                // merge is the confirmed Build-5 crash class. Reached only through
-                // `QuizHomeView`'s own gated list today, but that's a fragile
-                // guarantee to lean on from here -- a local guard costs nothing.
-                ProgressView("Syncing your library…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .navigationTitle("Quiz Analytics")
+            if let summary {
+                analyticsList(summary)
             } else {
-                analyticsList
+                List {
+                    Section {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            // Says which of the two waits this is, the way
+                            // `DiagnosticsView` does -- a screen that is drawn
+                            // but has nothing to say has not opened.
+                            Text(seedingStatus.isSeeding
+                                 ? "Waiting for your library to finish setting up…"
+                                 : "Reading your quiz history…")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .navigationTitle("Quiz Analytics")
             }
+        }
+        // Never read the library while the background seed/upgrade merge is in
+        // flight -- the confirmed Build-5 crash class, previously handled by
+        // gating `body` on the same flag. Keyed on it so the probe runs the
+        // moment the merge lands.
+        .task(id: seedingStatus.isSeeding) {
+            guard !seedingStatus.isSeeding else { return }
+            summary = await QuizAnalyticsProbe(modelContainer: modelContext.container).summary()
         }
     }
 
-    private var analyticsList: some View {
-        List {
-            Section("Retention") {
+    private func analyticsList(_ summary: QuizAnalyticsSummary) -> some View {
+        // Read once each, from a value already in hand. Every one of these was
+        // a computed property that walked the store again at each reference.
+        let retentionRate30Days = summary.retentionRate30Days
+        let reviewForecast = summary.forecast
+        let masteryByBook = summary.mastery
+        let weakestTopics = summary.weakestTopics
+        let completedAttempts = summary.recentAttempts
+        return List {
+            CobuxFormSection(title: "Retention") {
                 if let rate = retentionRate30Days {
                     HStack {
                         Text("Last 30 days")
@@ -144,18 +94,29 @@ struct QuizAnalyticsView: View {
                 }
             }
 
-            Section("Review Forecast") {
-                Chart(reviewForecast) { day in
-                    BarMark(
-                        x: .value("Day", day.date, unit: .day),
-                        y: .value("Due", day.count)
-                    )
-                    .foregroundStyle(Color.cobuxAccent)
-                }
-                .frame(height: 140)
-                .chartXAxis {
-                    AxisMarks(values: .stride(by: .day, count: 3)) { value in
-                        AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+            CobuxFormSection(title: "Review Forecast") {
+                // A first visit used to get a flat, wordless 140pt chart --
+                // fourteen empty days under a title, with nothing saying what
+                // the panel is or why it is blank. The Retention section above
+                // already answers that in one line when it has no number yet;
+                // this now does the same rather than drawing a chart of zeros.
+                if reviewForecast.allSatisfy({ $0.count == 0 }) {
+                    Text("Once you've reviewed a card, it reappears here on the day it comes back around.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                } else {
+                    Chart(reviewForecast) { day in
+                        BarMark(
+                            x: .value("Day", day.date, unit: .day),
+                            y: .value("Due", day.count)
+                        )
+                        .foregroundStyle(Color.cobuxAccent)
+                    }
+                    .frame(height: 140)
+                    .chartXAxis {
+                        AxisMarks(values: .stride(by: .day, count: 3)) { value in
+                            AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+                        }
                     }
                 }
             }
@@ -214,8 +175,12 @@ struct QuizAnalyticsView: View {
             }
 
             if !completedAttempts.isEmpty {
-                Section("Recent Attempts") {
-                    ForEach(completedAttempts.prefix(20)) { attempt in
+                CobuxFormSection(title: "Recent Attempts") {
+                    // Already the newest 20 -- the probe applies the same
+                    // `prefix(20)` this line used to, as a `fetchLimit`, so the
+                    // rows shown are identical and the other 4,000 attempts are
+                    // never read.
+                    ForEach(completedAttempts) { attempt in
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(attempt.scopeDescription)
@@ -234,7 +199,7 @@ struct QuizAnalyticsView: View {
                 }
             }
 
-            Section("Spend") {
+            CobuxFormSection(title: "Spend") {
                 HStack {
                     Text("Estimated this month")
                     Spacer()
@@ -244,5 +209,202 @@ struct QuizAnalyticsView: View {
             }
         }
         .navigationTitle("Quiz Analytics")
+    }
+}
+
+// MARK: - The summary, and the probe that builds it
+
+/// Everything `QuizAnalyticsView` draws, as `Sendable` values.
+///
+/// The whole point of this type is that it is what crosses the actor boundary
+/// INSTEAD of the model objects. Nothing here holds a `@Model`, a
+/// `PersistentIdentifier`, or a `ModelContext`.
+struct QuizAnalyticsSummary: Sendable {
+    struct ForecastDay: Identifiable, Sendable {
+        let date: Date
+        let count: Int
+        var id: Date { date }
+    }
+
+    struct BookMastery: Identifiable, Sendable {
+        let bookTitle: String
+        /// Mean FSRS-predicted retrievability across this book's reviewed questions --
+        /// nil means nothing in this book has been reviewed yet, not "0% mastered".
+        /// Decays honestly with time since last review, same as any FSRS forgetting curve.
+        let meanRetrievability: Double?
+        var id: String { bookTitle }
+    }
+
+    struct TopicWeakness: Identifiable, Sendable {
+        let themeName: String
+        let wrongRate: Double
+        let sampleSize: Int
+        var id: String { themeName }
+    }
+
+    struct AttemptRow: Identifiable, Sendable {
+        let id: UUID
+        let scopeDescription: String
+        let startedAt: Date
+        let scorePercent: Double?
+    }
+
+    var retentionRate30Days: Double?
+    var forecast: [ForecastDay] = []
+    var mastery: [BookMastery] = []
+    var weakestTopics: [TopicWeakness] = []
+    /// Already limited to the newest 20 completed attempts -- the same slice the
+    /// screen has always shown.
+    var recentAttempts: [AttemptRow] = []
+}
+
+/// Reads the quiz store off the main actor and returns one plain value.
+///
+/// `DiagnosticsProbe`'s shape exactly: a `@ModelActor` owns a `ModelContext`
+/// confined to its own serial executor, every model read happens there, and
+/// only `QuizAnalyticsSummary` comes back.
+@ModelActor
+actor QuizAnalyticsProbe {
+    func summary() -> QuizAnalyticsSummary {
+        var result = QuizAnalyticsSummary()
+        result.retentionRate30Days = retention30Days()
+        result.forecast = forecast()
+        result.mastery = mastery()
+        result.weakestTopics = weakestTopics()
+        result.recentAttempts = recentAttempts()
+        return result
+    }
+
+    /// The number Anki users actually track — correct answers over answers
+    /// actually given, not over the full assigned count (see `QuizAttempt.
+    /// answeredCount` fix — ending a quiz early no longer distorts this).
+    ///
+    /// The 30-day window and the completed filter are now a PREDICATE rather
+    /// than two array filters over every attempt ever recorded.
+    private func retention30Days() -> Double? {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: .now) ?? .distantPast
+        let descriptor = FetchDescriptor<QuizAttempt>(
+            predicate: #Predicate { $0.completedAt != nil && $0.startedAt >= cutoff })
+        guard let attempts = try? modelContext.fetch(descriptor) else { return nil }
+        var answered = 0
+        var correct = 0
+        for attempt in attempts {
+            answered += attempt.answeredCount
+            correct += attempt.correctCount
+        }
+        guard answered > 0 else { return nil }
+        return Double(correct) / Double(answered)
+    }
+
+    /// Next 14 days of due cards, from the real FSRS `dueDate` field —
+    /// distinct from any per-book due count since it spans every book.
+    ///
+    /// Two changes, both exact. The window is a predicate, so a library with
+    /// years of scheduling ahead reads only the fortnight it draws. And the
+    /// buckets are filled in ONE pass by computing each question's day offset,
+    /// instead of fourteen filter passes over the whole list of due dates --
+    /// which `body` then ran twice, once to ask whether the chart was all
+    /// zeros and once to draw it.
+    private func forecast() -> [QuizAnalyticsSummary.ForecastDay] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: .now)
+        let horizon = calendar.date(byAdding: .day, value: 14, to: today) ?? today
+        let distantPast = Date.distantPast
+
+        let descriptor = FetchDescriptor<QuizQuestion>(
+            predicate: #Predicate {
+                !$0.isSuspended
+                    && ($0.dueDate ?? distantPast) >= today
+                    && ($0.dueDate ?? distantPast) < horizon
+            })
+
+        var counts = [Int](repeating: 0, count: 14)
+        for question in (try? modelContext.fetch(descriptor)) ?? [] {
+            guard let due = question.dueDate else { continue }
+            let offset = calendar.dateComponents([.day],
+                                                 from: today,
+                                                 to: calendar.startOfDay(for: due)).day ?? 0
+            guard offset >= 0, offset < counts.count else { continue }
+            counts[offset] += 1
+        }
+
+        return (0..<14).map { offset in
+            QuizAnalyticsSummary.ForecastDay(
+                date: calendar.date(byAdding: .day, value: offset, to: today) ?? today,
+                count: counts[offset])
+        }
+    }
+
+    /// One entry per book that has at least one question, ranked by predicted
+    /// retention. Single pass: the old form grouped, then per group ran a
+    /// `filter`, a `map` and a `reduce` -- three more allocations per book.
+    private func mastery() -> [QuizAnalyticsSummary.BookMastery] {
+        struct Accumulator {
+            var title = ""
+            var scoreSum = 0.0
+            var reviewedCount = 0
+        }
+        var byBook: [UUID: Accumulator] = [:]
+        let now = Date.now
+
+        for question in (try? modelContext.fetch(FetchDescriptor<QuizQuestion>())) ?? [] {
+            guard let book = question.book else { continue }
+            var accumulator = byBook[book.id] ?? Accumulator(title: book.title)
+            if question.fsrsReps > 0, let lastReviewed = question.lastReviewedAt {
+                let elapsedDays = max(0, now.timeIntervalSince(lastReviewed) / 86400)
+                accumulator.scoreSum += FSRS.retrievability(
+                    elapsedDays: elapsedDays,
+                    stability: max(question.fsrsStability, 0.01))
+                accumulator.reviewedCount += 1
+            }
+            byBook[book.id] = accumulator
+        }
+
+        return byBook.values.map { accumulator in
+            QuizAnalyticsSummary.BookMastery(
+                bookTitle: accumulator.title,
+                // nil, not zero: "nothing reviewed yet" is not "0% mastered".
+                meanRetrievability: accumulator.reviewedCount > 0
+                    ? accumulator.scoreSum / Double(accumulator.reviewedCount)
+                    : nil)
+        }
+        .sorted { ($0.meanRetrievability ?? -1) > ($1.meanRetrievability ?? -1) }
+    }
+
+    /// Reuses `QuizModeService.weakestThemes` -- the same canonical-`Theme`-based weak-topic
+    /// detection the Weak Spots quiz mode pools from, so this panel and that mode always agree
+    /// on what "weak" means, the same way the due-count unification made Quiz Home and Daily
+    /// Review agree on what "due" means.
+    ///
+    /// `sampleSize` now comes back FROM `weakestThemes`, which already counted
+    /// it. The view used to recompute it by filtering every answer record per
+    /// topic, rebuilding the theme's highlight-id `Set` inside the filter
+    /// closure -- so the set was constructed once per record, five times over.
+    private func weakestTopics() -> [QuizAnalyticsSummary.TopicWeakness] {
+        let themes = (try? modelContext.fetch(FetchDescriptor<Theme>())) ?? []
+        let answerRecords = (try? modelContext.fetch(FetchDescriptor<QuizAnswerRecord>())) ?? []
+        return QuizModeService.weakestThemes(themes: themes, answerRecords: answerRecords)
+            .prefix(5)
+            .map {
+                QuizAnalyticsSummary.TopicWeakness(themeName: $0.theme.name,
+                                                   wrongRate: $0.wrongRate,
+                                                   sampleSize: $0.sampleSize)
+            }
+    }
+
+    /// The newest 20 completed attempts -- the exact slice the screen shows,
+    /// now as a `fetchLimit` rather than a `prefix` over every attempt ever
+    /// recorded.
+    private func recentAttempts() -> [QuizAnalyticsSummary.AttemptRow] {
+        var descriptor = FetchDescriptor<QuizAttempt>(
+            predicate: #Predicate { $0.completedAt != nil },
+            sortBy: [SortDescriptor(\.startedAt, order: .reverse)])
+        descriptor.fetchLimit = 20
+        return ((try? modelContext.fetch(descriptor)) ?? []).map {
+            QuizAnalyticsSummary.AttemptRow(id: $0.id,
+                                            scopeDescription: $0.scopeDescription,
+                                            startedAt: $0.startedAt,
+                                            scorePercent: $0.scorePercent)
+        }
     }
 }

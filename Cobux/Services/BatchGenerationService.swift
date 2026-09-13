@@ -57,9 +57,17 @@ enum BatchGenerationService {
         let chaptersFailed: Int
     }
 
+    /// Built once. `pendingBatch` is read straight out of
+    /// `QuizScopeBuilderView`'s `body`, so a fresh `JSONDecoder` was being
+    /// allocated -- and a fresh `JSONEncoder` on every save -- every time
+    /// anything on that screen changed. Neither is cheap to construct, and
+    /// neither carries per-call state; both are documented as safe to reuse.
+    private nonisolated(unsafe) static let decoder = JSONDecoder()
+    private nonisolated(unsafe) static let encoder = JSONEncoder()
+
     static var pendingBatch: PendingBatch? {
         guard let data = UserDefaults.standard.data(forKey: pendingKey) else { return nil }
-        return try? JSONDecoder().decode(PendingBatch.self, from: data)
+        return try? decoder.decode(PendingBatch.self, from: data)
     }
 
     private static func savePending(_ batch: PendingBatch?) {
@@ -67,7 +75,7 @@ enum BatchGenerationService {
             UserDefaults.standard.removeObject(forKey: pendingKey)
             return
         }
-        if let data = try? JSONEncoder().encode(batch) {
+        if let data = try? encoder.encode(batch) {
             UserDefaults.standard.set(data, forKey: pendingKey)
         }
     }

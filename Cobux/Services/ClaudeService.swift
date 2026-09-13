@@ -13,6 +13,12 @@ enum ClaudeError: LocalizedError {
     case invalidResponse
     case missingAPIKey
     case invalidAPIKey
+    /// The key is valid but has no funds. Structurally distinct from
+    /// `.apiError` so `CreditStatusMonitor` can latch on it without
+    /// string-matching at the call site, and so the user is told the true
+    /// thing -- this used to surface as a raw "API error (400): Your credit
+    /// balance is too low...", which reads as the app being broken.
+    case creditsExhausted
     case truncated
     /// Raised by an early `NetworkMonitor.shared.isConnected` check before a request is even
     /// attempted, so an offline user gets an immediate, honest failure instead of waiting
@@ -35,10 +41,48 @@ enum ClaudeError: LocalizedError {
             return "API key is missing. Please add your Anthropic API key in Settings."
         case .invalidAPIKey:
             return "Your API key was rejected. Please check it in Settings."
+        case .creditsExhausted:
+            return "Cobux AI is out of credits right now. Everything else in the app keeps working, and you'll get a notification when it's back."
         case .truncated:
             return "The response was cut short."
         case .offline:
             return "You're offline. Check your connection and try again."
+        }
+    }
+
+    /// What the user is allowed to read. `errorDescription` above stays
+    /// diagnostic and must not change shape -- `DiagnosticLog` records it
+    /// verbatim, and `RetryPolicy`/`CreditStatusMonitor` both key off the
+    /// cases themselves.
+    ///
+    /// The chat bubble used to render `errorDescription` directly, so a rate
+    /// limit reached him as the literal string "API error (429): ..." and a
+    /// dropped connection as "Network error: The request timed out." Rajan's
+    /// ask was the opposite: "make sure that my fucking shit is... user-friendly
+    /// as well. You know when something goes wrong."
+    ///
+    /// Two rules the copy here follows. Nothing names the user as the cause --
+    /// a rate limit is Cobux AI being busy, not him doing something wrong. And
+    /// nothing states a number, a status code or a subsystem name: the moment
+    /// a bubble reads like a stack trace it stops being an apology and starts
+    /// being a bug report he cannot file.
+    var userFacingMessage: String {
+        switch self {
+        case .networkError:
+            return "Couldn't reach Cobux AI. Check your connection and try again."
+        case .apiError, .invalidResponse:
+            return "Something went wrong on Cobux AI's side. Try again in a moment."
+        case .retryableAPIError(let statusCode, _):
+            // 429 is the one a second person chatting at the same time can
+            // actually cause, and it genuinely does clear on its own.
+            return statusCode == 429
+                ? "Cobux AI is busy right now. Try again in a moment."
+                : "Something went wrong on Cobux AI's side. Try again in a moment."
+        case .missingAPIKey, .invalidAPIKey, .creditsExhausted, .truncated, .offline:
+            // These five were already written for him to read -- see their
+            // strings above. Reworded copy here would be a second, drifting
+            // version of the same approved sentences.
+            return errorDescription ?? "Something went wrong. Try again."
         }
     }
 }
@@ -88,8 +132,14 @@ class ClaudeService: AIService {
     // Claude Sonnet 5 thinks adaptively by default, and thinking tokens count
     // against max_tokens — so this needs enough headroom for thinking + answer.
     private let maxTokens = 8192
-    // Cap how much history is sent per request so long chats don't bloat cost.
-    private let maxHistoryMessages = 20
+    /// Cap on how much history is sent per request so long chats don't bloat
+    /// cost. Counted in ALTERNATING messages -- user and assistant -- so a full
+    /// window carries half as many of the user's own turns. `static` and
+    /// visible because `ChatView`'s cross-chat memory derives its
+    /// current-window exclusion from this exact number: the two must never
+    /// again be separate constants that merely happen to agree (they did not
+    /// -- see `CrossChatMemory.visibleUserTurns`).
+    static let maxHistoryMessages = 20
 
     /// `URLSession.shared`'s default `timeoutIntervalForRequest` is 60s — for
     /// a streaming request this is an IDLE timer (time until the first
@@ -143,6 +193,8 @@ class ClaudeService: AIService {
         guard (200...299).contains(httpResponse.statusCode) else {
             throw Self.mapAPIError(statusCode: httpResponse.statusCode, body: data)
         }
+        // A 2xx is the only trustworthy evidence the key has funds.
+        Self.recordCreditOutcome(nil)
 
         // Content can include thinking blocks before the text block — take the first text block.
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -182,7 +234,7 @@ class ClaudeService: AIService {
     /// thinking on and an 8192-token cap, both real avoidable cost and a spoken reply the queue
     /// could take minutes to finish reading. Text chat's Symposium/Decision Consultation/Ask
     /// Intent callers keep using the 3-arg overload above, unaffected.
-    func streamMessage(userMessage: String, conversationHistory: [AIMessage], systemPrompt: String, options: RequestOptions) -> AsyncThrowingStream<String, Error> {
+    func streamMessage(userMessage: String, conversationHistory: [AIMessage], systemPrompt: String, options: RequestOptions, userImages: [Data] = []) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let producer = Task {
                 do {
@@ -200,7 +252,8 @@ class ClaudeService: AIService {
                         conversationHistory: conversationHistory,
                         systemPrompt: .plain(systemPrompt),
                         stream: true,
-                        options: options
+                        options: options,
+                        userImages: userImages
                     )
 
                     let (bytes, response): (URLSession.AsyncBytes, URLResponse)
@@ -224,6 +277,7 @@ class ClaudeService: AIService {
                         continuation.finish(throwing: Self.mapAPIError(statusCode: httpResponse.statusCode, body: errorData))
                         return
                     }
+                    Self.recordCreditOutcome(nil)
 
                     let (stopReason, usage) = try await Self.consumeStream(bytes: bytes, continuation: continuation)
                     usage.record()
@@ -260,7 +314,7 @@ class ClaudeService: AIService {
     /// Decision Consultation, Ask Intent) keep using the plain-string
     /// `streamMessage` above, since a single one-shot call doesn't benefit
     /// from caching the way a multi-turn study session does.
-    func streamMessageCached(userMessage: String, conversationHistory: [AIMessage], stableSystemPrompt: String, dynamicContext: String, options: RequestOptions = .default) -> AsyncThrowingStream<String, Error> {
+    func streamMessageCached(userMessage: String, conversationHistory: [AIMessage], stableSystemPrompt: String, dynamicContext: String, options: RequestOptions = .default, userImages: [Data] = []) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let producer = Task {
                 do {
@@ -278,7 +332,8 @@ class ClaudeService: AIService {
                         conversationHistory: conversationHistory,
                         systemPrompt: .cached(stable: stableSystemPrompt, dynamic: dynamicContext),
                         stream: true,
-                        options: options
+                        options: options,
+                        userImages: userImages
                     )
 
                     let (bytes, response): (URLSession.AsyncBytes, URLResponse)
@@ -302,6 +357,7 @@ class ClaudeService: AIService {
                         continuation.finish(throwing: Self.mapAPIError(statusCode: httpResponse.statusCode, body: errorData))
                         return
                     }
+                    Self.recordCreditOutcome(nil)
 
                     let (stopReason, usage) = try await Self.consumeStream(bytes: bytes, continuation: continuation)
                     usage.record()
@@ -414,7 +470,7 @@ class ClaudeService: AIService {
     /// `internal` (not `private`) so `ClaudeServiceTests` can verify the exact request body
     /// `RequestOptions` produces — including that the default leaves it byte-identical to
     /// before `RequestOptions` existed — without needing a live network call.
-    func buildRequest(userMessage: String, conversationHistory: [AIMessage], systemPrompt: SystemContent, stream: Bool, options: RequestOptions = .default) throws -> URLRequest {
+    func buildRequest(userMessage: String, conversationHistory: [AIMessage], systemPrompt: SystemContent, stream: Bool, options: RequestOptions = .default, userImages: [Data] = []) throws -> URLRequest {
         guard let url = URL(string: endpoint) else {
             throw ClaudeError.invalidResponse
         }
@@ -425,17 +481,31 @@ class ClaudeService: AIService {
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.setValue("application/json", forHTTPHeaderField: "content-type")
 
-        var messages: [[String: String]] = []
-        for message in conversationHistory.suffix(maxHistoryMessages) {
+        var messages: [[String: Any]] = []
+        for message in conversationHistory.suffix(Self.maxHistoryMessages) {
             messages.append([
                 "role": message.role,
                 "content": message.content
             ])
         }
-        messages.append([
-            "role": "user",
-            "content": userMessage
-        ])
+        // The current turn: plain text unless images ride along, in which
+        // case it becomes content blocks -- images FIRST, then the text, the
+        // order Anthropic's vision guidance recommends. History stays
+        // text-only: re-sending old images on every turn would multiply the
+        // vision cost by the conversation's length for no benefit; the
+        // model's replies about them are already in the history.
+        if userImages.isEmpty {
+            messages.append(["role": "user", "content": userMessage])
+        } else {
+            var blocks: [[String: Any]] = userImages.map { data in
+                ["type": "image",
+                 "source": ["type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": data.base64EncodedString()]]
+            }
+            blocks.append(["type": "text", "text": userMessage])
+            messages.append(["role": "user", "content": blocks])
+        }
 
         let systemField: Any
         switch systemPrompt {
@@ -473,13 +543,44 @@ class ClaudeService: AIService {
         return request
     }
 
+    /// The one place credit state is written, so the three request paths
+    /// cannot drift apart on it. Hops to the main actor because
+    /// `CreditStatusMonitor` is main-actor isolated and these callers are not;
+    /// fire-and-forget because nothing about a request should wait on
+    /// bookkeeping, and a dropped update self-corrects on the next request.
+    private static func recordCreditOutcome(_ error: ClaudeError?) {
+        Task { @MainActor in
+            if let error {
+                CreditStatusMonitor.recordFailure(error)
+            } else {
+                CreditStatusMonitor.recordSuccess()
+            }
+        }
+    }
+
     private static func mapAPIError(statusCode: Int, body: Data) -> ClaudeError {
+        let mapped = classifyAPIError(statusCode: statusCode, body: body)
+        recordCreditOutcome(mapped)
+        return mapped
+    }
+
+    private static func classifyAPIError(statusCode: Int, body: Data) -> ClaudeError {
         if let errorBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
            let error = errorBody["error"] as? [String: Any] {
             if error["type"] as? String == "authentication_error" {
                 return .invalidAPIKey
             }
             if let message = error["message"] as? String {
+                // Anthropic reports an empty balance as an ordinary 400
+                // invalid_request_error whose only distinguishing mark is the
+                // message text, so this one string check is unavoidable. It is
+                // deliberately narrow -- "credit balance" appears in no other
+                // error this API returns -- and a miss is not dangerous: it
+                // degrades to today's behaviour, a retryable API error.
+                let lowered = message.lowercased()
+                if lowered.contains("credit balance") || lowered.contains("insufficient credit") {
+                    return .creditsExhausted
+                }
                 return .retryableAPIError(statusCode: statusCode, message: message)
             }
         }

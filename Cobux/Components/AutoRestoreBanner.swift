@@ -10,6 +10,11 @@ struct AutoRestoreBanner: View {
     let onUndo: () -> Void
     let onDismiss: () -> Void
 
+    /// Undo removes restored rows, so it asks first. It is one tap away from a
+    /// banner that sits there for the whole session, and the thing on the other
+    /// side of it is his own archive.
+    @State private var confirmingUndo = false
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "icloud.and.arrow.down.fill")
@@ -24,8 +29,16 @@ struct AutoRestoreBanner: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 if canUndo {
-                    Button("Undo", action: onUndo)
+                    Button("Undo") { confirmingUndo = true }
                         .font(.caption.weight(.semibold))
+                        .confirmationDialog("Undo this restore?",
+                                            isPresented: $confirmingUndo,
+                                            titleVisibility: .visible) {
+                            Button("Undo Restore", role: .destructive, action: onUndo)
+                            Button("Keep Everything", role: .cancel) {}
+                        } message: {
+                            Text("Entries you have written in since the restore are kept.")
+                        }
                 }
             }
 

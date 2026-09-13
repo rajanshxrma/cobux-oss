@@ -16,6 +16,9 @@ struct SpokenQuizView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    /// Reduce Motion is a hard gate (CobuxMotion.swift): rows fade in
+    /// rather than spring up, and the header glyph holds still.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query private var books: [Book]
 
     @State private var controller: SpokenQuizController?
@@ -33,12 +36,20 @@ struct SpokenQuizView: View {
     @State private var voiceErrorMessage: String?
     @State private var showVoiceErrorAlert = false
 
+    // Finalized rows kept for the whole session -- question and feedback
+    // land left-aligned, his recognized answer right-aligned, exactly the
+    // treatment `VoiceModeView` ships (rule: converge onto that, not a third
+    // hand-rolled transcript). `VoiceTranscriptEntry` and the row/scroll
+    // mechanics live in `VoiceTranscriptView.swift`, shared with it.
+    @State private var transcript: [VoiceTranscriptEntry] = []
+
     var body: some View {
         ZStack {
             backgroundGradient
 
-            VStack {
+            VStack(spacing: 0) {
                 HStack {
+                    stateGlyph
                     Spacer()
                     Button(action: endSession) {
                         Label("End", systemImage: "xmark.circle.fill")
@@ -56,20 +67,54 @@ struct SpokenQuizView: View {
                     Text("Question \(min(controller.currentIndex + 1, questions.count)) of \(questions.count) · \(controller.correctCount) correct")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.6))
+                        .padding(.bottom, 8)
                 }
 
-                Spacer()
-
-                stateIcon
-
-                Spacer()
-
-                captionArea
-                    .padding(.bottom, 40)
+                // Same top-anchored two-sided transcript as Voice Mode --
+                // this used to be a bottom `captionArea`, one centered line
+                // per state, each replacing the last.
+                if transcript.isEmpty && (controller?.state ?? .idle) == .idle {
+                    Spacer()
+                    idleExplainer
+                    Spacer()
+                } else {
+                    transcriptView
+                }
             }
         }
         .preferredColorScheme(.dark)
         .onAppear(perform: setUpAndRequestPermissions)
+        // Folds finalized rows into `transcript` as the controller's state
+        // machine moves. `.grading` is deliberately not its own case here --
+        // `gradeAndAdvance` sets `.grading` then `.speakingFeedback`
+        // synchronously in the same call with no run-loop yield between
+        // them, so SwiftUI's `onChange` can coalesce the two and never
+        // observe `.grading` as a distinct value. Folding the answer into
+        // the `.speakingFeedback` case (using `liveTranscript`, which isn't
+        // cleared until the NEXT question's `startListening`) is correct
+        // regardless of whether that coalescing happens.
+        .onChange(of: controller?.state) { _, newState in
+            guard let newState else { return }
+            switch newState {
+            case .speakingQuestion:
+                guard let prompt = controller?.currentQuestion?.prompt else { return }
+                withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.38, dampingFraction: 0.78)) {
+                    transcript.append(VoiceTranscriptEntry(text: prompt, isUser: false))
+                }
+            case .speakingFeedback:
+                withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.38, dampingFraction: 0.78)) {
+                    if let spoken = controller?.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !spoken.isEmpty {
+                        transcript.append(VoiceTranscriptEntry(text: spoken, isUser: true))
+                    }
+                    if let feedback = controller?.lastFeedback {
+                        transcript.append(VoiceTranscriptEntry(text: feedback, isUser: false))
+                    }
+                }
+            case .idle, .listening, .grading, .done:
+                break
+            }
+        }
         // Both voice surfaces are presented as `fullScreenCover`, which stays
         // presented when the app backgrounds -- so `onDisappear` never fires and
         // tearing down only from there meant the session survived being "closed".
@@ -109,64 +154,74 @@ struct SpokenQuizView: View {
             .ignoresSafeArea()
     }
 
-    private var stateIcon: some View {
-        ZStack {
-            Circle()
-                .fill(
-                    LinearGradient(
-                        colors: [Color.cobuxAccent.opacity(0.35), Color.cobuxAccent.opacity(0.12)],
-                        startPoint: .top, endPoint: .bottom
-                    )
-                )
-                .frame(width: 180, height: 180)
-                .overlay(Circle().stroke(Color.white.opacity(0.15), lineWidth: 1))
-
-            iconImage
-                .font(.system(size: 52, weight: .medium))
-                .foregroundStyle(.white)
+    /// Compact header glyph, byte-for-byte the same treatment as
+    /// `VoiceModeView.stateGlyph` -- the session's state at a glance,
+    /// without pushing the transcript off-center the way the old 180pt
+    /// center orb did.
+    @ViewBuilder
+    private var stateGlyph: some View {
+        Group {
+            switch controller?.state ?? .idle {
+            case .idle, .done:
+                Image(systemName: "mic.slash.fill")
+            case .speakingQuestion, .speakingFeedback:
+                Image(systemName: "waveform.circle.fill")
+                    .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
+            case .listening:
+                Image(systemName: "waveform")
+                    .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
+            case .grading:
+                ProgressView().tint(.white)
+            }
         }
+        .font(.system(size: 22, weight: .medium))
+        .foregroundStyle(.white.opacity(0.9))
+        .frame(width: 36, height: 36)
+        .background(Circle().fill(Color.cobuxAccent.opacity(0.25)))
         .animation(.easeOut(duration: 0.25), value: controller?.state)
     }
 
-    @ViewBuilder
-    private var iconImage: some View {
-        switch controller?.state ?? .idle {
-        case .idle, .done:
-            Image(systemName: "mic.slash.fill")
-        case .speakingQuestion, .speakingFeedback:
-            Image(systemName: "waveform.circle.fill")
-                .symbolEffect(.pulse, options: .repeating)
-        case .listening:
-            Image(systemName: "waveform")
-                .symbolEffect(.variableColor.iterative, options: .repeating)
-        case .grading:
-            ProgressView().tint(.white).scaleEffect(1.5)
-        }
+    private var idleExplainer: some View {
+        Text("Spoken Quiz reads each question aloud, listens for your answer, and grades it as you speak -- no screen needed.")
+            .font(.title3)
+            .foregroundStyle(.white.opacity(0.92))
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 32)
     }
 
-    private var captionArea: some View {
-        Group {
-            switch controller?.state ?? .idle {
-            case .idle:
-                Text("Spoken Quiz reads each question aloud, listens for your answer, and grades it as you speak -- no screen needed.")
-            case .speakingQuestion:
-                Text(controller?.currentQuestion?.prompt ?? "")
-            case .listening:
-                Text((controller?.liveTranscript.isEmpty ?? true) ? "Listening…" : (controller?.liveTranscript ?? ""))
-            case .grading:
-                Text("Grading…")
-            case .speakingFeedback:
-                Text(controller?.lastFeedback ?? "")
-            case .done:
-                Text("Session complete.")
-            }
+    /// The session as one top-anchored, two-sided transcript -- question and
+    /// feedback left-aligned, his recognized answer right-aligned, sharing
+    /// `VoiceModeView`'s `VoiceTranscriptScrollView` mechanics rather than a
+    /// third hand-rolled implementation.
+    private var transcriptView: some View {
+        VoiceTranscriptScrollView(
+            entries: transcript,
+            animatedTrigger: controller?.state,
+            immediateTrigger: controller?.liveTranscript,
+            tail: { transcriptTail }
+        )
+    }
+
+    /// The in-progress moment at the tail: his answer growing live while
+    /// listening, or a "Grading…" line. Everything else (the question, the
+    /// feedback) is already a finalized row in `transcript` by the time its
+    /// state is showing, so those cases render nothing here.
+    @ViewBuilder
+    private var transcriptTail: some View {
+        switch controller?.state ?? .idle {
+        case .listening:
+            VoiceTranscriptRow(
+                text: (controller?.liveTranscript.isEmpty ?? true) ? "Listening…" : (controller?.liveTranscript ?? ""),
+                isUser: true,
+                isLive: controller?.liveTranscript.isEmpty ?? true
+            )
+        case .grading:
+            Text("Grading…")
+                .font(.title3)
+                .foregroundStyle(.white.opacity(0.6))
+        case .idle, .speakingQuestion, .speakingFeedback, .done:
+            EmptyView()
         }
-        .font(.title3)
-        .foregroundStyle(.white.opacity(0.92))
-        .multilineTextAlignment(.center)
-        .padding(.horizontal, 32)
-        .frame(minHeight: 80)
-        .animation(.easeOut(duration: 0.2), value: controller?.liveTranscript)
     }
 
     private func setUpAndRequestPermissions() {

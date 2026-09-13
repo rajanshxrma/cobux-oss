@@ -117,10 +117,41 @@ enum HealthContextService {
         guard isAvailable else { return HealthContext() }
         async let mindful = mindfulMinutesToday()
         async let sleep = sleepHoursLastNight()
-        return HealthContext(mindfulMinutesToday: await mindful, sleepHoursLastNight: await sleep)
+        let context = HealthContext(mindfulMinutesToday: await mindful,
+                                    sleepHoursLastNight: await sleep)
+        rememberSummary(context.summaryLine)
+        return context
         #else
         return HealthContext()
         #endif
+    }
+
+    /// The last summary this device actually computed.
+    ///
+    /// Chat needs this SYNCHRONOUSLY while assembling a prompt, and a HealthKit
+    /// query is async -- so the composer's own fetch leaves the line here for
+    /// chat to read. Deliberately in standard defaults, not the app group, and
+    /// deliberately a rendered sentence rather than raw values: nothing here is
+    /// a health record, it is one line of text this device already showed the
+    /// user. `HealthContextService`'s standing rule holds -- health data is
+    /// never written into an entry, never backed up, never exported.
+    private static let lastSummaryKey = "cobux.health.lastSummaryLine"
+    private static let lastSummaryDateKey = "cobux.health.lastSummaryAt"
+
+    static func rememberSummary(_ line: String?) {
+        guard let line else { return }
+        UserDefaults.standard.set(line, forKey: lastSummaryKey)
+        UserDefaults.standard.set(Date.now, forKey: lastSummaryDateKey)
+    }
+
+    /// `nil` once it is older than today -- last night's sleep is not a fact
+    /// about tomorrow, and a stale line is worse than none.
+    static var lastKnownSummary: String? {
+        guard isEnabled,
+              let at = UserDefaults.standard.object(forKey: lastSummaryDateKey) as? Date,
+              Calendar.current.isDateInToday(at)
+        else { return nil }
+        return UserDefaults.standard.string(forKey: lastSummaryKey)
     }
 
     #if canImport(HealthKit)
@@ -156,15 +187,69 @@ enum HealthContextService {
         let asleep = samples.filter { asleepValues.contains($0.value) }
         guard !asleep.isEmpty else { return nil }
 
-        // Union the intervals rather than summing them: multiple sources
-        // (WHOOP + the phone itself) can both write overlapping samples for the
-        // same night, and a naive sum reports twelve hours of sleep for eight.
-        let merged = mergedDuration(asleep.map { ($0.startDate, $0.endDate) })
-        let hours = merged / 3600
+        // LAST NIGHT, not "all sleep in the last 36 hours".
+        //
+        // This summed every asleep interval in the whole window, which is a
+        // different quantity than the one the label claims. At 6pm the window
+        // reaches back to 6am YESTERDAY, so it also caught the tail of the night
+        // before -- and any nap taken since. Rajan reported it through TestFlight
+        // on 2026-09-03: "I woke up 8 hrs sum sleep but this data is collected
+        // wrong."
+        //
+        // The window has to stay wide (he might have woken at 6am or slept until
+        // noon, and this is read at any hour), so the fix is not a smaller
+        // window -- it is grouping the samples into SESSIONS and taking the last
+        // real one. Anything separated by more than a two-hour gap is a
+        // different sleep, which is also how WHOOP and Apple's own Health
+        // summary treat it.
+        let sessions = sleepSessions(from: asleep.map { ($0.startDate, $0.endDate) })
+        // The most recent session of real length. A 20-minute doze is not last
+        // night, and reporting one as "0.3h sleep" beside his writing would be
+        // worse than saying nothing.
+        guard let night = sessions.last(where: { $0.duration >= 45 * 60 }) else { return nil }
+        let hours = night.duration / 3600
         return hours > 0 ? (hours * 10).rounded() / 10 : nil
     }
 
     /// Total covered time of a set of possibly-overlapping intervals.
+    /// One sleep, as a start/end pair, per contiguous stretch.
+    ///
+    /// Overlapping samples are unioned first -- WHOOP and the phone both write
+    /// the same night, and a naive sum reports twelve hours for eight -- and
+    /// then anything separated by more than `sessionGap` is treated as a
+    /// separate sleep rather than more of the same one.
+    ///
+    /// Returned oldest-first, so `.last` is the most recent.
+    static func sleepSessions(from intervals: [(Date, Date)],
+                              sessionGap: TimeInterval = 2 * 3600)
+    -> [(start: Date, end: Date, duration: TimeInterval)] {
+        let sorted = intervals.sorted { $0.0 < $1.0 }
+        var sessions: [(start: Date, end: Date, duration: TimeInterval)] = []
+        var open: (start: Date, end: Date)?
+        var slept: TimeInterval = 0
+
+        for (start, end) in sorted {
+            guard var current = open else {
+                open = (start, end); slept = end.timeIntervalSince(start)
+                continue
+            }
+            if start.timeIntervalSince(current.end) > sessionGap {
+                sessions.append((current.start, current.end, slept))
+                open = (start, end); slept = end.timeIntervalSince(start)
+            } else {
+                // Same session. Count only time not already covered, so
+                // overlapping samples from two sources cannot double-count.
+                if end > current.end {
+                    slept += end.timeIntervalSince(max(start, current.end))
+                    current.end = end
+                    open = current
+                }
+            }
+        }
+        if let current = open { sessions.append((current.start, current.end, slept)) }
+        return sessions
+    }
+
     private static func mergedDuration(_ intervals: [(Date, Date)]) -> TimeInterval {
         let sorted = intervals.sorted { $0.0 < $1.0 }
         var total: TimeInterval = 0

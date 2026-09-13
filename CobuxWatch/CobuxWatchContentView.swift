@@ -42,10 +42,22 @@ struct CobuxWatchContentView: View {
         }
     }
 
+    /// The glyph beside the due count was a green `checkmark.circle.fill`,
+    /// which was wrong twice over: it is a tick -- the frame he rejected
+    /// outright ("this shows a tick thats bad the jounral streak is meant for
+    /// fun info display. that doest mean it is supposed to be a work or task
+    /// for a user to necesarily complete") -- and it asserted the OPPOSITE of
+    /// what the number says, since a due count counts things not yet done.
+    ///
+    /// A stack of cards, not a hollow `circle`: an empty circle is the
+    /// unchecked-checkbox glyph, so it would carry the same to-do frame back in
+    /// a quieter voice. This one names the object the number is counting and
+    /// passes no verdict on the person reading it. `.secondary`, so nothing
+    /// here is tinted with a judgement colour either.
     private var dueRow: some View {
         HStack {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(Color.cobuxGood)
+            Image(systemName: "rectangle.stack")
+                .foregroundStyle(.secondary)
             Text("\(receiver.latestPayload.map { "\($0.dueCount)" } ?? "—") due")
                 .font(.headline)
             Spacer()

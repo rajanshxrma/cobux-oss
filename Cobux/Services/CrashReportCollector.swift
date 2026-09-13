@@ -52,6 +52,15 @@ final class CrashReportCollector: NSObject, MXMetricManagerSubscriber {
         let directory = Self.reportsDirectory
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
+        // `didReceive` is MetricKit's delivery callback: iOS hands the app its
+        // diagnostics at most once per launch, off the main thread, and only
+        // when there was actually a crash to report. The formatter is already
+        // built OUTSIDE the payload loop below, so it is one construction per
+        // delivery -- not per row and not per frame. It is also configured
+        // after construction, so a shared instance would need the mutation to
+        // move into a closure to stay safe; there is nothing here to buy with
+        // that.
+        // lint-ok: formatter-constructed-per-render -- once per MetricKit delivery (at most once per launch), off-main, already outside the payload loop
         let stampFormatter = ISO8601DateFormatter()
         stampFormatter.formatOptions = [.withFullDate, .withTime, .withDashSeparatorInDate]
         for payload in crashPayloads {

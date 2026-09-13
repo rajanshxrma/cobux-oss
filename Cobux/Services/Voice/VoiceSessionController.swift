@@ -1,6 +1,7 @@
 import Foundation
 import Speech
 import AVFoundation
+import UIKit
 import CobuxCore
 
 enum VoiceState: Equatable {
@@ -17,7 +18,7 @@ enum VoiceState: Equatable {
 /// ruling, this is both the fix for the old half-duplex clunkiness and the structural
 /// prerequisite for real duplex/AEC later without a rewrite.
 @Observable
-final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
+final class VoiceSessionController: NSObject {
     private(set) var state: VoiceState = .idle
     private(set) var liveTranscript = ""
     private(set) var spokenCaption = ""
@@ -53,10 +54,11 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
     private let audioEngine = AVAudioEngine()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private let synthesizer = AVSpeechSynthesizer()
-    /// On-device neural voice. Tried first for every sentence; `AVSpeechSynthesizer` remains
-    /// the fallback whenever the model isn't downloaded yet or synthesis fails.
-    private let neuralSpeaker = NeuralSpeaker()
+    /// Every spoken sentence goes through here: the on-device neural voice first, the system
+    /// voice for anything it declines, pipelined so consecutive sentences join without a gap.
+    /// Its callbacks are the only place captions are appended and the only "speech finished"
+    /// signal this state machine listens to, whichever engine actually spoke.
+    private let speaker = SentenceSpeaker()
 
     private var silenceTimer: Timer?
     private var idleTimer: Timer?
@@ -68,8 +70,6 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
     private var streamTask: Task<Void, Never>?
     private var streamInFlight = false
     private var chunker: SpeechChunker?
-    private var utteranceQueue: [String] = []
-    private var isSpeakingQueue = false
     private var currentTurnUserMessage: String?
 
     /// This session's cumulative real spend, computed from the delta in `UsageTracker`'s
@@ -111,7 +111,15 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
         self.conversationHistory = conversationHistory
         self.personalWritingEntries = personalWritingEntries
         super.init()
-        synthesizer.delegate = self
+        speaker.onSentenceStarted = { [weak self] sentence in
+            guard let self else { return }
+            // Appended as the audio begins, not when the sentence was dequeued -- the caption
+            // used to land 0.3-1.2 s before the sound, which read as subtitles running ahead
+            // of the voice rather than a transcript of it.
+            self.spokenCaption += (self.spokenCaption.isEmpty ? "" : " ") + sentence
+            self.spokenSentences.append(sentence)
+        }
+        speaker.onDrained = { [weak self] in self?.handleSpeechQueueDrained() }
     }
 
     // MARK: - Permissions
@@ -134,7 +142,11 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
         guard !sessionActive else { return }
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playAndRecord, mode: .default, options: [.duckOthers, .defaultToSpeaker])
+            // `.allowBluetoothA2DP`, not `.allowBluetooth` (HFP): with AirPods in, the voice
+            // plays through them at full bandwidth instead of out of the phone speaker. HFP
+            // would route the mic through the earbuds too, but at telephony bandwidth in both
+            // directions -- every voice sounds worse, the opposite of the point.
+            try session.setCategory(.playAndRecord, mode: .default, options: [.duckOthers, .defaultToSpeaker, .allowBluetoothA2DP])
             try session.setActive(true, options: .notifyOthersOnDeactivation)
             sessionActive = true
             registerAudioObservers()
@@ -142,6 +154,12 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
             onError?("Couldn't set up the audio session.")
             return
         }
+        // The 327 MB of neural weights load now, overlapping the first listen, instead of as
+        // a multi-second pause before the first spoken sentence.
+        speaker.prewarm()
+        // A hands-free session has no touch to keep the screen awake; without this the phone
+        // auto-locked mid-conversation, the scene backgrounded, and the owner ended the session.
+        setKeepsScreenAwake(true)
         startListening()
     }
 
@@ -155,8 +173,15 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
         idleTimer = nil
         NotificationCenter.default.removeObserver(self)
         guard sessionActive else { return }
+        setKeepsScreenAwake(false)
         deactivateSession()
         sessionActive = false
+    }
+
+    /// `UIApplication.isIdleTimerDisabled`, hopped to the main actor: this class isn't isolated
+    /// to it, even though every caller is on the main thread.
+    private func setKeepsScreenAwake(_ awake: Bool) {
+        Task { @MainActor in UIApplication.shared.isIdleTimerDisabled = awake }
     }
 
     /// `setActive(false)` throws 560030580 when audio IO hasn't fully wound down yet, and the
@@ -195,6 +220,11 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
     // MARK: - Listening / STT
 
     private func startListening() {
+        // Never on a dead controller. End-while-speaking used to get here: `end()` cancelled
+        // the queue, the cancel drained it, and the drain restarted listening -- a hot mic and
+        // a live repeating silence timer surviving dismissal, and the just-deactivated
+        // `.duckOthers` session re-activated so every other app stayed ducked.
+        guard sessionActive else { return }
         stopListeningInternal()
         resetIdleTimer()
         liveTranscript = ""
@@ -250,10 +280,14 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
 
             if let result {
                 let text = result.bestTranscription.formattedString
-                if text != self.lastTranscript {
+                // This callback arrives on the recognizer's own queue; the silence timer reads
+                // `lastTranscript`/`lastChangeDate` on the main runloop. Compare and write them
+                // where they're read, alongside the `liveTranscript` update that already hopped.
+                DispatchQueue.main.async {
+                    guard text != self.lastTranscript else { return }
                     self.lastTranscript = text
                     self.lastChangeDate = Date()
-                    DispatchQueue.main.async { self.liveTranscript = text }
+                    self.liveTranscript = text
                 }
             }
 
@@ -494,54 +528,25 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
 
     // MARK: - Speaking
 
+    /// Hands sentences to `SentenceSpeaker`, which pipelines them (the next sentence is
+    /// synthesized while the current one plays) and falls back to the system voice per
+    /// sentence. Captions are appended by its `onSentenceStarted`, as each becomes audible;
+    /// `onDrained` is the one "finished speaking" signal, whichever engine spoke.
     private func enqueueSpeech(_ chunks: [String]) {
         guard !chunks.isEmpty else { return }
-        utteranceQueue.append(contentsOf: chunks)
         if state != .speaking {
             state = .speaking
         }
-        if !isSpeakingQueue {
-            speakNextInQueue()
-        }
-    }
-
-    private func speakNextInQueue() {
-        guard !utteranceQueue.isEmpty else {
-            isSpeakingQueue = false
-            handleSpeechQueueDrained()
-            return
-        }
-        isSpeakingQueue = true
-        let next = utteranceQueue.removeFirst()
-        spokenCaption += (spokenCaption.isEmpty ? "" : " ") + next
-        spokenSentences.append(next)
-
-        // Neural voice first, system voice if it isn't available. Both funnel into
-        // `speakNextInQueue` on completion, so the queue drains identically either way and
-        // the state machine can't tell them apart.
-        Task { [weak self] in
-            guard let self else { return }
-            let spoke = await self.neuralSpeaker.speak(next) {
-                Task { @MainActor [weak self] in self?.speakNextInQueue() }
-            }
-            guard !spoke else { return }
-            await MainActor.run { self.speakWithSystemVoice(next) }
-        }
-    }
-
-    private func speakWithSystemVoice(_ text: String) {
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
-        utterance.pitchMultiplier = 1.0
-        utterance.voice = VoicePreference.selectedVoice()
-        synthesizer.speak(utterance)
+        speaker.enqueue(chunks)
     }
 
     /// Only actually returns to listening once BOTH the speech queue is empty AND the network
-    /// stream has finished (`streamInFlight` false) — called from both ends (a chunk finishes
-    /// speaking, or the stream finishes) since either can be the last one to complete.
+    /// stream has finished (`streamInFlight` false) — called from both ends (the speaker
+    /// drains, or the stream finishes) since either can be the last one to complete.
     private func handleSpeechQueueDrained() {
-        guard !streamInFlight, utteranceQueue.isEmpty, !isSpeakingQueue else { return }
+        // See `startListening`: a drain that arrives after `end()` must not restart anything.
+        guard sessionActive else { return }
+        guard !streamInFlight, !speaker.isSpeaking else { return }
         if sessionShouldEndAfterSpeech {
             onSessionBudgetExhausted?()
             return
@@ -550,32 +555,7 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     private func stopSpeakingQueue() {
-        utteranceQueue.removeAll()
-        isSpeakingQueue = false
-        if synthesizer.isSpeaking {
-            synthesizer.stopSpeaking(at: .immediate)
-        }
-        // The neural path plays through its own AVAudioEngine, so stopping the system
-        // synthesizer alone would leave it talking -- the same class of half-teardown that
-        // made voice mode survive being closed.
-        Task { await neuralSpeaker.stop() }
-    }
-
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        DispatchQueue.main.async { [weak self] in self?.speakNextInQueue() }
-    }
-
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        // Clearing `isSpeakingQueue` alone stranded whatever was still queued: any cancel we
-        // didn't initiate ourselves (a phone call, Siri, a route change) left sentences in
-        // `utteranceQueue` that nothing would ever speak or drain, and the session sat showing
-        // a live waveform forever. Route it through the same drain path as a normal finish.
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.utteranceQueue.removeAll()
-            self.isSpeakingQueue = false
-            self.handleSpeechQueueDrained()
-        }
+        speaker.stop()
     }
 
     // MARK: - Audio interruptions and route changes
@@ -644,7 +624,8 @@ final class VoiceSessionController: NSObject, AVSpeechSynthesizerDelegate {
         NotificationCenter.default.removeObserver(self)
         if sessionActive {
             audioEngine.stop()
-            synthesizer.stopSpeaking(at: .immediate)
+            speaker.stop()
+            setKeepsScreenAwake(false)
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         }
     }

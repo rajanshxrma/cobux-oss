@@ -13,6 +13,8 @@ struct QuizScopeBuilderView: View {
     let book: Book
     @Bindable var claudeService: ClaudeService
     @Environment(\.modelContext) private var modelContext
+    /// For the "Open Settings" action on the API-key alert (`cobux://settings`).
+    @Environment(\.openURL) private var openURL
 
     @State private var scope: QuizScopeKind = .wholeBook
     @State private var onlyIncompleteChapters = true
@@ -25,6 +27,10 @@ struct QuizScopeBuilderView: View {
     @State private var prepError: String?
     @State private var showCostConfirm = false
     @State private var pendingChaptersToGenerate: [Chapter] = []
+    /// The price quoted for `pendingChaptersToGenerate`, captured with it.
+    /// See the confirmation alert's message for why this is state rather than
+    /// a computed property.
+    @State private var pendingEstimatedCost: Double = 0
     @State private var failedChapters: [Chapter] = []
     @State private var sessionNavigation: AttemptNavigationWrapper?
     @State private var showNoAPIKeyAlert = false
@@ -81,8 +87,32 @@ struct QuizScopeBuilderView: View {
     /// FSRS-based, not the legacy per-highlight `HighlightMemory` -- must match
     /// `DailyReviewService.dueQuestions`'s exact filter, or this screen and
     /// Daily Review show two different due counts for the same book.
+    /// COUNTS, without building the pool.
+    ///
+    /// This was `dueQuestions().count`: a `flatMap` allocating an array of
+    /// every question in the book, then a `filter` allocating a second array,
+    /// to produce one integer -- and `body` asked for that integer five
+    /// separate times (the scope picker's condition, its label, the review-queue
+    /// explainer, the mix-in toggle's condition, and `scopeHasAnyContent`). Two
+    /// whole-book arrays, five times over, every time anything on this screen
+    /// changed. `dueQuestions()` itself is still there, unchanged, for the one
+    /// caller that genuinely needs the questions (`buildPool`).
+    ///
+    /// The predicate is duplicated from `dueQuestions()` rather than shared,
+    /// and that has to stay deliberate: it must match
+    /// `DailyReviewService.dueQuestions`'s filter exactly or this screen and
+    /// Daily Review disagree about the same book. Both copies are right here,
+    /// adjacent, so they cannot drift unnoticed.
     private var dueReviewCount: Int {
-        dueQuestions().count
+        let now = Date.now
+        var count = 0
+        for chapter in book.chapters {
+            for question in chapter.quizQuestions
+            where !question.isSuspended && (question.dueDate.map { $0 <= now } ?? false) {
+                count += 1
+            }
+        }
+        return count
     }
 
     private func dueQuestions() -> [QuizQuestion] {
@@ -91,8 +121,17 @@ struct QuizScopeBuilderView: View {
 
     // MARK: - Exam Countdown
 
+    /// Same treatment as `dueReviewCount`, and read twice per body from the
+    /// exam-countdown section alone.
     private var notIntroducedCount: Int {
-        book.chapters.flatMap(\.quizQuestions).filter { $0.dueDate == nil && !$0.isSuspended }.count
+        var count = 0
+        for chapter in book.chapters {
+            for question in chapter.quizQuestions
+            where question.dueDate == nil && !question.isSuspended {
+                count += 1
+            }
+        }
+        return count
     }
 
     private var examDateBinding: Binding<Date> {
@@ -161,12 +200,26 @@ struct QuizScopeBuilderView: View {
         }
     }
 
+    /// Buckets the book's highlights once, then asks per chapter -- instead of
+    /// `needsGeneration` re-filtering every highlight in the book twice for
+    /// each chapter in scope. Same answer, one pass.
     private var chaptersNeedingGeneration: [Chapter] {
-        chaptersInScope.filter { QuizGenerationService.needsGeneration(chapter: $0, in: book) }
+        let scoped = chaptersInScope
+        guard !scoped.isEmpty else { return [] }
+        let highlightsByChapter = QuizGenerationService.highlightsByChapterID(in: book)
+        return scoped.filter {
+            QuizGenerationService.needsGeneration(
+                chapter: $0,
+                highlights: highlightsByChapter[$0.persistentModelID] ?? [])
+        }
     }
 
-    private var totalEstimatedCost: Double {
-        chaptersNeedingGeneration.reduce(0) { $0 + QuizGenerationService.estimatedCost(for: $1, in: book) }
+    /// Takes the list rather than recomputing it. `totalEstimatedCost` used to
+    /// be a computed property that called `chaptersNeedingGeneration` again,
+    /// so every place that showed a price silently paid for a second full
+    /// generation-need scan beside the one that decided to show it.
+    private func estimatedCost(for chapters: [Chapter]) -> Double {
+        chapters.reduce(0) { $0 + QuizGenerationService.estimatedCost(for: $1, in: book) }
     }
 
     var body: some View {
@@ -196,12 +249,25 @@ struct QuizScopeBuilderView: View {
                 Task { await generateThenStart() }
             }
         } message: {
-            Text("Uses your Anthropic API key to write quiz questions for \(pendingChaptersToGenerate.count) chapter(s) — about $\(String(format: "%.2f", totalEstimatedCost)), a one-time cost. Cached afterward, so re-quizzing this scope is free unless the chapter's highlights change.")
+            // Both numbers come from state captured when the confirmation was
+            // RAISED, not recomputed here. An `.alert` message closure is
+            // rebuilt on every body pass whether or not the alert is showing,
+            // so the old `totalEstimatedCost` here ran a full
+            // generation-need scan of the book behind an invisible alert every
+            // time anything on this screen changed. It is also more correct:
+            // the price he is agreeing to is now literally the price that was
+            // quoted, from the same instant as the chapter count beside it.
+            Text("Uses your Anthropic API key to write quiz questions for \(pendingChaptersToGenerate.count) chapter(s) — about $\(String(format: "%.2f", pendingEstimatedCost)), a one-time cost. Cached afterward, so re-quizzing this scope is free unless the chapter's highlights change.")
         }
         .alert("API Key Required", isPresented: $showNoAPIKeyAlert) {
-            Button("OK", role: .cancel) { }
+            // A route, not a direction. "In Settings" named a screen three
+            // taps away that shares its name with iOS Settings; this opens it.
+            Button("Open Settings") {
+                if let url = URL(string: "cobux://settings") { openURL(url) }
+            }
+            Button("Not Now", role: .cancel) { }
         } message: {
-            Text("Add your Anthropic API key in Settings to generate quiz questions.")
+            Text("Writing quiz questions runs on Claude with your own Anthropic API key. Add it under More → Settings.")
         }
         .navigationDestination(item: $sessionNavigation) { wrapper in
             // Clearing the item unwinds the whole Session -> Results stack in
@@ -214,8 +280,18 @@ struct QuizScopeBuilderView: View {
     }
 
     private var scopeForm: some View {
-        Form {
-            Section("What to quiz") {
+        // THE PER-BODY HOIST. Each of these used to be a computed property
+        // re-evaluated at every reference below: `dueReviewCount` three times
+        // inside this Form plus once more through `scopeHasAnyContent`, and
+        // `chaptersNeedingGeneration` once for the button's label plus a second
+        // time through `totalEstimatedCost` beside it plus twice more inside
+        // `backgroundGenerationSection`. Every one of those was a full walk of
+        // the book's chapters and questions, or of its highlights. They are
+        // read once here and passed down.
+        let dueCount = dueReviewCount
+        let needingGeneration = chaptersNeedingGeneration
+        return Form {
+            CobuxFormSection(title: "What to quiz") {
                 Picker("Scope", selection: Binding(
                     get: { scopeSelectionTag },
                     set: { setScope(tag: $0) }
@@ -223,8 +299,8 @@ struct QuizScopeBuilderView: View {
                     Text("By Chapter").tag("chapter")
                     Text("By Topic").tag("topic")
                     Text("Whole Book").tag("wholeBook")
-                    if dueReviewCount > 0 {
-                        Text("Review Queue (\(dueReviewCount) due)").tag("reviewQueue")
+                    if dueCount > 0 {
+                        Text("Review Queue (\(dueCount) due)").tag("reviewQueue")
                     }
                 }
                 .pickerStyle(.menu)
@@ -243,27 +319,27 @@ struct QuizScopeBuilderView: View {
                 case .wholeBook:
                     Toggle("Only chapters I haven't completed", isOn: $onlyIncompleteChapters)
                 case .reviewQueue:
-                    Text("Pulls only your \(dueReviewCount) already-cached questions due for review right now — no generation needed.")
+                    Text("Pulls only your \(dueCount) already-cached questions due for review right now — no generation needed.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
             }
 
-            Section("How to quiz") {
+            CobuxFormSection(title: "How to quiz") {
                 Picker("Mode", selection: $mode) {
                     Text("Practice").tag(QuizMode.practice)
                     Text("Exam Simulation").tag(QuizMode.examSimulation)
                 }
                 .pickerStyle(.segmented)
 
-                if dueReviewCount > 0, scope != .reviewQueue {
+                if dueCount > 0, scope != .reviewQueue {
                     Toggle("Mix in due reviews", isOn: $mixInDueReviews)
                 }
 
                 Stepper("Up to \(questionCount) questions", value: $questionCount, in: 3...30, step: 1)
             }
 
-            backgroundGenerationSection
+            backgroundGenerationSection(needingGeneration: needingGeneration)
 
             examCountdownSection
 
@@ -290,13 +366,13 @@ struct QuizScopeBuilderView: View {
                             ProgressView()
                             Text("Preparing…")
                         }
-                    } else if !chaptersNeedingGeneration.isEmpty {
-                        Text("Generate & Start (~$\(String(format: "%.2f", totalEstimatedCost)), one-time)")
+                    } else if !needingGeneration.isEmpty {
+                        Text("Generate & Start (~$\(String(format: "%.2f", estimatedCost(for: needingGeneration))), one-time)")
                     } else {
                         Text("Start Quiz")
                     }
                 }
-                .disabled(isPreparing || !scopeHasAnyContent)
+                .disabled(isPreparing || !scopeHasAnyContent(dueCount: dueCount))
             }
         }
     }
@@ -333,31 +409,49 @@ struct QuizScopeBuilderView: View {
         )
     }
 
+    @ViewBuilder
     private var topicChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack {
-                ForEach(allTags, id: \.self) { tag in
-                    let isSelected = selectedTags.contains(tag)
-                    Button {
-                        if isSelected { selectedTags.remove(tag) } else { selectedTags.insert(tag) }
-                    } label: {
-                        Text(tag)
-                            .font(.caption)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(isSelected ? Color.cobuxAccent : Color.secondary.opacity(0.12))
-                            .foregroundStyle(isSelected ? .white : .primary)
-                            .clipShape(Capsule())
+        if allTags.isEmpty {
+            // A blank horizontal strip reads as a control that's broken rather
+            // than one with nothing in it yet. Topics come from the highlights
+            // themselves, so say so instead of showing empty space.
+            Text("No topics in this book yet — the tags you put on a highlight are what show up here.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack {
+                    ForEach(allTags, id: \.self) { tag in
+                        let isSelected = selectedTags.contains(tag)
+                        Button {
+                            if isSelected { selectedTags.remove(tag) } else { selectedTags.insert(tag) }
+                        } label: {
+                            // Quiet chips, selected or not -- the same
+                            // one-saturation correction as `QuizSessionView`'s
+                            // confidence row. A strip of topic chips is a
+                            // multi-select, so ANY number of them can be on at
+                            // once; filling each one solid meant a screen that
+                            // could carry six saturated capsules and a filled
+                            // Start button, all at full strength on near-black.
+                            Text(tag)
+                                .foregroundStyle(isSelected ? Color.cobuxAccent : Color.secondary)
+                                .cobuxQuietChip(tint: isSelected ? Color.cobuxAccent : Color.secondary)
+                                .overlay {
+                                    Capsule().stroke(isSelected ? Color.cobuxAccent.opacity(0.55) : .clear,
+                                                     lineWidth: 1)
+                                }
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }
     }
 
-    private var scopeHasAnyContent: Bool {
+    /// Takes the count its caller already computed, rather than recomputing it.
+    private func scopeHasAnyContent(dueCount: Int) -> Bool {
         switch scope {
-        case .reviewQueue: return dueReviewCount > 0
+        case .reviewQueue: return dueCount > 0
         case .topic: return !selectedTags.isEmpty && !chaptersInScope.isEmpty
         default: return !chaptersInScope.isEmpty
         }
@@ -372,8 +466,11 @@ struct QuizScopeBuilderView: View {
     /// under-covered book is. Only one batch runs at a time app-wide, so
     /// this also surfaces (and lets you check on / cancel) a batch already
     /// in flight, even one started for a different book.
+    /// `needingGeneration` is passed in, not recomputed: this section read
+    /// `chaptersNeedingGeneration` twice, and the caller had already computed
+    /// the identical list for the Start button below.
     @ViewBuilder
-    private var backgroundGenerationSection: some View {
+    private func backgroundGenerationSection(needingGeneration: [Chapter]) -> some View {
         if let pending = BatchGenerationService.pendingBatch {
             Section {
                 HStack {
@@ -418,7 +515,7 @@ struct QuizScopeBuilderView: View {
             } footer: {
                 Text("Submitted via Anthropic's Batch API at roughly half the live cost. Turnaround can range from minutes to about 24 hours — check back here for progress.")
             }
-        } else if chaptersNeedingGeneration.count > 2 {
+        } else if needingGeneration.count > 2 {
             Section {
                 Button {
                     isSubmittingBatch = true
@@ -430,7 +527,7 @@ struct QuizScopeBuilderView: View {
                             Text("Submitting…")
                         }
                     } else {
-                        Text("Generate All \(chaptersNeedingGeneration.count) Chapters in Background (~50% cheaper)")
+                        Text("Generate All \(needingGeneration.count) Chapters in Background (~50% cheaper)")
                     }
                 }
                 .disabled(isSubmittingBatch)
@@ -449,9 +546,12 @@ struct QuizScopeBuilderView: View {
             showNoAPIKeyAlert = true
             return
         }
+        // Once, for both the submission and the message about it -- and so the
+        // sentence can never name a different number than what was submitted.
+        let needing = chaptersNeedingGeneration
         do {
-            try await BatchGenerationService.submit(chapters: chaptersNeedingGeneration, in: book, claudeService: claudeService)
-            batchStatusMessage = "Submitted \(chaptersNeedingGeneration.count) chapter(s) for background generation."
+            try await BatchGenerationService.submit(chapters: needing, in: book, claudeService: claudeService)
+            batchStatusMessage = "Submitted \(needing.count) chapter(s) for background generation."
         } catch {
             batchStatusMessage = error.localizedDescription
         }
@@ -499,12 +599,18 @@ struct QuizScopeBuilderView: View {
     private func beginPreparation() {
         prepError = nil
         failedChapters = []
-        if !chaptersNeedingGeneration.isEmpty {
+        // Computed ONCE here, then used three times, instead of three separate
+        // whole-book scans in a row.
+        let needing = chaptersNeedingGeneration
+        if !needing.isEmpty {
             guard !claudeService.apiKey.isEmpty else {
                 showNoAPIKeyAlert = true
                 return
             }
-            pendingChaptersToGenerate = chaptersNeedingGeneration
+            pendingChaptersToGenerate = needing
+            // Priced at the same instant as the list it prices -- the number
+            // the confirmation alert quotes.
+            pendingEstimatedCost = estimatedCost(for: needing)
             showCostConfirm = true
         } else {
             // Set synchronously, not just inside `startWithoutGenerating()`'s own

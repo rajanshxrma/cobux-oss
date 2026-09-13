@@ -29,6 +29,7 @@ struct PreviousHighlightIntent: AppIntent {
 
     func perform() async throws -> some IntentResult {
         if WidgetHighlightHistory.goBack(scope: scopeKey) {
+            WidgetHighlightHistory.trace("back")
             StreakTracker.recordActivityToday()
             WidgetCenter.shared.reloadTimelines(ofKind: "CobuxHighlightWidget")
         }
@@ -54,6 +55,7 @@ struct NextHighlightIntent: AppIntent {
 
     func perform() async throws -> some IntentResult {
         if WidgetHighlightHistory.goForward(scope: scopeKey) {
+            WidgetHighlightHistory.trace("forward")
             StreakTracker.recordActivityToday()
             WidgetCenter.shared.reloadTimelines(ofKind: "CobuxHighlightWidget")
         }

@@ -41,7 +41,7 @@ enum PersonalWritingAutoImportService {
     /// slow or shows an error about a file the user never asked about.
     @MainActor
     static func importIfNeeded(modelContext: ModelContext) async {
-        guard !SeedingStatus.shared.isSeeding, !StoreHealthStatus.shared.isDegraded else { return }
+        guard !SeedingStatus.shared.isSeeding, !StoreHealthStatus.shared.isDegraded else { return }  // retries: ContentView's onChange(of: seedingStatus.isSeeding)
         guard let documentsURL = await UbiquityContainer.shared.documentsURL() else { return }
 
         let fileURL = documentsURL.appendingPathComponent(filename)

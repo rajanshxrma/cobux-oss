@@ -67,11 +67,12 @@ enum WidgetHighlightPool {
     static func randomHighlight(
         in context: ModelContext,
         bookID: UUID? = nil,
-        excluding excludedID: UUID? = nil
+        excluding excludedID: UUID? = nil,
+        maxLength: Int? = nil
     ) -> Highlight? {
         if let bookID {
-            if let scoped = randomHighlight(in: context, matching: reminderPredicate(bookID: bookID), excluding: excludedID)
-                ?? randomHighlight(in: context, matching: bookPredicate(bookID: bookID), excluding: excludedID) {
+            if let scoped = randomHighlight(in: context, matching: reminderPredicate(bookID: bookID), excluding: excludedID, maxLength: maxLength)
+                ?? randomHighlight(in: context, matching: bookPredicate(bookID: bookID), excluding: excludedID, maxLength: maxLength) {
                 return scoped
             }
         } else {
@@ -81,13 +82,13 @@ enum WidgetHighlightPool {
             // is what made "books don't change much" a real bug, not a
             // perception issue.
             if let pickedBookID = randomBookID(in: context, excludingBookID: excludedBookID(for: excludedID, in: context)),
-               let picked = randomHighlight(in: context, matching: reminderPredicate(bookID: pickedBookID), excluding: excludedID)
-                ?? randomHighlight(in: context, matching: bookPredicate(bookID: pickedBookID), excluding: excludedID) {
+               let picked = randomHighlight(in: context, matching: reminderPredicate(bookID: pickedBookID), excluding: excludedID, maxLength: maxLength)
+                ?? randomHighlight(in: context, matching: bookPredicate(bookID: pickedBookID), excluding: excludedID, maxLength: maxLength) {
                 return picked
             }
         }
-        return randomHighlight(in: context, matching: reminderPredicate, excluding: excludedID)
-            ?? randomHighlight(in: context, matching: nil, excluding: excludedID)
+        return randomHighlight(in: context, matching: reminderPredicate, excluding: excludedID, maxLength: maxLength)
+            ?? randomHighlight(in: context, matching: nil, excluding: excludedID, maxLength: maxLength)
     }
 
     /// Picks a book uniformly at random from among books that currently have
@@ -162,7 +163,8 @@ enum WidgetHighlightPool {
     private static func randomHighlight(
         in context: ModelContext,
         matching predicate: Predicate<Highlight>?,
-        excluding excludedID: UUID?
+        excluding excludedID: UUID?,
+        maxLength: Int? = nil
     ) -> Highlight? {
         let countDescriptor = FetchDescriptor<Highlight>(predicate: predicate)
         guard let total = try? context.fetchCount(countDescriptor), total > 0 else { return nil }
@@ -192,6 +194,21 @@ enum WidgetHighlightPool {
             // biology books turned off for my app, but I still see their
             // highlights in my iOS widget."
             guard !BookSourceSharing.excludedBookIDs().contains(candidateBook.id) else { continue }
+            // A line he hid in Flow ("Don't show this again", 58) stays hidden
+            // here too. The widget target does not compile `FlowQueueBuilder`,
+            // where `FlowSuppression` lives, so the key is read by value; the
+            // two must stay identical.
+            let hiddenInFlow = CobuxSchema.groupDefaults.stringArray(forKey: "cobux.flow.suppressedHighlights") ?? []
+            guard !hiddenInFlow.contains(candidate.id.uuidString) else { continue }
+
+            // Too long to render on this widget family. Kept as the fallback
+            // rather than rejected outright, so a library of nothing but long
+            // highlights still shows something instead of going blank -- the
+            // same soft-preference shape the rest of this function uses.
+            if let maxLength, candidate.text.count > maxLength {
+                if fallback == nil { fallback = candidate }
+                continue
+            }
             fallback = fallback ?? candidate
             if candidate.id != excludedID { return candidate }
         }

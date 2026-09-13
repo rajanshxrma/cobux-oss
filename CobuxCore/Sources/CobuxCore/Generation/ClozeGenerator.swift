@@ -141,7 +141,16 @@ public enum ClozeGenerator {
             best[key] = c
         }
 
-        return best.values.sorted { $0.score > $1.score }
+        // Score first, then span as the tie-break. `Dictionary.values` has no
+        // stable order and the old sort compared only score, so equal-scored
+        // candidates shuffled between RUNS -- `prefix(maxCardsPerHighlight)`
+        // then sometimes kept one and sometimes the other, which surfaced as
+        // a coin-flip test failure at the ship gate. A quiz deck that deals
+        // differently on identical input is the same bug wearing a nicer
+        // name; generation is now a pure function of its inputs.
+        return best.values.sorted {
+            $0.score != $1.score ? $0.score > $1.score : $0.span < $1.span
+        }
     }
 
     static func countOccurrences(of span: String, in text: String) -> Int {

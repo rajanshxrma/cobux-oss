@@ -1,11 +1,10 @@
 import Foundation
 import LocalAuthentication
 
-/// Gates the Journal tab behind Face ID/Touch ID (falling back to the device
-/// passcode) -- the same protection Apple's own Journal app offers, and
-/// arguably the one thing this app was missing most: journal entries are the
-/// single most personal content type Cobux can hold, and nothing else in the
-/// app is locked at all.
+/// Gates the Journal tab behind Face ID/Touch ID -- biometrics ONLY, no
+/// passcode fallback -- the one thing this app was missing most: journal
+/// entries are the single most personal content type Cobux can hold, and
+/// nothing else in the app is locked at all.
 ///
 /// Same shape as `SeedingStatus`/`StoreHealthStatus`/`UpdateAvailabilityStatus`
 /// -- a `@MainActor @Observable` singleton a view reads directly. `ContentView`
@@ -26,36 +25,83 @@ final class JournalLockStatus {
     /// `personalWritingContextEnabled`/`useRealNamesInLifeExamples`.
     static let enabledKey = "journalLockEnabled"
 
+    /// Chat's "use my journal in replies" switch (`SettingsView`/`ChatView`
+    /// read it through `@AppStorage` under this same string).
+    static let contextEnabledKey = "personalWritingContextEnabled" // lint:unused-ok the Chat lane adopts this constant in ChatView/SettingsView in place of its literal
+    /// Set the moment he turns that switch OFF himself, and never cleared by
+    /// this class. See `grantChatContextIfNeverRefused()`.
+    static let contextExplicitlyOffKey = "personalWritingContextExplicitlyOff"
+
     var isUnlocked = false
 
     func relock() {
         isUnlocked = false
     }
 
-    /// `.deviceOwnerAuthentication`, not `.deviceOwnerAuthenticationWithBiometrics`
-    /// -- the passcode fallback matters specifically here because Face ID can
-    /// fail for reasons that have nothing to do with who's holding the phone
-    /// (poor lighting, a mask, an obstructed camera), and a Face-ID-only gate
-    /// on the one screen holding someone's actual journal would turn a bad
-    /// lighting moment into a real lockout with no way through.
+    /// `.deviceOwnerAuthenticationWithBiometrics`, and no fallback button.
+    ///
+    /// This used to be `.deviceOwnerAuthentication`, with a paragraph here
+    /// arguing FOR the passcode: Face ID fails for reasons that have nothing
+    /// to do with who is holding the phone, so a biometrics-only gate on his
+    /// actual journal could turn bad lighting into a lockout. Rajan overruled
+    /// it on 2026-09-12: "I want Journal to only use Face ID. I don't want it
+    /// to use the typed passcode ... if it doesn't use Face ID just shows
+    /// error whatever ... I don't want Cobux to show specific error or
+    /// something, but I just don't want the passcode as the second option."
+    /// A typed passcode is the thing someone standing next to him can watch;
+    /// a face is not. So: Face ID, or the gate stays shut, quietly.
+    ///
+    /// `localizedFallbackTitle = ""` is what removes the "Enter Password"
+    /// button from the system sheet after a failed match -- the policy alone
+    /// still offers it.
     @discardableResult
     func authenticate() async -> Bool {
         let context = LAContext()
+        context.localizedFallbackTitle = ""
         var error: NSError?
-        // No passcode configured on the device at all means there's nothing
-        // this policy can actually enforce -- `canEvaluatePolicy` returns
-        // false here, and the honest response is "there's nothing to unlock
-        // this behind," not a lockout on a device that was never going to
-        // have this protection regardless of what Cobux does.
-        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
-            isUnlocked = true
-            return true
+        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else {
+            // A device with NO biometry -- none enrolled, no sensor, or no
+            // passcode set (biometrics require one) -- has nothing this policy
+            // can enforce, and the honest response is "there's nothing to
+            // unlock this behind," not a lockout on a device that was never
+            // going to have this protection regardless of what Cobux does.
+            //
+            // A biometry LOCKOUT (too many failed faces) is the opposite case:
+            // the sensor exists and is refusing, and the journal stays shut
+            // until the device itself is unlocked again. Any other evaluation
+            // failure stays locked too, silently -- his words, "just shows
+            // error whatever", and the gate's copy is already neutral.
+            switch (error as? LAError)?.code {
+            case .biometryNotEnrolled?, .biometryNotAvailable?, .passcodeNotSet?:
+                // No grant here: the chat-context grant below is keyed to a
+                // real Face ID success, and this branch is the absence of one.
+                isUnlocked = true
+                return true
+            default:
+                isUnlocked = false
+                return false
+            }
         }
         let success = (try? await context.evaluatePolicy(
-            .deviceOwnerAuthentication,
+            .deviceOwnerAuthenticationWithBiometrics,
             localizedReason: "Unlock your journal"
         )) ?? false
         isUnlocked = success
+        if success { grantChatContextIfNeverRefused() }
         return success
+    }
+
+    /// The first successful journal Face ID turns chat's journal context ON,
+    /// persistently. Rajan's model, 2026-09-12: unlocking the journal IS the
+    /// consent -- he has just proved it is him and opened his own writing, so
+    /// chat may read it too. But an explicit Turn off in chat is remembered
+    /// (`contextExplicitlyOffKey`, written by the Chat surface), and a later
+    /// unlock must never undo a choice he made on purpose. So this only ever
+    /// flips the switch on, and only while he has never flipped it off.
+    private func grantChatContextIfNeverRefused() {
+        let defaults = UserDefaults.standard
+        if !defaults.bool(forKey: Self.contextExplicitlyOffKey) {
+            defaults.set(true, forKey: Self.contextEnabledKey)
+        }
     }
 }

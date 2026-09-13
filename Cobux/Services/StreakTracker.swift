@@ -17,6 +17,12 @@ enum StreakTracker {
     /// Shared App Group suite (not `.standard`) so the widget extension --
     /// a separate sandboxed process -- can read the same streak the main
     /// app writes, for the Lock Screen circular widget.
+    // NOT `CobuxSchema.groupDefaults`, deliberately. This file is compiled into
+    // the CobuxWatch target, which does not carry `CobuxSchema.swift` (that one
+    // imports SwiftData and names every model type -- none of which the watch
+    // app compiles). Routing this through the constant would drag the whole
+    // schema into watchOS to save one string. The literal stays; see
+    // `CobuxSchema.groupDefaults` for the one that matters.
     private static let defaults = UserDefaults(suiteName: "group.com.rajansharma.Cobux") ?? .standard
     /// `internal`, not `private` — `CobuxWatch`'s `WCSession` receiver writes into these exact
     /// keys (in its own, watch-local copy of this same App Group suite) so this type's own

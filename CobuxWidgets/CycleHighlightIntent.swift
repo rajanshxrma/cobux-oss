@@ -3,10 +3,19 @@ import WidgetKit
 import SwiftData
 import Foundation
 
-/// Backs the widget's small shuffle button (`CobuxWidgetEntryView`) -- lets a tap
-/// swap the displayed highlight in place, without leaving the home screen, while
-/// the rest of the widget's tap area keeps opening the app to the shown book via
-/// `.widgetURL` exactly as before. Pushes the newly-picked highlight onto this
+/// Backs every tap on the highlight widget's home families
+/// (`CobuxWidgetEntryView`) -- the quote, the citation, the accent bar, the
+/// opening-quote glyph, the divider, and every inset and gap around them, each
+/// its own adjacent, non-overlapping cycle button -- swapping the displayed
+/// highlight in place without leaving the home screen. There is deliberately no
+/// full-frame catch-all behind the content: builds 52 and 53 both shipped one
+/// as a `.background` Button labelled `Color.clear`, and he reported the tap
+/// dead on both. See `CobuxWidgetEntryView.body` for why, and for what replaced
+/// it. Only the arrow in `controlCluster` and the
+/// Share link open the app; the home families deliberately set no `.widgetURL`,
+/// since that is what turns every pixel no Button covers into a launch. (The
+/// lock-screen accessory families do keep `.widgetURL`: too small for two
+/// targets. That is a ruling, not a leftover.) Pushes the newly-picked highlight onto this
 /// widget's `WidgetHighlightHistory` lane (truncating any forward tail,
 /// browser-style, and arming the one-shot override `HighlightProvider` honors on
 /// its next timeline build), then asks WidgetKit to reload immediately so the
@@ -50,6 +59,7 @@ struct CycleHighlightIntent: AppIntent {
     @Parameter(title: "Book")
     var scopeKey: String?
 
+
     init() {}
 
     init(scopeKey: String?) {
@@ -57,28 +67,33 @@ struct CycleHighlightIntent: AppIntent {
     }
 
     func perform() async throws -> some IntentResult {
-        guard let container = CobuxSchema.makeAppGroupContainer() else { return .result() }
+        WidgetHighlightHistory.trace("started")
+        // Fast path (58): the provider pre-drew the next quote when it built
+        // what is showing. Moving the pointer is all a tap has to do.
+        if let next = WidgetHighlightHistory.takeNext(scope: scopeKey),
+           next != WidgetHighlightHistory.currentID(scope: scopeKey) {
+            WidgetHighlightHistory.push(next, scope: scopeKey)
+            StreakTracker.recordActivityToday()
+            WidgetHighlightHistory.trace("pre-drawn")
+            WidgetCenter.shared.reloadTimelines(ofKind: "CobuxHighlightWidget")
+            return .result()
+        }
+        guard let container = CobuxSchema.makeAppGroupContainer() else {
+            WidgetHighlightHistory.trace("no container")
+            return .result()
+        }
         let context = ModelContext(container)
-
-        // Shares `WidgetHighlightPool` with `HighlightProvider` so the two
-        // can't diverge on which highlights are eligible. The pool samples
-        // across the whole reminder-flagged set (falling back to the whole
-        // library) with a count-then-random-offset fetch, narrowed to the
-        // configured book when there is one, and excludes the currently-shown
-        // highlight so two consecutive taps can't land on the identical quote.
         guard let picked = WidgetHighlightPool.randomHighlight(
             in: context,
             bookID: scopeKey.flatMap(UUID.init(uuidString:)),
             excluding: WidgetHighlightHistory.currentID(scope: scopeKey)
-        ) else { return .result() }
+        ) else {
+            WidgetHighlightHistory.trace("no pick")
+            return .result()
+        }
         WidgetHighlightHistory.push(picked.id, scope: scopeKey)
         StreakTracker.recordActivityToday()
-
-        // Kind-wide is the only granularity WidgetKit offers, so this rebuilds
-        // every Book Wisdom widget, not just the tapped one. The other widgets
-        // survive it unchanged: their own lanes have no override armed, and
-        // their rotation clocks haven't run out, so they re-show what they were
-        // already showing (`HighlightProvider.resolveHighlight`, case 3).
+        WidgetHighlightHistory.trace("picked from store")
         WidgetCenter.shared.reloadTimelines(ofKind: "CobuxHighlightWidget")
         return .result()
     }

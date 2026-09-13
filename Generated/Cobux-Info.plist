@@ -35,10 +35,20 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSContactsUsageDescription</key>
+	<string>Cobux can add itself as a contact so a chat with yourself is named Cobux instead of your own name. It only ever writes that one contact, and never reads your address book.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Cobux uses Face ID to keep your journal entries private.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Cobux can show your mindful minutes and last night's sleep beside your journal entries, so you can see how your writing tracks with how you actually felt. Read-only, stays on your device, and never leaves the app.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Cobux never writes to Health. It only reads your mindful minutes and sleep to show beside your journal entries.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Cobux uses your approximate location to note the temperature and, when you're somewhere unusual, the city beside a journal entry's date. City-level only -- Cobux never stores your coordinates and never reads location in the background.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Cobux uses your microphone in Voice Mode and Spoken Quiz so you can talk to your book wisdom, and quiz yourself, hands-free.</string>
+	<string>Cobux uses your microphone in Voice Mode and Spoken Quiz so you can talk to your book wisdom hands-free.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Cobux uses speech recognition in Voice Mode and Spoken Quiz to turn what you say into a question for Cobux AI, or a graded quiz answer.</string>
+	<string>Cobux uses speech recognition to turn what you say into a question for Cobux AI or a graded quiz answer.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

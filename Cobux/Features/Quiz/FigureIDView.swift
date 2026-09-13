@@ -3,10 +3,12 @@ import CobuxCore
 
 /// "Finally instantiates the dormant Figure model" -- the original Phase 4 plan's own phrase.
 /// Guarded to hide itself from the mode picker when zero `Figure` rows exist (see
-/// `QuizHomeView`'s `!figures.isEmpty` check), exactly as the plan specified, since image
-/// extraction is hard-blocked on Rajan's own Anthropic API key. This is the code path itself,
-/// ready the moment that unblocks -- not gated on QuizQuestion/QuizAttempt (a figure isn't a
-/// generated question), graded the same free-recall way via the embedding grader.
+/// `QuizHomeView`'s `!figures.isEmpty` check), exactly as the plan specified. That guard now
+/// passes in the shipping app: this used to say extraction was "hard-blocked on Rajan's own
+/// Anthropic API key", which stopped being true once 1,597 captioned figures and their
+/// manifest landed under Resources/Figures and SeedRunner began seeding them. Not gated on
+/// QuizQuestion/QuizAttempt (a figure isn't a generated question), and graded the same
+/// free-recall way via the embedding grader.
 struct FigureIDView: View {
     let figures: [Figure]
     let onDone: () -> Void
@@ -18,7 +20,7 @@ struct FigureIDView: View {
     @State private var isCorrect = false
     @State private var correctCount = 0
     @State private var currentImage: UIImage?
-    /// `FigureImageLoader.image(for:)` is a genuine disk-read + JPEG-decode `Task.detached`,
+    /// `FigureImageLoader.image(fileName:)` is a genuine disk-read + JPEG-decode `Task.detached`,
     /// not instant -- without this, `currentImage == nil` was treated as "load failed" for
     /// the entire time the very first decode of each figure was still in flight, so every
     /// single figure flashed the alarming "Image unavailable" empty state before its real
@@ -58,7 +60,7 @@ struct FigureIDView: View {
                     .cobuxCard()
                     .task(id: figure.id) {
                         isLoadingImage = true
-                        currentImage = await FigureImageLoader.image(for: figure)
+                        currentImage = await FigureImageLoader.image(fileName: figure.fileName)
                         isLoadingImage = false
                     }
 
@@ -79,13 +81,14 @@ struct FigureIDView: View {
                     Button {
                         if hasSubmitted { advance() } else { submit(figure: figure) }
                     } label: {
+                        // The shared primary-button grammar, same correction as
+                        // `QuizSessionView`: type through `Color.cobuxOnTint`
+                        // (white measured 3.2:1 on the dark-mode accent), and a
+                        // real surface token for the disabled fill instead of
+                        // `Color.secondary.opacity(0.3)`.
                         Text(hasSubmitted ? (currentIndex == figures.count - 1 ? "Finish" : "Next") : "Submit")
-                            .fontWeight(.semibold)
                             .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(hasSubmitted || !typedAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.cobuxAccent : Color.secondary.opacity(0.3))
-                            .foregroundStyle(.white)
-                            .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.card))
+                            .cobuxPrimaryPill(tint: hasSubmitted || !typedAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.cobuxAccent : Color.cobuxSurface2)
                     }
                     .disabled(!hasSubmitted && typedAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .padding(.horizontal)

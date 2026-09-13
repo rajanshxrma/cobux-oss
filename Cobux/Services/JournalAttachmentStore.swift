@@ -26,8 +26,22 @@ enum JournalAttachmentStore {
         directory.appendingPathComponent(id.uuidString + ".jpg")
     }
 
+    /// The dimension is IN THE FILENAME on purpose. A thumbnail is written once
+    /// and reused forever, so raising `thumbnailMaxPixelDimension` would
+    /// otherwise improve only photos imported after the change and leave every
+    /// existing one soft — the fix would look like it had not worked.
+    /// Encoding the size means a new constant simply misses the old file and
+    /// regenerates at the new one.
     private static func thumbnailFileURL(for id: UUID) -> URL {
-        directory.appendingPathComponent(id.uuidString + "-thumb.jpg")
+        directory.appendingPathComponent(
+            "\(id.uuidString)-thumb\(Int(thumbnailMaxPixelDimension)).jpg")
+    }
+
+    /// Voice notes live beside the photos deliberately: this directory is
+    /// already on the automatic backup/restore path, so a recording is covered
+    /// by the same guarantees as an image without any new plumbing.
+    static func audioURL(for id: UUID) -> URL {
+        directory.appendingPathComponent(id.uuidString + ".m4a")
     }
 
     /// Same file `localFileURL(for:)` resolves, exposed internally for
@@ -65,8 +79,130 @@ enum JournalAttachmentStore {
     /// -- reads the file directly rather than round-tripping through
     /// `image(for:)` + re-encoding, which would silently apply a second lossy
     /// JPEG compression pass on every single backup taken.
+    /// Bytes for an attachment, whatever KIND it is.
+    ///
+    /// This used to read `<id>.jpg` and nothing else, so a voice note was
+    /// silently skipped by `BackupService` -- present on the device, absent from
+    /// every backup, and therefore gone on restore or a new phone. Resolving by
+    /// the id rather than by a hardcoded extension means a new attachment type
+    /// is covered the day it is added instead of the day someone notices.
     static func data(for id: UUID) -> Data? {
-        try? Data(contentsOf: localFileURL(for: id))
+        guard let url = existingFileURL(for: id) else { return nil }
+        return try? Data(contentsOf: url)
+    }
+
+    /// Every attachment container Cobux writes. Declared ONCE and read by the
+    /// store, the automatic backup and the restore: the voice-note data-loss bug
+    /// existed in three separate places precisely because each of them had its
+    /// own hardcoded "jpg", and fixing one left the others wrong.
+    static let knownExtensions = ["jpg", "m4a"]
+
+    // MARK: - Resolved-kind cache
+
+    /// Which extension an id's file was last FOUND under.
+    ///
+    /// `existingFileURL` is a `FileManager.fileExists` loop, and the journal
+    /// feed asks it constantly: `JournalEntryCard` calls `isVoiceNote` for
+    /// every attachment twice (once to find a photo, once to ask whether any
+    /// voice note exists), `JournalListView` does the same again for its own
+    /// row, and all of it runs inside a `ForEach`, per card, per body
+    /// evaluation. Four to nine syscalls per card per pass, for an answer that
+    /// changes only when a file is written, moved or deleted.
+    ///
+    /// **POSITIVE RESULTS ONLY.** A miss is never remembered, and that
+    /// asymmetry is the entire safety argument. A cached "it is a .m4a" can
+    /// only become wrong if that file is deleted or moved, and after this
+    /// change every path that deletes or moves one goes through this type and
+    /// invalidates (`save`, `restore`, `delete`, `deleteAudio`, `moveAudio`).
+    /// A cached "there is nothing here" could become wrong the moment a file
+    /// ARRIVES -- which is exactly what `AutoRestoreService
+    /// .downloadPendingAttachments` does, on a background pass, for rows it
+    /// found empty -- and a stale negative would render a real voice note as a
+    /// broken photo forever. So a missing file simply costs what it always
+    /// cost. The expensive case is the common one (a photo or a note that is
+    /// actually there); the uncached case is the rare one.
+    ///
+    /// The lock is real, not decorative: `existingFileURL` is called from view
+    /// bodies on the main actor AND from `AutoBackupService`/
+    /// `JournalAutoExportService`/`AutoRestoreService`, which are not
+    /// guaranteed to be.
+    private nonisolated(unsafe) static var resolvedExtensions: [UUID: String] = [:]
+    private static let cacheLock = NSLock()
+
+    private static func cachedExtension(for id: UUID) -> String? {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        return resolvedExtensions[id]
+    }
+
+    private static func cache(_ ext: String, for id: UUID) {
+        cacheLock.lock()
+        resolvedExtensions[id] = ext
+        cacheLock.unlock()
+    }
+
+    /// Called by EVERY path in this file that writes, moves or removes a file.
+    /// Adding a new one without calling this is the way a voice note goes
+    /// silently unplayable, so the mutating functions below are the only
+    /// sanctioned way to touch this directory from outside.
+    private static func invalidate(_ id: UUID) {
+        cacheLock.lock()
+        resolvedExtensions.removeValue(forKey: id)
+        cacheLock.unlock()
+    }
+
+    /// The file actually on disk for this id, image or audio.
+    static func existingFileURL(for id: UUID) -> URL? {
+        if let ext = cachedExtension(for: id) {
+            return directory.appendingPathComponent(id.uuidString + "." + ext)
+        }
+        for ext in knownExtensions {
+            let url = directory.appendingPathComponent(id.uuidString + "." + ext)
+            if FileManager.default.fileExists(atPath: url.path) {
+                cache(ext, for: id)
+                return url
+            }
+        }
+        // Deliberately NOT cached -- see `resolvedExtensions`.
+        return nil
+    }
+
+    /// Whether this attachment is a voice note rather than a photo -- the view
+    /// layer needs to know which control to render for it.
+    static func isVoiceNote(id: UUID) -> Bool {
+        existingFileURL(for: id)?.pathExtension == "m4a"
+    }
+
+    /// Removes a voice note's file, cache included.
+    ///
+    /// Exists so `JournalEntryComposeView.cancelPendingVoiceNotes` and
+    /// `JournalVoiceRecorder.cancel` stop reaching past this type with a bare
+    /// `FileManager.removeItem`. They were the reason a cache could not safely
+    /// exist here at all; routing them through the store is what makes it safe,
+    /// not a comment asking future callers to remember.
+    static func deleteAudio(id: UUID) {
+        try? FileManager.default.removeItem(at: audioURL(for: id))
+        invalidate(id)
+    }
+
+    /// Moves a recording from its staging id onto the attachment row's real id.
+    ///
+    /// The compose view did this with `FileManager.moveItem` directly. Both
+    /// ids are invalidated: the source's file is gone, and the destination's
+    /// has just appeared.
+    @discardableResult
+    static func moveAudio(from stagingID: UUID, to attachmentID: UUID) -> Bool {
+        defer {
+            invalidate(stagingID)
+            invalidate(attachmentID)
+        }
+        do {
+            try FileManager.default.moveItem(at: audioURL(for: stagingID),
+                                             to: audioURL(for: attachmentID))
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// Writes bytes to disk exactly as given, with no downsample/re-encode --
@@ -77,10 +213,36 @@ enum JournalAttachmentStore {
     /// re-JPEG-encode data that's already processed, for no benefit and a
     /// second generation of lossy compression.
     static func restore(_ data: Data, id: UUID) {
-        try? data.write(to: localFileURL(for: id))
+        // Sniff the bytes rather than assuming JPEG. This wrote everything to
+        // `<id>.jpg` unconditionally, so a restored voice note came back with a
+        // .jpg extension and was unplayable -- the backup would have looked
+        // complete while quietly destroying the recording on the way back in.
+        try? data.write(to: isM4A(data) ? audioURL(for: id) : localFileURL(for: id))
+        // A file has just appeared, and this is the one path that can write
+        // EITHER kind for the same id -- so a previously resolved extension
+        // must not survive it.
+        invalidate(id)
     }
 
-    private static let thumbnailMaxPixelDimension: CGFloat = 300
+    /// MPEG-4 audio carries an `ftyp` box at byte offset 4; JPEG starts FF D8.
+    /// Checking the container rather than trusting a filename means restore
+    /// stays correct even for a backup written before voice notes existed.
+    private static func isM4A(_ data: Data) -> Bool {
+        guard data.count > 8 else { return false }
+        return data[4..<8].elementsEqual([0x66, 0x74, 0x79, 0x70])
+    }
+
+    /// 900, not 300.
+    ///
+    /// A journal card spans nearly the full screen width — roughly 350pt, which
+    /// is ~1,050 physical pixels on a 3x phone. A 300px thumbnail stretched
+    /// across that is being magnified more than threefold, which is exactly the
+    /// "really compressed" look Rajan reported: soft in the card, perfect when
+    /// tapped, because the detail view reads the full image instead.
+    ///
+    /// 900 is still a thumbnail — a fraction of the 1600px stored original —
+    /// but it is sharp at card width on every current iPhone.
+    private static let thumbnailMaxPixelDimension: CGFloat = 900
 
     /// Downsamples then writes as JPEG. `Data`-based rather than URL-based --
     /// `PhotosPicker`/`Transferable` delivers raw `Data`, not a file URL, so
@@ -94,6 +256,7 @@ enum JournalAttachmentStore {
               let jpegData = downsampled.jpegData(compressionQuality: 0.85) else { return false }
         do {
             try jpegData.write(to: localFileURL(for: id))
+            invalidate(id)
         } catch {
             return false
         }
@@ -121,6 +284,27 @@ enum JournalAttachmentStore {
     static func delete(id: UUID) {
         try? FileManager.default.removeItem(at: localFileURL(for: id))
         try? FileManager.default.removeItem(at: thumbnailFileURL(for: id))
+        // Voice notes too -- deleting an entry used to leave its recording
+        // orphaned on disk forever, the same class of leak this function's own
+        // doc comment already warns about for images.
+        try? FileManager.default.removeItem(at: audioURL(for: id))
+        invalidate(id)
+    }
+
+    /// A small DISPLAY image straight from picker bytes, for the composer's
+    /// 72pt strip while a photo is still pending -- the one ImageIO path this
+    /// file already trusts for its stored tiers, exposed so `PhotoLoader` can
+    /// build previews without a second implementation.
+    ///
+    /// Exists because the composer used to hold `UIImage(data:)` of the RAW
+    /// picker bytes for every pending photo: a 48MP HEIC decodes to ~190 MB,
+    /// so ten picks was on the order of 1.9 GB of full-resolution bitmaps,
+    /// decoded on the main thread and retained until save, to draw ten
+    /// 72×72 tiles. `CGImageSourceCreateThumbnailAtIndex` never inflates the
+    /// full bitmap -- it decodes straight to the target size. Safe off-main:
+    /// no shared state, pure function of its input.
+    static func preview(from data: Data, maxPixelDimension: CGFloat) -> UIImage? {
+        downsampled(from: data, maxPixelDimension: maxPixelDimension)
     }
 
     private static func downsampled(from data: Data, maxPixelDimension: CGFloat) -> UIImage? {

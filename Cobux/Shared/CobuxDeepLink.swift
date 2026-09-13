@@ -18,9 +18,55 @@ enum CobuxDeepLink {
         URL(string: "cobux://book/\(bookID.uuidString)")!
     }
 
+    /// A book thread with the composer pre-filled.
+    ///
+    /// The existing prefill path only works by fetching a `Highlight` by id,
+    /// so anything that is not a highlight -- a chapter's key lesson, a quiz
+    /// question -- had no way to carry its text into chat. Those cards opened
+    /// an empty book thread instead, which looks like the button did nothing
+    /// useful. Percent-encoded as a query item so the existing
+    /// `/book/<uuid>` path parsing is untouched.
+    static func bookURL(bookID: UUID, prefill: String) -> URL {
+        var components = URLComponents(string: "cobux://book/\(bookID.uuidString)")!
+        components.queryItems = [URLQueryItem(name: "prefill", value: prefill)]
+        return components.url ?? bookURL(bookID: bookID)
+    }
+
+    /// Share a specific highlight.
+    ///
+    /// The widget cannot present a share sheet itself: a WidgetKit extension
+    /// only hosts `Button(intent:)`, `Link` and `.widgetURL`, and `ShareLink`
+    /// inside one renders perfectly and does nothing at all. So the widget
+    /// links here, the app opens, and the app does the sharing.
+    static func shareHighlightURL(bookID: UUID, highlightID: UUID) -> URL {
+        URL(string: "cobux://share/\(bookID.uuidString)/\(highlightID.uuidString)")!
+    }
+
+    /// The Quiz tab. Flow's "worth revisiting" card tells the user a Weak
+    /// Spots session would hit the topic directly, then offered no way to get
+    /// there -- a card whose whole content is an instruction to navigate
+    /// should carry the navigation.
+    static func quizURL() -> URL {
+        URL(string: "cobux://quiz")!
+    }
+
     /// Journal. `newEntry: true` opens the compose sheet on arrival rather
     /// than the list -- what the Journal widget's tap uses, so writing is one
     /// tap from the home screen instead of app → More → Journal → compose.
+    /// Takes a passage of his own writing into the journal chat thread.
+    ///
+    /// Its own route rather than reusing the book prefill: `ContentView` parses
+    /// `?prefill=` only under `host == "book"`, so a journal passage sent that
+    /// way would silently lose its text and open an empty thread.
+    static func journalChatURL(prefill: String) -> URL {
+        var components = URLComponents()
+        components.scheme = "cobux"
+        components.host = "journal"
+        components.path = "/chat"
+        components.queryItems = [URLQueryItem(name: "prefill", value: prefill)]
+        return components.url ?? URL(string: "cobux://journal")!
+    }
+
     static func journalURL(newEntry: Bool = false) -> URL {
         URL(string: newEntry ? "cobux://journal/new" : "cobux://journal")!
     }

@@ -82,6 +82,12 @@ struct UnsortedHighlightsView: View {
             sortBy: [SortDescriptor(\.dateAdded, order: .reverse)]
         )
         descriptor.fetchLimit = 500
+        // The row shows `text`; filing writes `book`, deleting needs the row.
+        // Neither reads `embeddingData`, so its 2 KB per row (up to ~1 MB for
+        // a full page of captures) is left out of this main-actor fetch.
+        // SwiftData faults the column in lazily if anything later asks -- the
+        // backfill that embeds a capture runs its own fetch, not this one.
+        descriptor.propertiesToFetch = [\.id, \.text, \.dateAdded]
         unsortedHighlights = (try? modelContext.fetch(descriptor)) ?? []
     }
 

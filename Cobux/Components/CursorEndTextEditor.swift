@@ -106,16 +106,18 @@ struct CursorEndTextEditor: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             parent.text = textView.text
-            // Keep the line you're typing on visible. This used to scroll on
-            // EVERY keystroke from an async hop; each call forced a layout
-            // pass that raced other scrolling machinery, which read as the
-            // reported shake ("when it gets to the bottom of textbox it
-            // shakes and is weird with the iPhone keyboard open").
-            //
-            // Checking first means the common case -- typing on a line that is
-            // already on screen -- does no scrolling and no extra layout at
-            // all, so there is nothing for keyboard avoidance to fight.
-            CursorEndTextEditor.scrollCaretIntoViewIfNeeded(textView)
+            // NO caret correction here -- and that absence is the fifth fix,
+            // the one that finally follows the house's own solved-problems
+            // rule. UIKit already scrolls the caret into view while typing
+            // when the insets are honest (CaretTrackingTextView owns them).
+            // Our hand-rolled checker reserved a one-line "breathing band" at
+            // the bottom, which made the LAST line permanently count as
+            // off-screen once the view was scrolled to its end -- so it fired
+            // scrollRangeToVisible on every keystroke against UIKit's own
+            // positioning, and the two disagreed by exactly one band, forever.
+            // That disagreement was the up-and-down, reported four times,
+            // always "at the bottom, above the keyboard edge". The system
+            // solution existed all along; this line now simply lets it run.
         }
     }
 
@@ -126,28 +128,126 @@ struct CursorEndTextEditor: UIViewRepresentable {
         guard let selectedRange = textView.selectedTextRange else { return }
         let caretRect = textView.caretRect(for: selectedRange.end)
         guard !caretRect.isNull, caretRect.origin.y.isFinite, caretRect.height.isFinite else { return }
-        let visible = textView.bounds.inset(by: textView.adjustedContentInset)
-            .offsetBy(dx: textView.contentOffset.x, dy: textView.contentOffset.y)
+        let visible = visibleContentRect(bounds: textView.bounds,
+                                         inset: textView.adjustedContentInset,
+                                         lineHeight: caretRect.height)
         guard !visible.contains(caretRect) else { return }
+        // The guards above verify the caret has actually left the visible
+        // box before scrolling; the common typing case returns early and
+        // never fights keyboard avoidance.
+        // lint-ok: keystroke-scroll -- guarded, caret verified offscreen
         textView.scrollRangeToVisible(textView.selectedRange)
+    }
+
+    /// The on-screen region, in the same coordinate space `caretRect(for:)`
+    /// returns. Pure arithmetic so it can be reasoned about (and tested)
+    /// without instantiating a text view.
+    ///
+    /// On any scroll view -- `UITextView` included -- `bounds.origin` IS
+    /// `contentOffset`, so insetting the bounds already yields a rect in
+    /// content coordinates. The previous version *additionally* offset by
+    /// `contentOffset`, double-counting the scroll position: the moment the
+    /// entry grew long enough to scroll at all, the computed rect sat a whole
+    /// offset too far down the document, the visibly on-screen caret always
+    /// tested as outside it, and `scrollRangeToVisible` fired on EVERY
+    /// keystroke. That is the shake Rajan reported three times -- and it was
+    /// specifically "when it gets to the bottom of textbox", because that is
+    /// exactly when `contentOffset.y` stops being zero.
+    static func visibleContentRect(bounds: CGRect,
+                                   inset: UIEdgeInsets,
+                                   lineHeight: CGFloat) -> CGRect {
+        // No breathing band. The band meant the last line could NEVER be
+        // "visible" at max scroll -- the exact oscillator behind four judder
+        // reports. UIKit's own caret geometry has no such band; agreeing
+        // with the system is the fix.
+        _ = lineHeight
+        return bounds.inset(by: inset)
     }
 }
 
-/// Keeps the line being written visible when the editor's HEIGHT changes --
-/// which is what happens the moment the keyboard slides up and SwiftUI's
-/// keyboard avoidance shrinks this view's frame. Without this, a caret that
-/// was near the bottom of the screen ends up hidden under the keyboard until
-/// the next keystroke ("sometimes the keyboard hides it"). Guarded to height
-/// changes only: normal scrolling moves `bounds.origin`, not the height, so
-/// this never runs mid-scroll and cannot reintroduce a correction loop.
+/// Owns the keyboard, so that exactly one thing does.
+///
+/// This is the fourth attempt at the judder Rajan has now reported four times
+/// -- "when i get to bottom still it weirds out up and down when my keyboard
+/// upper edge touches my writing" -- and the previous three all failed the same
+/// way: they tuned WHO corrects the scroll position, when the real problem is
+/// HOW MANY things were correcting it.
+///
+/// Fix one removed the nested scroll view (a `Form` wrapping a `UITextView`),
+/// which was necessary and real. Fix two stopped double-counting
+/// `contentOffset`. Fix three coalesced the corrections. All three left the
+/// underlying structure intact: SwiftUI's keyboard avoidance ANIMATES this
+/// view's frame smaller over ~0.25s, `layoutSubviews` runs once per animation
+/// frame, and a scroll correction made against a frame that is still moving is
+/// a correction that has to be made again on the next frame. That is the
+/// up-and-down, and it is not tunable -- it is what the structure does.
+///
+/// Notes never judders because its text view's frame does NOT change when the
+/// keyboard appears. The view keeps its full height, the keyboard simply
+/// covers the bottom of it, and the text view accounts for that with
+/// `contentInset.bottom`. Nothing re-lays-out, nothing animates a frame,
+/// nothing scrolls in response to a scroll. UIKit's own built-in
+/// caret-into-view then works, because it is the only thing running.
+///
+/// So: `JournalEntryComposeView` tells SwiftUI to stop resizing this view
+/// (`.ignoresSafeArea(.keyboard)`), and this class takes responsibility for
+/// the keyboard itself. Both halves are required -- the inset alone would
+/// double-compensate against a frame that still shrinks, which is a worse
+/// version of the same bug.
 private final class CaretTrackingTextView: UITextView {
-    private var lastBoundsHeight: CGFloat = 0
+    private var observers: [NSObjectProtocol] = []
 
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        guard bounds.height != lastBoundsHeight else { return }
-        lastBoundsHeight = bounds.height
-        guard isFirstResponder else { return }
-        CursorEndTextEditor.scrollCaretIntoViewIfNeeded(self)
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil, observers.isEmpty else { return }
+        let center = NotificationCenter.default
+        for name in [UIResponder.keyboardWillChangeFrameNotification,
+                     UIResponder.keyboardWillHideNotification] {
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) {
+                [weak self] note in
+                self?.applyKeyboardInset(note)
+            })
+        }
+    }
+
+    deinit {
+        observers.forEach(NotificationCenter.default.removeObserver)
+    }
+
+    private func applyKeyboardInset(_ note: Notification) {
+        guard let window else { return }
+        let info = note.userInfo
+        let endFrame = (info?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+        let overlap: CGFloat
+        if note.name == UIResponder.keyboardWillHideNotification || endFrame == nil {
+            overlap = 0
+        } else {
+            // Both rects in window space before comparing. The notification's
+            // frame is in screen coordinates, which is only the same thing as
+            // window coordinates in the common case -- not in Split View, not
+            // in Stage Manager.
+            let keyboard = window.convert(endFrame!, from: nil)
+            let mine = convert(bounds, to: window)
+            overlap = max(0, mine.maxY - keyboard.minY)
+        }
+        // `adjustedContentInset` already adds `safeAreaInsets`, so adding the
+        // raw overlap here would count the home indicator twice and leave a
+        // permanent gap under the last line.
+        let bottom = max(0, overlap - safeAreaInsets.bottom)
+        guard abs(contentInset.bottom - bottom) > 0.5 else { return }
+
+        let duration = info?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+        let curveRaw = info?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int ?? 7
+        let options = UIView.AnimationOptions(rawValue: UInt(curveRaw) << 16)
+        UIView.animate(withDuration: duration, delay: 0, options: options) {
+            self.contentInset.bottom = bottom
+            self.verticalScrollIndicatorInsets.bottom = bottom
+        } completion: { _ in
+            // One correction, after everything has settled -- not one per
+            // animation frame. By this point the inset is final, so the answer
+            // this computes stays true.
+            guard self.isFirstResponder else { return }
+            CursorEndTextEditor.scrollCaretIntoViewIfNeeded(self)
+        }
     }
 }

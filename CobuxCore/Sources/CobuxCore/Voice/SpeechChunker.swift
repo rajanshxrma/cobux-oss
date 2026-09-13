@@ -181,27 +181,58 @@ public final class SpeechChunker {
 
     /// Defensive cleanup in case the model emits markdown despite the spoken-style prompt
     /// instruction telling it not to — strips the syntax and speaks the inner text.
+    /// Compiled ONCE, at first use, instead of eleven times per spoken chunk.
+    ///
+    /// The old form handed a pattern STRING to a per-call helper, so every one
+    /// of the eleven rules below compiled a fresh ICU regex -- by far the most
+    /// expensive thing in the pass -- and `sanitize` runs on every chunk cut
+    /// out of a streaming reply, i.e. continuously for the length of a voice
+    /// turn. Eleven compilations per chunk, thrown away each time, on the one
+    /// path whose entire purpose is starting to talk sooner.
+    ///
+    /// No `nonisolated(unsafe)`, and that is the point rather than an omission:
+    /// `NSRegularExpression` is documented immutable and thread-safe once
+    /// constructed, which is why Foundation declares it `Sendable`, so a shared
+    /// `let` of them needs nothing said about it. Adding the annotation earns a
+    /// warning ("unnecessary for a constant with `Sendable` type") and, worse,
+    /// implies a hazard the type does not have.
+    ///
+    /// Order is preserved and load-bearing -- `**bold**` has to be stripped
+    /// before `*italic*`, or the italic rule eats one asterisk of each pair.
+    /// A pattern that somehow failed to compile drops out of the table, which
+    /// is precisely what the old `try?` did per call: that one rule is skipped
+    /// and every other still applies.
+    private static let markdownRules: [(regex: NSRegularExpression, template: String)] = {
+        let specs: [(pattern: String, template: String, options: NSRegularExpression.Options)] = [
+            (#"\*\*(.+?)\*\*"#, "$1", []),
+            (#"__(.+?)__"#, "$1", []),
+            (#"\*(.+?)\*"#, "$1", []),
+            (#"(?<!\w)_(.+?)_(?!\w)"#, "$1", []),
+            (#"`([^`]+)`"#, "$1", []),
+            (#"\[([^\]]+)\]\([^\)]+\)"#, "$1", []),
+            (#"^#{1,6}\s*"#, "", [.anchorsMatchLines]),
+            (#"^\s*[-*]\s+"#, "", [.anchorsMatchLines]),
+            (#"^\s*\d+\.\s+"#, "", [.anchorsMatchLines]),
+            (#"\n+"#, " ", []),
+            (#" {2,}"#, " ", []),
+        ]
+        return specs.compactMap { spec in
+            guard let regex = try? NSRegularExpression(pattern: spec.pattern, options: spec.options) else {
+                return nil
+            }
+            return (regex, spec.template)
+        }
+    }()
+
     private func sanitize(_ text: String) -> String {
         var result = text
 
-        result = replacing(result, pattern: #"\*\*(.+?)\*\*"#, with: "$1")
-        result = replacing(result, pattern: #"__(.+?)__"#, with: "$1")
-        result = replacing(result, pattern: #"\*(.+?)\*"#, with: "$1")
-        result = replacing(result, pattern: #"(?<!\w)_(.+?)_(?!\w)"#, with: "$1")
-        result = replacing(result, pattern: #"`([^`]+)`"#, with: "$1")
-        result = replacing(result, pattern: #"\[([^\]]+)\]\([^\)]+\)"#, with: "$1")
-        result = replacing(result, pattern: #"^#{1,6}\s*"#, with: "", options: [.anchorsMatchLines])
-        result = replacing(result, pattern: #"^\s*[-*]\s+"#, with: "", options: [.anchorsMatchLines])
-        result = replacing(result, pattern: #"^\s*\d+\.\s+"#, with: "", options: [.anchorsMatchLines])
-        result = replacing(result, pattern: #"\n+"#, with: " ")
-        result = replacing(result, pattern: #" {2,}"#, with: " ")
+        for rule in Self.markdownRules {
+            let range = NSRange(result.startIndex..<result.endIndex, in: result)
+            result = rule.regex.stringByReplacingMatches(
+                in: result, options: [], range: range, withTemplate: rule.template)
+        }
 
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func replacing(_ text: String, pattern: String, with template: String, options: NSRegularExpression.Options = []) -> String {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return text }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: template)
     }
 }

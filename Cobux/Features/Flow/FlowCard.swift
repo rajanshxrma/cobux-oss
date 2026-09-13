@@ -18,6 +18,14 @@ enum FlowCard: Identifiable {
     /// Lands every ~12 cards: the Duolingo set-complete beat. Content is
     /// rendered live from `FlowSessionStats` so the numbers are honest.
     case sessionRecap(setNumber: Int, ripeningTomorrow: Int, nextBook: String?)
+    /// Something he wrote on this calendar date in an earlier year.
+    ///
+    /// Fable's answer to "why would someone open this app unprompted": Cobux is
+    /// the only thing on the phone holding both what he has read and what he
+    /// has lived, and the pull is it handing a piece of that back on the one day
+    /// it belongs to. It can never grade him -- an echo either exists today or
+    /// the card simply is not dealt, so there is no gap to point at.
+    case journalEcho(entryID: UUID, date: Date, passage: String)
     /// The rare gold card: two highlights from two DIFFERENT books that are
     /// saying the same thing, found by comparing the embeddings the library
     /// already stores. The "this app actually knows my books" moment.
@@ -32,6 +40,7 @@ enum FlowCard: Identifiable {
         case .dailyOpener: "opener"
         case .sessionRecap(let setNumber, _, _): "recap-\(setNumber)"
         case .resonance(let a, let b): "resonance-\(a.id.uuidString)-\(b.id.uuidString)"
+        case .journalEcho(let id, _, _): "journalecho-\(id.uuidString)"
         }
     }
 
@@ -46,6 +55,7 @@ enum FlowCard: Identifiable {
         case .dailyOpener: "#F59E0B"
         case .sessionRecap: "#10B981"
         case .resonance: "#EAB308"
+        case .journalEcho: "#0EA5E9"
         }
     }
 }

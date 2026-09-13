@@ -9,6 +9,7 @@ struct DecisionConsultationView: View {
     @Bindable var claudeService: ClaudeService
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     @Query private var books: [Book]
 
     @State private var situation = ""
@@ -46,9 +47,15 @@ struct DecisionConsultationView: View {
             }
             .onAppear(perform: checkAPIKey)
             .alert("API Key Required", isPresented: $showNoAPIKeyAlert) {
-                Button("OK", role: .cancel) { }
+                // An alert that names Settings and offers no way there is a
+                // dead end three taps deep -- the same door the other three
+                // key alerts now have.
+                Button("Open Settings") {
+                    if let url = URL(string: "cobux://settings") { openURL(url) }
+                }
+                Button("Not Now", role: .cancel) { }
             } message: {
-                Text("Please configure your Anthropic API Key in Settings to use Decision Consultation.")
+                Text("Decision Consultation talks to Claude, which needs your Anthropic API key. Add it in Settings and this works right away.")
             }
         }
     }

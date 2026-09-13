@@ -127,21 +127,42 @@ struct BookSourceFilterView: View {
         BookSourceFilter.effectiveExcludedIDs(books: books, excludedRaw: excludedRaw, includedRaw: includedRaw)
     }
 
-    private var allExcluded: Bool { !books.isEmpty && effectiveExcluded.count >= books.count }
+    /// Everything `body` needs about the current filter, in ONE pass over the
+    /// library rather than one pass per question and one more per row.
+    ///
+    /// `effectiveExcludedIDs` decodes two comma-joined UUID strings and reads
+    /// `contentProfileRaw` on every `Book`. `body` reached it four ways --
+    /// `allExcluded`, the "Include All Books" test, `footerText`'s
+    /// `hasDefaultOffBooks`, and, worst, `binding(for:)`'s GETTER, which runs
+    /// once per row. On 156 books that is roughly 159 full scans of the library
+    /// to draw one list of toggles, and it is the list Flow, Wisdom and
+    /// Settings all open.
+    private struct FilterState {
+        var excluded: Set<UUID> = []
+        var defaultOffIDs: Set<UUID> = []
+        var bookCount = 0
 
-    /// Books that start off by profile — used to decide whether the
-    /// explanatory footer is worth showing at all.
-    private var hasDefaultOffBooks: Bool {
-        books.contains { $0.contentProfile.startsExcludedFromBrowsing }
+        var allExcluded: Bool { bookCount > 0 && excluded.count >= bookCount }
+        var hasDefaultOffBooks: Bool { !defaultOffIDs.isEmpty }
     }
 
-    private var footerText: String {
+    private func makeFilterState() -> FilterState {
+        FilterState(
+            excluded: effectiveExcluded,
+            defaultOffIDs: Set(books.lazy
+                .filter { $0.contentProfile.startsExcludedFromBrowsing }
+                .map(\.id)),
+            bookCount: books.count)
+    }
+
+    private func footerText(_ state: FilterState) -> String {
         let base = "Flow and the Wisdom Graph only draw on the books switched on here. Any book you add later joins automatically."
-        guard hasDefaultOffBooks else { return base }
+        guard state.hasDefaultOffBooks else { return base }
         return base + "\n\nReference textbooks start switched off. They carry many times more highlights than an ordinary book, so leaving them on crowds out everything else. Switch one on any time to get it back in both places."
     }
 
     var body: some View {
+        let state = makeFilterState()
         Form {
             // Both of these sit ABOVE the book list, not below it. They used to
             // follow it, which meant that on a real library (26 books and
@@ -149,7 +170,7 @@ struct BookSourceFilterView: View {
             // the warning explaining why you'd want it — were only reachable by
             // scrolling past every book to the very bottom. The warning comes
             // first because it's what makes the button underneath it make sense.
-            if allExcluded {
+            if state.allExcluded {
                 // Not blocked — just told the truth about what it does. Flow's
                 // own empty state says the same thing and links back here.
                 CobuxFormSection(title: "Heads Up") {
@@ -159,15 +180,15 @@ struct BookSourceFilterView: View {
                 }
             }
 
-            if !effectiveExcluded.isEmpty {
+            if !state.excluded.isEmpty {
                 Section {
-                    Button("Include All Books") { includeAll() }
+                    Button("Include All Books") { includeAll(defaultOffIDs: state.defaultOffIDs) }
                 }
             }
 
             CobuxFormSection(
                 title: "Books in Flow and Wisdom",
-                footer: footerText
+                footer: footerText(state)
             ) {
                 if books.isEmpty {
                     Text("No books in your library yet.")
@@ -175,7 +196,9 @@ struct BookSourceFilterView: View {
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(books) { book in
-                        Toggle(isOn: binding(for: book)) {
+                        // The already-resolved set, not another whole-library
+                        // scan inside every row's binding getter.
+                        Toggle(isOn: binding(for: book, excluded: state.excluded)) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(book.title)
                                 Text(book.author)
@@ -197,9 +220,9 @@ struct BookSourceFilterView: View {
         .onAppear(perform: pruneDeletedBooks)
     }
 
-    private func binding(for book: Book) -> Binding<Bool> {
+    private func binding(for book: Book, excluded: Set<UUID>) -> Binding<Bool> {
         Binding(
-            get: { !effectiveExcluded.contains(book.id) },
+            get: { !excluded.contains(book.id) },
             set: { included in
                 var excluded = BookSourceFilter.decode(excludedRaw)
                 var includedIDs = BookSourceFilter.decode(includedRaw)
@@ -223,11 +246,8 @@ struct BookSourceFilterView: View {
     /// Means every book, including the ones that start off by profile — so it
     /// has to record those opt-ins explicitly rather than just clearing the
     /// exclusion set, or the default would immediately switch them back off.
-    private func includeAll() {
-        let defaultOff = Set(
-            books.lazy.filter { $0.contentProfile.startsExcludedFromBrowsing }.map(\.id)
-        )
-        writeIfChanged(excluded: [], included: defaultOff)
+    private func includeAll(defaultOffIDs: Set<UUID>) {
+        writeIfChanged(excluded: [], included: defaultOffIDs)
     }
 
     /// A deleted book's ID would otherwise sit in either set forever, and —

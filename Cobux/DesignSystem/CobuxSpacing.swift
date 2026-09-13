@@ -18,6 +18,15 @@ enum CobuxSpacing {
 
     /// Leading/trailing margin for a screen's primary content.
     static let screenMargin: CGFloat = 20
+
+    // Control paddings -- the two-tier capsule grammar's fixed numbers, named
+    // so Flow, Ebb, the threshold door and every future footer stop carrying
+    // their own drifting literals. A quiet chip is caption-sized commentary;
+    // a pill is the one filled primary a surface is allowed.
+    static let chipH: CGFloat = 14
+    static let chipV: CGFloat = 7
+    static let pillH: CGFloat = 20
+    static let pillV: CGFloat = 12
     /// Interior padding for a `.cobuxCard()`/`.cobuxGlassCard()`.
     static let cardPadding: CGFloat = 16
     /// Vertical gap between rows in a list/section (e.g. `CobuxSettingsRow`).

@@ -29,7 +29,13 @@ enum RetryPolicy {
             return true
         case .retryableAPIError(let statusCode, _):
             return statusCode == 429 || (500...599).contains(statusCode)
-        case .apiError, .invalidResponse, .missingAPIKey, .invalidAPIKey, .truncated, .offline:
+        // `.creditsExhausted` is deliberately here rather than with the
+        // retryables. It is a 400, so it would never have been retried by the
+        // status rule above anyway -- but stating it explicitly is the point:
+        // an empty balance cannot resolve within a backoff window, so retrying
+        // only makes the user wait 1.5s longer to read the same message.
+        case .apiError, .invalidResponse, .missingAPIKey, .invalidAPIKey,
+             .creditsExhausted, .truncated, .offline:
             return false
         }
     }

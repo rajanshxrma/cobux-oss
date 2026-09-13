@@ -27,7 +27,9 @@ final class FlowSessionStats {
             quotesSeen += 2
             if let bookID = a.book?.id { booksTouched.insert(bookID) }
             if let bookID = b.book?.id { booksTouched.insert(bookID) }
-        case .weakTopic, .dailyOpener, .sessionRecap:
+        // A journal echo is his own writing, not a book's -- counting it as a
+        // quote seen would inflate the session's reading stats with his diary.
+        case .weakTopic, .dailyOpener, .sessionRecap, .journalEcho:
             break
         }
     }

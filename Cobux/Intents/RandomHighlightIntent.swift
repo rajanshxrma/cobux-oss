@@ -26,16 +26,30 @@ struct RandomHighlightIntent: AppIntent {
         }
 
         let context = ModelContext(container)
-        let allHighlights = (try? context.fetch(FetchDescriptor<Highlight>())) ?? []
 
-        let pool: [Highlight]
+        // A COUNT, then ONE row at a random offset -- `WatchSyncService.
+        // randomFeaturedHighlight`'s primitive. This used to fetch the entire
+        // highlight table (~33,000 rows, each with a 2 KB embedding) into the
+        // Siri intents extension -- a process with a memory ceiling a fraction
+        // of the app's -- and filter it in Swift to pick one line. The pool is
+        // unchanged: every highlight, or every highlight of the named book
+        // (`$0.book?.id == bookID` is the form `WisdomProbe` already proved).
+        let pool: FetchDescriptor<Highlight>
         if let bookID = book?.id {
-            pool = allHighlights.filter { $0.book?.id == bookID }
+            pool = FetchDescriptor<Highlight>(predicate: #Predicate<Highlight> { $0.book?.id == bookID })
         } else {
-            pool = allHighlights
+            pool = FetchDescriptor<Highlight>()
         }
 
-        guard let highlight = pool.randomElement() else {
+        var highlight: Highlight?
+        if let total = try? context.fetchCount(pool), total > 0 {
+            var draw = pool
+            draw.fetchOffset = Int.random(in: 0..<total)
+            draw.fetchLimit = 1
+            highlight = try? context.fetch(draw).first
+        }
+
+        guard let highlight else {
             let message = "You don't have any highlights saved yet."
             return .result(value: message, dialog: IntentDialog(stringLiteral: message))
         }

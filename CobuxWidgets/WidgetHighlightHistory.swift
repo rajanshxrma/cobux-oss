@@ -147,6 +147,50 @@ enum WidgetHighlightHistory {
     /// Timeline-build read of the override. `peek` (snapshot builds) reports the
     /// target without clearing the flag, so a gallery/snapshot render can't eat
     /// the override the real timeline build is about to honor.
+    // MARK: Pre-drawn next, and the tap trace (58)
+    //
+    // His fourth report of a dead cycle tap (12 Sep, on 57: "on clicking it
+    // does not change the highlight. That's a big thing"). Every earlier fix
+    // was to the Button layer; none could be verified here (no simulator, no
+    // device logs from the widget process). Two changes, both evidence-first:
+    //
+    // 1. The tap no longer needs SwiftData. The provider, which has already
+    //    opened the store to draw what is showing, draws the NEXT quote at the
+    //    same time and parks its id here. The intent then only moves a
+    //    pointer: no container, no context, no fetch in the ~30 MB widget
+    //    process at tap time. The store path stays as the fallback.
+    // 2. The intent leaves a trace -- when it last ran and what happened --
+    //    that the app's Diagnostics screen shows. The next report carries the
+    //    answer to the one question nobody could answer tonight: did the tap
+    //    reach the intent at all.
+    static let nextKey = "widgetHighlightNext"
+    static let tapAtKey = "widgetTap.lastAt"
+    static let tapOutcomeKey = "widgetTap.outcome"
+
+    static func storeNext(_ id: UUID, scope: String?) {
+        defaults?.set(id.uuidString, forKey: key(nextKey, scope: scope))
+    }
+
+    /// Consumes the pre-drawn id, so one tap cannot be served twice from it.
+    static func takeNext(scope: String?) -> UUID? {
+        let k = key(nextKey, scope: scope)
+        guard let raw = defaults?.string(forKey: k), let id = UUID(uuidString: raw) else { return nil }
+        defaults?.removeObject(forKey: k)
+        return id
+    }
+
+    static func trace(_ outcome: String) {
+        defaults?.set(Date.now, forKey: tapAtKey)
+        defaults?.set(outcome, forKey: tapOutcomeKey)
+    }
+
+    /// For the app's Diagnostics screen. Nil when no tap has ever reached an intent.
+    static func lastTrace() -> (at: Date, outcome: String)? {
+        guard let at = defaults?.object(forKey: tapAtKey) as? Date,
+              let outcome = defaults?.string(forKey: tapOutcomeKey) else { return nil }
+        return (at, outcome)
+    }
+
     static func overrideTarget(scope: String?, peek: Bool) -> UUID? {
         // Lane-independent, and cheap: one legacy key from before history
         // existed at all, cleared on whichever build sees it first.

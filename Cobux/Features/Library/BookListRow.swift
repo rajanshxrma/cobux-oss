@@ -1,0 +1,113 @@
+import SwiftUI
+import UIKit
+
+/// The library's list-layout row. His ask, near-verbatim: *"list view as well
+/// option for the library books"* (ledger N19, docs/instruction-ledger.md) --
+/// until now the grid's `BookCard` was the only shape a book on the shelf
+/// ever had. `LibraryView` alternates between the two on the same
+/// `filteredBooks`, keyed by the persisted `libraryLayout` choice; this file
+/// owns only how ONE book reads as a row.
+///
+/// No highlight count, no progress, no tick -- the same standing ruling
+/// `BookCard` and `LibraryView.shelfFooter` already follow: Cobux never
+/// grades what's on the shelf, in either layout.
+struct BookListRow: View {
+    let book: Book
+
+    @State private var coverImage: UIImage?
+
+    /// "List scale," not the grid card's full 3:4 tile -- a dense list needs
+    /// just enough of the cover to recognize the book at a glance, not the
+    /// hero-sized art the card gives it room for.
+    private static let coverWidth: CGFloat = 44
+    private static let coverHeight: CGFloat = coverWidth * 4 / 3
+
+    var body: some View {
+        HStack(alignment: .center, spacing: CobuxSpacing.md) {
+            cover
+                .frame(width: Self.coverWidth, height: Self.coverHeight)
+                .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.iconBadge))
+
+            VStack(alignment: .leading, spacing: 2) {
+                BookTitleText(title: book.title, font: .body, weight: .semibold, lineLimit: 2)
+                Text(secondaryLine)
+                    .font(.subheadline)
+                    .foregroundStyle(Color.cobuxMuted)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: CobuxSpacing.sm)
+
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundStyle(Color.cobuxMuted)
+        }
+        .padding(.vertical, CobuxSpacing.sm)
+        .contentShape(Rectangle())
+        // A soft hairline between rows -- `Color.cobuxLine`, the app's real
+        // divider token (`CobuxColor.line`'s own doc comment: "not a
+        // translucent wash"), never a `.cobuxCard()` border per row. This is
+        // one list, not a stack of freestanding cards.
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color.cobuxLine)
+                .frame(height: 1)
+        }
+        .accessibilityElement(children: .combine)
+        .task(id: book.id) { await loadCoverImage() }
+    }
+
+    /// Author, plus the tradition's own name for itself when the book has
+    /// one -- same "· label" grammar Flow's kicker already uses
+    /// (`FlowCardViews.swift`) rather than inventing a second way to say it.
+    private var secondaryLine: String {
+        guard let tradition = book.tradition else { return book.author }
+        return "\(book.author) · \(tradition.label)"
+    }
+
+    // Same three-tier resolution as `BookCard.coverBackground` (bundled
+    // asset -> on-device remote-fetch cache -> gradient), reused rather than
+    // re-invented: `BookCoverThumbnails` and `CoverImageCache` are both
+    // internal, so this row asks them the identical question a grid card
+    // would for the same book, and warms/shares the very same process cache.
+    @ViewBuilder
+    private var cover: some View {
+        if let coverImage {
+            Image(uiImage: coverImage)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else if let assetName = book.coverAssetName,
+                  let warm = BookCoverThumbnails.cached(assetName: assetName) {
+            Image(uiImage: warm)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else {
+            CoverGradientView(colorHex: book.coverColorHex)
+        }
+    }
+
+    // Off the main thread, exactly like `BookCard.loadCoverImage`: the
+    // bundled-asset tier decodes and downsamples via `Task.detached` inside
+    // `BookCoverThumbnails.thumbnail`, never a raw `UIImage(named:)` decode of
+    // an up-to-11MB source image on this row's own `body`. Duplicated here
+    // rather than shared because `BookCard`'s copy is `private` to that file.
+    @MainActor
+    private func loadCoverImage() async {
+        if let assetName = book.coverAssetName {
+            if let thumbnail = await Task.detached(priority: .userInitiated, operation: {
+                BookCoverThumbnails.thumbnail(assetName: assetName)
+            }).value {
+                coverImage = thumbnail
+                return
+            }
+            // Falls through when the imageset genuinely doesn't resolve --
+            // same reasoning as `BookCard`'s identical fallthrough.
+        }
+        if let cached = CoverImageCache.cachedImage(for: book.id) {
+            coverImage = cached
+            return
+        }
+        guard let urlString = book.coverImageURL, let url = URL(string: urlString) else { return }
+        coverImage = await CoverImageCache.downloadAndCache(bookID: book.id, remoteURL: url)
+    }
+}

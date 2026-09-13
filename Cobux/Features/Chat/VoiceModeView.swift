@@ -13,6 +13,9 @@ struct VoiceModeView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    /// Reduce Motion is a hard gate (CobuxMotion.swift): rows fade in
+    /// rather than spring up, and the header glyph holds still.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var voiceStoreState: NeuralVoiceStore.State = NeuralVoiceStore.shared.state
 
     /// What to tell him about the voice, or nil once the good one is in use and there's
@@ -26,9 +29,27 @@ struct VoiceModeView: View {
         case .downloading:
             return "Downloading Cobux's natural voice (about 330 MB, one time, Wi-Fi only). Until it's ready, this uses the basic system voice."
         case .notStarted, .unavailable:
-            return VoicePreference.usingDefaultQualityVoice ? VoicePreference.upgradeRecipe : nil
+            return usingDefaultQualityVoice ? VoicePreference.upgradeRecipe : nil
         }
     }
+
+    /// Read once per visit, not once per body -- the same fix already applied
+    /// to `SettingsView.availableVoices`, for the same call underneath.
+    ///
+    /// `VoicePreference.usingDefaultQualityVoice` resolves `selectedVoice()`,
+    /// which falls through to `availableVoices()` and therefore to
+    /// `AVSpeechSynthesisVoice.speechVoices()` -- the speech service
+    /// enumerating every voice installed on the device. Reading it straight out
+    /// of `voiceStatus` put that enumeration in front of Voice Mode's first
+    /// frame AND repeated it on every subsequent body pass, and this view's
+    /// body is re-evaluated constantly while a session runs: every transcript
+    /// row, every controller state change, every streamed sentence.
+    ///
+    /// Starts `false`, so the frame before the read lands shows no banner. That
+    /// is the right direction for a one-frame gap -- an upgrade nudge that
+    /// appears and then vanishes would read as a glitch, while one that appears
+    /// a frame late reads as nothing at all.
+    @State private var usingDefaultQualityVoice = false
     @Query private var books: [Book]
 
     let selectedBookID: UUID?
@@ -45,18 +66,13 @@ struct VoiceModeView: View {
     @State private var showPermissionAlert = false
     @State private var isEnding = false
 
-    /// One spoken exchange element, kept for the whole session. His finalized
-    /// utterances append as right-aligned bubbles, the assistant's sentences
-    /// as left-aligned lines -- built view-side by observing the controller's
-    /// per-turn `liveTranscript`/`spokenSentences` (which reset every turn) so
-    /// the controller's state machine needed no changes at all.
-    private struct TranscriptEntry: Identifiable {
-        let id = UUID()
-        let text: String
-        let isUser: Bool
-    }
-
-    @State private var transcript: [TranscriptEntry] = []
+    // His finalized utterances append as right-aligned bubbles, the
+    // assistant's sentences as left-aligned lines -- built view-side by
+    // observing the controller's per-turn `liveTranscript`/`spokenSentences`
+    // (which reset every turn) so the controller's state machine needed no
+    // changes at all. `VoiceTranscriptEntry` and the row/scroll mechanics
+    // below are shared with `SpokenQuizView` (`VoiceTranscriptView.swift`).
+    @State private var transcript: [VoiceTranscriptEntry] = []
     /// How many of the CURRENT turn's `spokenSentences` are already folded
     /// into `transcript` -- resets to 0 when the controller starts a new turn
     /// (its array shrinks back to empty).
@@ -112,8 +128,8 @@ struct VoiceModeView: View {
             guard newState == .thinking,
                   let spoken = controller?.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines),
                   !spoken.isEmpty else { return }
-            withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) {
-                transcript.append(TranscriptEntry(text: spoken, isUser: true))
+            withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.38, dampingFraction: 0.78)) {
+                transcript.append(VoiceTranscriptEntry(text: spoken, isUser: true))
             }
         }
         .onChange(of: controller?.spokenSentences.count) { _, _ in
@@ -127,6 +143,12 @@ struct VoiceModeView: View {
         }
         .preferredColorScheme(.dark)
         .onAppear(perform: setUpAndRequestPermissions)
+        // Behind the first frame, not in front of it. One yield hands the
+        // cover's opening frame up before the voice enumeration runs.
+        .task {
+            await Task.yield()
+            usingDefaultQualityVoice = VoicePreference.usingDefaultQualityVoice
+        }
         // Both voice surfaces are presented as `fullScreenCover`, which stays
         // presented when the app backgrounds -- so `onDisappear` never fires and
         // tearing down only from there meant the session survived being "closed".
@@ -140,7 +162,14 @@ struct VoiceModeView: View {
             if phase == .background { endSession() }
             // Re-check on return: if they went and downloaded the voice, the banner
             // should be gone when they come back, not linger until the next launch.
-            if phase == .active { voiceStoreState = NeuralVoiceStore.shared.state }
+            if phase == .active {
+                voiceStoreState = NeuralVoiceStore.shared.state
+                // Same reason, same trip: a voice downloaded while away must
+                // clear the banner on return. This is the ONLY thing that can
+                // change the answer, which is exactly why re-reading it here is
+                // enough and re-reading it per body never was.
+                usingDefaultQualityVoice = VoicePreference.usingDefaultQualityVoice
+            }
         }
         .onDisappear {
             isEnding = true
@@ -180,13 +209,13 @@ struct VoiceModeView: View {
                 Image(systemName: "mic.slash.fill")
             case .listening:
                 Image(systemName: "waveform")
-                    .symbolEffect(.variableColor.iterative, options: .repeating)
+                    .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
             case .thinking:
                 ProgressView()
                     .tint(.white)
             case .speaking:
                 Image(systemName: "waveform.circle.fill")
-                    .symbolEffect(.pulse, options: .repeating)
+                    .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
             }
         }
         .font(.system(size: 22, weight: .medium))
@@ -225,83 +254,46 @@ struct VoiceModeView: View {
     /// aligned lines spring-appending as they're actually spoken (the same
     /// insertion transition the old sentence stack used, now applied to both
     /// sides). The in-progress moment renders live at the tail -- his words
-    /// appearing in the bubble as he speaks, then a thinking line.
+    /// appearing in the bubble as he speaks, then a thinking line. Row/scroll
+    /// mechanics live in `VoiceTranscriptScrollView` (`VoiceTranscriptView.swift`),
+    /// shared with `SpokenQuizView`.
     private var transcriptView: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(transcript) { entry in
-                        transcriptRow(text: entry.text, isUser: entry.isUser, isLive: false)
-                    }
-
-                    switch controller?.state ?? .idle {
-                    case .listening:
-                        transcriptRow(
-                            text: (controller?.liveTranscript.isEmpty ?? true) ? "Listening…" : (controller?.liveTranscript ?? ""),
-                            isUser: true,
-                            isLive: controller?.liveTranscript.isEmpty ?? true
-                        )
-                    case .thinking:
-                        Text("Thinking…")
-                            .font(.title3)
-                            .foregroundStyle(.white.opacity(0.6))
-                    case .idle, .speaking:
-                        EmptyView()
-                    }
-
-                    // Stable tail anchor -- live rows change identity as
-                    // states flip, so auto-scroll targets this instead.
-                    Color.clear
-                        .frame(height: 1)
-                        .id("transcriptTail")
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 8)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .onChange(of: transcript.count) { _, _ in
-                withAnimation { proxy.scrollTo("transcriptTail", anchor: .bottom) }
-            }
-            .onChange(of: controller?.liveTranscript) { _, _ in
-                proxy.scrollTo("transcriptTail", anchor: .bottom)
-            }
-            .onChange(of: controller?.state) { _, _ in
-                withAnimation { proxy.scrollTo("transcriptTail", anchor: .bottom) }
-            }
-        }
+        VoiceTranscriptScrollView(
+            entries: transcript,
+            animatedTrigger: controller?.state,
+            immediateTrigger: controller?.liveTranscript,
+            tail: { transcriptTail }
+        )
     }
 
     @ViewBuilder
-    private func transcriptRow(text: String, isUser: Bool, isLive: Bool) -> some View {
-        if isUser {
-            HStack {
-                Spacer(minLength: 48)
-                Text(text)
-                    .font(.title3)
-                    .foregroundStyle(.white.opacity(isLive ? 0.6 : 0.95))
-                    .multilineTextAlignment(.leading)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 18))
+    private var transcriptTail: some View {
+        switch controller?.state ?? .idle {
+        case .listening:
+            VoiceTranscriptRow(
+                text: (controller?.liveTranscript.isEmpty ?? true) ? "Listening…" : (controller?.liveTranscript ?? ""),
+                isUser: true,
+                isLive: controller?.liveTranscript.isEmpty ?? true
+            )
+        case .thinking:
+            thinkingLine
+        case .speaking:
+            // Captions land with the audio now, so when the state flips to
+            // speaking the first sentence is still being synthesized. Keep
+            // "Thinking…" up until the voice actually starts rather than show
+            // a blank tail for that beat.
+            if controller?.spokenSentences.isEmpty ?? true {
+                thinkingLine
             }
-            .transition(.asymmetric(
-                insertion: .opacity.combined(with: .move(edge: .bottom))
-                    .animation(.spring(response: 0.38, dampingFraction: 0.78)),
-                removal: .opacity
-            ))
-        } else {
-            Text(text)
-                .font(.title3)
-                .foregroundStyle(.white.opacity(0.92))
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .transition(.asymmetric(
-                    insertion: .opacity.combined(with: .move(edge: .bottom))
-                        .animation(.spring(response: 0.38, dampingFraction: 0.78)),
-                    removal: .opacity
-                ))
+        case .idle:
+            EmptyView()
         }
+    }
+
+    private var thinkingLine: some View {
+        Text("Thinking…")
+            .font(.title3)
+            .foregroundStyle(.white.opacity(0.6))
     }
 
     /// Folds newly spoken sentences of the current turn into the transcript
@@ -314,9 +306,9 @@ struct VoiceModeView: View {
         if sentences.count < syncedSentenceCount { syncedSentenceCount = 0 }
         guard sentences.count > syncedSentenceCount else { return }
         let newSentences = sentences[syncedSentenceCount...]
-        withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) {
+        withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.38, dampingFraction: 0.78)) {
             for sentence in newSentences {
-                transcript.append(TranscriptEntry(text: sentence, isUser: false))
+                transcript.append(VoiceTranscriptEntry(text: sentence, isUser: false))
             }
         }
         syncedSentenceCount = sentences.count

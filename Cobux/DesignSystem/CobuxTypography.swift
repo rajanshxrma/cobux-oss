@@ -79,6 +79,23 @@ enum CobuxTypography {
             return .system(size: size, weight: weight, design: .serif)
         }
     }
+
+    /// His own writing, quoted. Serif in BOTH themes.
+    ///
+    /// This is a deliberate exception to the split documented at the top of
+    /// this file: that split governs CHROME -- wordmarks, numerals, the
+    /// instrument panel. A quoted journal passage is not chrome, it is the
+    /// content the app exists to give reverence to ("the journal is the book
+    /// he is writing"), and on his dark-mode phone `display` was handing his
+    /// own words the least ceremonial face in the app. The book face, in both
+    /// themes, everywhere his writing is quoted: Ebb's cards, the threshold
+    /// card under the calendar, Flow's journal echo.
+    ///
+    /// Never used for Flow's library quotes -- those stay `display`; that
+    /// surface is loved as it is.
+    static func passage(size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        .system(size: size, weight: weight, design: .serif)
+    }
 }
 
 extension View {

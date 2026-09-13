@@ -133,6 +133,19 @@ final class Book {
         set { contentProfileRaw = newValue.rawValue }
     }
 
+    /// What game this book's counsel is playing. See `BookTradition` — this is
+    /// taxonomy, never evaluation, and nothing in the app may rank by it.
+    ///
+    /// Optional-by-default so every existing row migrates without a rewrite;
+    /// an unset tradition simply shows no shelf name, which is the honest
+    /// rendering of "nobody has said yet".
+    var traditionRaw: String?
+
+    var tradition: BookTradition? {
+        get { traditionRaw.flatMap(BookTradition.init(rawValue:)) }
+        set { traditionRaw = newValue?.rawValue }
+    }
+
     @Relationship(deleteRule: .cascade, inverse: \Highlight.book)
     var highlights: [Highlight] = []
 

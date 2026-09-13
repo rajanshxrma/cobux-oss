@@ -66,7 +66,14 @@ enum ChatPromptBuilder {
         isVoice: Bool = false,
         personalWritingEntries: [PersonalWritingEntry] = [],
         personalWritingContextEnabled: Bool = false,
-        useRealNamesInLifeExamples: Bool = false
+        useRealNamesInLifeExamples: Bool = false,
+        /// The ongoing situation this thread is about, when it is one.
+        situation: SituationThread? = nil,
+        /// Cross-conversation memory. Defaults to disabled, so the voice,
+        /// symposium, decision-consultation and Ask-Intent paths are untouched
+        /// unless they opt in explicitly -- the same scoping contract
+        /// `personalWritingEntries` documents above.
+        crossChat: SearchService.CrossChatInput = .init()
     ) -> Assembled {
         // Checked before symposium on purpose: symposium is "a debate among
         // the authors in the library," which has no coherent meaning inside
@@ -84,7 +91,11 @@ enum ChatPromptBuilder {
             return .journal(systemPrompt: systemPrompt)
         }
 
-        if symposiumModeEnabled {
+        // Situations take precedence over symposium, for the same reason the
+        // journal thread does: "a debate among the authors" is not what a
+        // thread about one ongoing situation is for, and silently dropping the
+        // situation block would make the thread quietly forget its own subject.
+        if symposiumModeEnabled, situation == nil {
             let (contextString, titles) = SearchService.buildContext(query: userMessage, books: books)
             var systemPrompt = String(format: PromptTemplates.symposium, contextString)
             if isVoice { systemPrompt += spokenStyleCore + spokenStyleSourcesReminder }
@@ -98,7 +109,8 @@ enum ChatPromptBuilder {
                 libraryBooks: books,
                 personalWritingEntries: personalWritingEntries,
                 includePersonalWriting: personalWritingContextEnabled,
-                useRealNamesInLifeExamples: useRealNamesInLifeExamples
+                useRealNamesInLifeExamples: useRealNamesInLifeExamples,
+                crossChat: crossChat
             )
             let stableSystemPrompt = String(format: PromptTemplates.bookScoped, scopedBook.title, scopedBook.author, scopedBook.title, stableContext)
             let finalDynamicContext = isVoice ? dynamicContext + spokenStyleCore + spokenStyleSourcesReminder : dynamicContext
@@ -110,11 +122,70 @@ enum ChatPromptBuilder {
             books: books,
             personalWritingEntries: personalWritingEntries,
             includePersonalWriting: personalWritingContextEnabled,
-            useRealNamesInLifeExamples: useRealNamesInLifeExamples
+            useRealNamesInLifeExamples: useRealNamesInLifeExamples,
+            crossChat: crossChat
         )
         let stableSystemPrompt = String(format: PromptTemplates.base, stableContext)
-        let finalDynamicContext = isVoice ? dynamicContext + spokenStyleCore + spokenStyleSourcesReminder : dynamicContext
+        // A situation thread routes through the GENERAL path unchanged, and
+        // that is deliberate: same stable prefix, byte for byte, so it shares
+        // the general thread's Anthropic cache entry outright rather than
+        // paying for a second one. Everything it adds rides the dynamic suffix.
+        let withAmbient = dynamicContext + situationLine(situation) + ambientLine()
+        let finalDynamicContext = isVoice ? withAmbient + spokenStyleCore + spokenStyleSourcesReminder : withAmbient
         return .general(stableSystemPrompt: stableSystemPrompt, dynamicContext: finalDynamicContext, referencedTitles: titles)
+    }
+
+    /// The one block a situation thread adds.
+    ///
+    /// It tells the model the thread's own transcript IS the memory, rather
+    /// than handing it a summary the user never saw. That is the whole privacy
+    /// posture in one instruction: nothing about the other person is stored or
+    /// inferred, so nothing about them can be leaked back except what he
+    /// himself wrote, in front of him, in a thread he can delete.
+    private static func situationLine(_ situation: SituationThread?) -> String {
+        guard let situation, !situation.name.isEmpty else { return "" }
+        var block = "\n\n## Ongoing situation: \"\(situation.name)\"\n"
+            + "This thread is about one ongoing situation in the user's life. The earlier turns "
+            + "of this conversation are your memory of it -- rely on them, and keep track of where "
+            + "things stand. Do not infer or assert anything about the other person beyond what the "
+            + "user has actually told you here."
+        if let note = situation.note?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !note.isEmpty {
+            block += "\nPinned note from the user: \(note)"
+        }
+        return block
+    }
+
+    /// One line of live situational context, appended to the DYNAMIC suffix.
+    ///
+    /// The dynamic/stable split exists so per-turn material never busts the
+    /// Anthropic prompt cache, which is exactly why this rides here: it changes
+    /// between turns and costs nothing.
+    ///
+    /// The point is not a weather report. Chat's biggest real use is working
+    /// through something with another person, and today Cobux answers
+    /// identically on 4.9 hours of sleep and 8.7. A reply that quietly accounts
+    /// for a short night in a conversation about a conflict is the thing nobody
+    /// would think to ask for and everybody would feel.
+    ///
+    /// Sent LIVE and ephemeral -- never written into an entry, never persisted,
+    /// never in a backup. `HealthContextService`'s own ruling is that health
+    /// data is never uploaded and never exported; this respects that by sending
+    /// a sentence about right now rather than storing a record. Gated behind the
+    /// health toggle that already exists, so it adds no new setting.
+    private static func ambientLine() -> String {
+        var parts: [String] = []
+        if HealthContextService.isEnabled, let line = HealthContextService.lastKnownSummary {
+            parts.append(line)
+        }
+        if let ambient = AmbientContext.cached() {
+            if let temperature = ambient.temperatureF { parts.append("\(temperature)°F outside") }
+            if let condition = ambient.condition { parts.append(condition.lowercased()) }
+        }
+        guard !parts.isEmpty else { return "" }
+        return "\n\nContext about the user right now, if any of it is relevant to what they "
+            + "asked -- mention it only if it genuinely bears on your answer, never as small "
+            + "talk: " + parts.joined(separator: "; ") + "."
     }
 
     /// Which of a reply's declared source titles are worth showing as chips.

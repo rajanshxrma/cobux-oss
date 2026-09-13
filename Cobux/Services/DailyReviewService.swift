@@ -16,10 +16,11 @@ enum DailyReviewService {
         dueQuestions(among: books.allQuizQuestions, now: now)
     }
 
-    /// The same filter against a question list a caller has already gathered.
-    /// `QuizHomeView` builds four different pools off one library traversal, so
-    /// it needs to hand each pool builder the questions rather than the books —
-    /// see `allQuizQuestions` for why that traversal is worth doing exactly once.
+    /// The same filter against a question list a caller has already gathered,
+    /// so a caller building several pools pays for `allQuizQuestions` once —
+    /// see its doc comment for why that traversal is worth doing exactly once.
+    /// (`QuizHomeProbe` restates this filter as a predicate:
+    /// `isSuspended == false && chapter != nil && dueDate <= now`.)
     static func dueQuestions(among questions: [QuizQuestion], now: Date = .now) -> [QuizQuestion] {
         questions.filter { question in
             guard !question.isSuspended, let due = question.dueDate else { return false }
@@ -48,10 +49,12 @@ extension Collection where Element == Book {
     /// expensive: it faults each book's `chapters` relationship and then each
     /// chapter's `quizQuestions` relationship, so at this library's scale (26
     /// seed books, ~490 chapters) it is thousands of SwiftData faults per call.
-    /// Cheap enough once per screen, ruinous when a SwiftUI computed property
+    /// Cheap enough once per tap, ruinous when a SwiftUI computed property
     /// re-runs it on every access — which is exactly what `QuizHomeView` was
-    /// doing roughly twenty-five times per render before it was given a
-    /// single-pass snapshot to read from.
+    /// doing roughly twenty-five times per render, then once per render from
+    /// a single-pass snapshot, and now never: its counts are `COUNT`s read by
+    /// `QuizHomeProbe` off the main actor, and this traversal runs only when a
+    /// session is actually started.
     var allQuizQuestions: [QuizQuestion] {
         flatMap(\.chapters).flatMap(\.quizQuestions)
     }

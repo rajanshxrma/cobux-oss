@@ -34,6 +34,17 @@ extension View {
     /// content card. Uses `CobuxRadius.glassCard` (20pt), not `CobuxRadius.card` (14pt)
     /// — a flat 14pt card reads cramped once wrapped in real glass, which wants a
     /// softer, more continuous curve.
+    /// The designed TRANSLUCENT fallback variant the three Flow quote plates
+    /// asked for by comment ("worth tokenizing if this pattern recurs" -- it
+    /// recurred). On iOS 26 this is real Liquid Glass; below, it is exactly
+    /// the `.thinMaterial` those sites already shipped, so nothing changes on
+    /// older devices by even a pixel. Distinct from `cobuxGlassFloating`,
+    /// whose sub-26 fallback is deliberately FLAT -- these plates sit inside
+    /// content cards and need to stay see-through everywhere.
+    func cobuxGlassTranslucent<S: Shape>(shape: S) -> some View {
+        modifier(CobuxGlassTranslucentModifier(shape: shape))
+    }
+
     func cobuxGlassCard(tintColor: Color? = nil) -> some View {
         modifier(CobuxGlassFloatingModifier(shape: .rect(cornerRadius: CobuxRadius.glassCard, style: .continuous), tintColor: tintColor))
     }
@@ -83,6 +94,18 @@ struct CobuxGlassContainer<Content: View>: View {
             }
         } else {
             content()
+        }
+    }
+}
+
+private struct CobuxGlassTranslucentModifier<S: Shape>: ViewModifier {
+    let shape: S
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: shape)
+        } else {
+            content.background(.thinMaterial, in: shape)
         }
     }
 }

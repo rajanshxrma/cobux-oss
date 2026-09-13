@@ -8,9 +8,26 @@ struct WisdomGraphView: View {
     @Bindable var claudeService: ClaudeService
     @Binding var path: NavigationPath
     @Environment(\.modelContext) private var modelContext
+    /// For the "Open Settings" action on the API-key alert (`cobux://settings`).
+    @Environment(\.openURL) private var openURL
     @Query(sort: \Theme.name) private var themes: [Theme]
-    @Query private var highlights: [Highlight]
+    /// No `@Query private var highlights: [Highlight]` any more.
+    ///
+    /// It was the single largest unbounded read left in the app: all ~32,000
+    /// `Highlight` rows -- each carrying its full text and a 512-float
+    /// embedding blob -- materialised on the main actor before the Wisdom tab
+    /// could draw its first frame, and held resident for as long as the tab
+    /// stayed alive. Three of its four readers (`rebuildGraph`, `runTagMerge`,
+    /// `scopedHighlights`) run on a TAP and now fetch what they need then; the
+    /// fourth wanted one boolean, which is a `fetchCount` (see `WisdomProbe`).
     @Query private var books: [Book]
+    /// Stage one from `WisdomProbe`: whether anything in scope exists at all.
+    /// `nil` until the probe answers -- the Flow hero card is a claim about his
+    /// library, so it waits to be true rather than guessing.
+    @State private var hasAnyVisibleHighlight: Bool?
+    /// Stage two: highlight count per theme id. `nil` until it lands, and each
+    /// card shows a pending count in the meantime rather than a wrong one.
+    @State private var visibleCounts: [UUID: Int]?
     @AppStorage(BookSourceFilter.excludedKey) private var excludedRaw: String = ""
     @AppStorage(BookSourceFilter.includedKey) private var includedRaw: String = ""
     @State private var showingSourcePicker = false
@@ -43,15 +60,19 @@ struct WisdomGraphView: View {
     /// themes. Worse, the per-highlight `isVisible` helper called
     /// `excludedBookIDs` itself, so `effectiveExcludedIDs` (a full scan of every
     /// `Book`, faulting `contentProfileRaw` on each) ran once per highlight
-    /// rather than once per render. With this library's seed content — 26 books,
-    /// ~5,900 highlights, hundreds of themes — a single render of this screen
-    /// worked out to tens of millions of relationship faults, which is the
-    /// "switching tabs takes forever" report: the Wisdom tab was recomputing an
+    /// rather than once per render. With this library's seed content — 32,125
+    /// highlights across 156 seed books (scripts/check-corpus-scale.py, build
+    /// 52), hundreds of themes — a single render of this screen worked out to
+    /// hundreds of millions of relationship faults, which is the "switching
+    /// tabs takes forever" report: the Wisdom tab was recomputing an
     /// O(themes² × highlights × books) answer to a question with an O(themes +
     /// highlights) answer. Same numbers on screen, computed once.
     private struct Scope {
         var excludedBookIDs: Set<UUID> = []
-        var hasAnyVisibleHighlight = false
+        /// `nil` until the probe answers. Three-valued on purpose: "there is
+        /// nothing to flow through" is a claim about his library, and a screen
+        /// that has not read anything yet is not entitled to make it.
+        var hasAnyVisibleHighlight: Bool?
         /// A theme survives if anything still in scope carries it. Themes that
         /// only ever came from a switched-off book disappear entirely; themes a
         /// reference text merely *shares* with the rest of the library stay,
@@ -59,35 +80,43 @@ struct WisdomGraphView: View {
         var themes: [Theme] = []
         /// `themes` narrowed by the search field.
         var filteredThemes: [Theme] = []
-        var visibleCounts: [UUID: Int] = [:]
+        var visibleCounts: [UUID: Int]?
 
-        func visibleHighlightCount(in theme: Theme) -> Int { visibleCounts[theme.id] ?? 0 }
+        /// `nil` while the count is still being worked out, so a card can show
+        /// a pending state instead of a confident "0 highlights" that is only
+        /// true because nothing has been read yet.
+        func visibleHighlightCount(in theme: Theme) -> Int? { visibleCounts?[theme.id] }
     }
 
+    /// Pure now: no store access at all, so calling it once per body evaluation
+    /// costs a dictionary lookup per theme instead of a to-many relationship
+    /// fault per theme.
+    ///
+    /// It used to read `theme.highlights` inside this loop — one SQL round trip
+    /// per theme, returning that theme's highlight rows in full — from a screen
+    /// that is `.searchable`, so every keystroke in the search field re-walked
+    /// the whole tag join on the main actor. The numbers are identical; only
+    /// where they come from changed (`WisdomProbe`).
     private func makeScope() -> Scope {
         var scope = Scope()
-        let excluded = excludedBookIDs
-        scope.excludedBookIDs = excluded
+        scope.excludedBookIDs = excludedBookIDs
+        scope.hasAnyVisibleHighlight = hasAnyVisibleHighlight
+        scope.visibleCounts = visibleCounts
 
-        if excluded.isEmpty {
-            // Nothing is filtered out, so no highlight needs visiting at all —
-            // the counts are the relationship counts and every theme survives.
-            scope.hasAnyVisibleHighlight = !highlights.isEmpty
-            scope.themes = themes
-            for theme in themes { scope.visibleCounts[theme.id] = theme.highlights.count }
+        if let counts = visibleCounts {
+            // `?? 1`, not `?? 0`: a theme the counts have never heard of is
+            // PENDING, not empty. That is what lets the previous counts stay on
+            // screen while a refresh runs -- a theme added since the last probe
+            // shows until its real number arrives, instead of the whole grid
+            // emptying because every id changed underneath it.
+            scope.themes = themes.filter { (counts[$0.id] ?? 1) > 0 }
         } else {
-            // `contains(where:)` rather than building and discarding a filtered
-            // array of every visible highlight just to ask whether one exists.
-            scope.hasAnyVisibleHighlight = highlights.contains {
-                BookSourceFilter.isVisible($0, excluding: excluded)
-            }
-            for theme in themes {
-                let visible = theme.highlights.reduce(into: 0) { total, highlight in
-                    if BookSourceFilter.isVisible(highlight, excluding: excluded) { total += 1 }
-                }
-                scope.visibleCounts[theme.id] = visible
-                if visible > 0 { scope.themes.append(theme) }
-            }
+            // Counts not in yet. Every theme is shown, which is exactly right
+            // for the ordinary library (nothing switched off, so nothing can be
+            // narrowed away) and is the honest answer everywhere else: a theme
+            // is not hidden until something has actually been read that says it
+            // should be.
+            scope.themes = themes
         }
 
         // Filters by theme name only — a reference textbook can contribute
@@ -100,22 +129,30 @@ struct WisdomGraphView: View {
         return scope
     }
 
-    /// Only `runTagMerge` needs the highlights themselves rather than a count,
-    /// and it runs on a tap, not on every render — so this stays a one-shot
-    /// computation instead of joining `Scope`. It still resolves
-    /// `excludedBookIDs` exactly once rather than once per highlight.
-    private var scopedHighlights: [Highlight] {
+    /// Every highlight, for the two operations that genuinely need the rows
+    /// rather than a count. Both run on a TAP — never on a render — so this is
+    /// a one-shot fetch at the moment of use instead of a table held resident
+    /// for the life of the screen.
+    private func allHighlights() -> [Highlight] {
+        (try? modelContext.fetch(FetchDescriptor<Highlight>())) ?? []
+    }
+
+    /// `allHighlights()` narrowed to the books currently switched on. Only
+    /// `runTagMerge` reads it, and it resolves `excludedBookIDs` exactly once
+    /// rather than once per highlight.
+    private func scopedHighlights() -> [Highlight] {
+        let all = allHighlights()
         let excluded = excludedBookIDs
-        guard !excluded.isEmpty else { return highlights }
-        return highlights.filter { BookSourceFilter.isVisible($0, excluding: excluded) }
+        guard !excluded.isEmpty else { return all }
+        return all.filter { BookSourceFilter.isVisible($0, excluding: excluded) }
     }
 
     var body: some View {
         NavigationStack(path: $path) {
             if SeedingStatus.shared.isSeeding {
                 // Same seed-merge guard as `BookDetailView`/`QuizHomeView` --
-                // `Scope` faults `Theme.highlights` synchronously while building,
-                // which is the confirmed Build-5 crash class if it lands mid
+                // `WisdomProbe` faults `Theme.highlights` while building, which
+                // is the confirmed Build-5 crash class if it lands mid
                 // seed/upgrade merge. Missing here until now; a user swiping to
                 // Wisdom during a merge could hit the same crash every other
                 // launch-adjacent screen already guards against.
@@ -124,8 +161,66 @@ struct WisdomGraphView: View {
                     .navigationTitle("Wisdom Graph")
             } else {
                 graphContent(makeScope())
+                    // Keyed on the seed flag AND the book filter, so the counts
+                    // follow a book being switched off the way the old
+                    // synchronous recompute did, and re-run the moment a merge
+                    // finishes rather than during one.
+                    .task(id: probeKey) { await loadCounts() }
             }
         }
+    }
+
+    /// What the probe's answer depends on: which books are in scope, and what
+    /// the theme table currently holds.
+    ///
+    /// The newest `dateGenerated` and not just `themes.count`, because
+    /// `WisdomGraphService.buildGraph` WIPES every `Theme` row and writes fresh
+    /// ones -- so a rebuild that happens to land on the same number of themes
+    /// would leave this key unchanged while every id in `visibleCounts` had
+    /// just been invalidated, and the grid would sit on pending counts forever.
+    /// `buildGraph` stamps each new theme `.now`, so this always moves.
+    ///
+    /// O(themes) per body evaluation and nothing more -- a few hundred stored
+    /// `Date` reads on objects the `@Query` has already materialised. No
+    /// relationship is touched, which is the whole point.
+    private var probeKey: String {
+        let newest = themes.map(\.dateGenerated).max() ?? .distantPast
+        return "\(excludedRaw)|\(includedRaw)|\(themes.count)|\(newest.timeIntervalSince1970)|\(SeedingStatus.shared.isSeeding)"
+    }
+
+    /// Two publishes, cheapest first — `DiagnosticsView.load()`'s shape, for
+    /// the same reason it has it: a screen that is drawn but has nothing to say
+    /// has not opened, and the cheap half of what it has to say must not wait
+    /// behind the expensive half.
+    ///
+    /// `@MainActor` explicitly, the way `DiagnosticsView.load` and
+    /// `JournalHighlightCard.buildDeck` are: this assigns `@State`, and a bare
+    /// `async` method makes no promise about which actor it resumes on
+    /// (SE-0338). The probe's own methods are isolated to its `@ModelActor`, so
+    /// awaiting them hops off main and only `Sendable` values come back — no
+    /// `@Model` object and no `ModelContext` crosses.
+    @MainActor
+    private func loadCounts() async {
+        // NOT cleared first. Clearing made the grid re-flow on every refresh:
+        // with no counts every theme is shown, and when they land the ones
+        // with nothing in them disappear -- so the screen visibly changed a
+        // beat after it drew, on entry AND on every re-entry. Rajan, on the
+        // shipped build: "the wisdom section entries take a little bit of
+        // second to load now not right away!!!!"
+        //
+        // The reason it cleared was real but is handled better below: a
+        // rebuild replaces every theme id, so a stale dictionary would filter
+        // every theme away and empty the grid. `makeScope` now treats an id it
+        // has never seen as PENDING rather than empty, so a stale dictionary
+        // can only ever show too much, never too little -- and the last good
+        // counts can stay on screen while the new ones are fetched.
+        guard !SeedingStatus.shared.isSeeding else { return }
+        let excluded = excludedBookIDs
+        let probe = WisdomProbe(modelContainer: modelContext.container)
+        let has = await probe.hasAnyVisibleHighlight(excluding: excluded)
+        let counts = await probe.visibleCounts(excluding: excluded)
+        hasAnyVisibleHighlight = has
+        visibleCounts = counts
     }
 
     @ViewBuilder
@@ -135,7 +230,12 @@ struct WisdomGraphView: View {
                     // Flow lives here rather than as a 6th tab — five tabs is
                     // already the ergonomic ceiling, and Wisdom is the
                     // browse-your-library tab Flow is the moving version of.
-                    if scope.hasAnyVisibleHighlight {
+                    // `== true`, not a bare `if`: the probe's answer is
+                    // three-valued. Offering an entry into Flow before anything
+                    // has been read would be a claim about his library made on
+                    // a guess, and yanking it back a frame later is worse than
+                    // showing it a beat late.
+                    if scope.hasAnyVisibleHighlight == true {
                         flowHeroCard
                     }
 
@@ -184,7 +284,16 @@ struct WisdomGraphView: View {
                         }
                 }
             }
-            .onAppear {
+            // Behind the frame, not in front of it. This was `.onAppear`, and
+            // under the UIKit tab shell `.onAppear` re-fires on EVERY switch to
+            // this tab -- so a blocking keychain `SecItemCopyMatching` sat in
+            // the same frame as every tap on Wisdom. The key is only read by
+            // the tag-merge tap; one `Task.yield()` puts the read on the turn
+            // after the swap, the same fix `ChatView`'s launch `.task`
+            // documents. `.task` shares `.onAppear`'s trigger, so a key added
+            // or removed in Settings is still reflected on the way back.
+            .task {
+                await Task.yield()
                 claudeService.apiKey = KeychainManager.load(key: KeychainManager.anthropicAPIKey) ?? ""
             }
             .toolbar {
@@ -245,9 +354,13 @@ struct WisdomGraphView: View {
                 Text(mergeResultMessage ?? "")
             }
             .alert("API Key Required", isPresented: $showNoAPIKeyAlert) {
-                Button("OK", role: .cancel) { }
+                // A route, not a direction -- see `MoreRoute.settings`.
+                Button("Open Settings") {
+                    if let url = URL(string: "cobux://settings") { openURL(url) }
+                }
+                Button("Not Now", role: .cancel) { }
             } message: {
-                Text("Add your Anthropic API key in Settings to use AI tag merging. The free rebuild option doesn't need one.")
+                Text("AI tag merging runs on Claude with your own Anthropic API key. Add it under More → Settings. The free rebuild option doesn't need one.")
             }
     }
 
@@ -259,6 +372,12 @@ struct WisdomGraphView: View {
     /// same alert `runTagMerge` already has rather than adding a second one.
     private func rebuildGraph() {
         do {
+            // Fetched at the tap. Rebuilding IS a whole-library operation --
+            // it wipes and repopulates every `Theme` row from every highlight's
+            // tags -- so this read is irreducible; what changed is that it now
+            // happens when someone asks for a rebuild rather than every time
+            // the tab is opened.
+            let highlights = allHighlights()
             try withAnimation(.easeInOut(duration: 0.25)) {
                 try WisdomGraphService.buildGraph(highlights: highlights, modelContext: modelContext)
             }
@@ -270,18 +389,23 @@ struct WisdomGraphView: View {
 
     private func runTagMerge() {
         isMerging = true
+        // Both reads happen at the tap, on the main actor, before anything is
+        // handed to the async work below -- `@Model` objects never cross an
+        // actor boundary here.
+        let scoped = scopedHighlights()
+        let everything = allHighlights()
         Task {
             do {
                 // Scoped, unlike `buildGraph` above: this one can be a real
                 // paid call priced on the tag list it's handed, and there's no
                 // sense paying to tidy up tags from books that are switched
                 // off and will never be displayed.
-                let (mapping, madeAPICall, usedLocalAI) = try await WisdomGraphService.mergeSimilarTags(highlights: scopedHighlights, claudeService: claudeService)
+                let (mapping, madeAPICall, usedLocalAI) = try await WisdomGraphService.mergeSimilarTags(highlights: scoped, claudeService: claudeService)
                 await MainActor.run {
                     isMerging = false
                     do {
                         try withAnimation(.easeInOut(duration: 0.25)) {
-                            try WisdomGraphService.buildGraph(highlights: highlights, modelContext: modelContext)
+                            try WisdomGraphService.buildGraph(highlights: everything, modelContext: modelContext)
                         }
                     } catch {
                         // Distinct message from the merge-failure `catch` below --
@@ -337,17 +461,17 @@ struct WisdomGraphView: View {
         .padding(.bottom, 40)
     }
 
+    /// The last hand-rolled empty state on this screen -- the two above it
+    /// already used the shared component, and this one sat between them with a
+    /// grey glyph and a `.subheadline` where a title belongs. Same shape as
+    /// the journal feed's own no-matches state now.
     private var noSearchResultsState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 40))
-                .foregroundStyle(.secondary)
-            Text("No themes match \"\(searchText)\"")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
+        CobuxEmptyStateView(
+            icon: "magnifyingglass",
+            title: "No matches",
+            message: "No theme in your graph mentions \"\(searchText)\". Try a shorter word, or clear the search to see them all."
+        )
         .frame(maxWidth: .infinity)
-        .padding(.top, 60)
         .padding(.horizontal)
     }
 
@@ -411,8 +535,10 @@ struct WisdomGraphView: View {
 private struct ThemeCard: View {
     let theme: Theme
     /// Passed in rather than read off `theme.highlights`, so the count matches
-    /// the list you actually get when you tap through once books are scoped.
-    let highlightCount: Int
+    /// the list you actually get when you tap through once books are scoped —
+    /// and so a grid of hundreds of these costs no relationship faults at all.
+    /// `nil` means the count has not landed yet.
+    let highlightCount: Int?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -428,12 +554,17 @@ private struct ThemeCard: View {
 
             Spacer(minLength: 0)
 
-            Text("\(highlightCount) highlight\(highlightCount == 1 ? "" : "s")")
+            // The badge is drawn at its final size either way, so the card does
+            // not resize when the number arrives. An em space, not a spinner: a
+            // grid of two hundred spinners is a busier screen than the one this
+            // is meant to make calm.
+            Text(highlightCount.map { "\($0) highlight\($0 == 1 ? "" : "s")" } ?? "\u{2003}")
                 .font(.caption2)
                 .fontWeight(.medium)
+                .monospacedDigit()
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
-                .background(Color.cobuxAccent.opacity(0.15))
+                .background(Color.cobuxAccent.opacity(highlightCount == nil ? 0.07 : 0.15))
                 .foregroundStyle(Color.cobuxAccent)
                 .clipShape(Capsule())
         }
@@ -444,39 +575,250 @@ private struct ThemeCard: View {
     }
 }
 
+/// Reads the tag join off the main actor, in two passes: the one boolean the
+/// Flow hero card needs, then the per-theme counts.
+///
+/// This exists because the question "how many highlights carry this theme" has
+/// no `COUNT` that answers it — `Theme.highlights` is a many-to-many, and the
+/// join is the only place the answer lives. The old code asked it from inside
+/// `body`, once per theme, on a `.searchable` screen. The work is the same; it
+/// no longer happens between a tap on the Wisdom tab and its first frame.
+@ModelActor
+actor WisdomProbe {
+    /// Whether anything Flow could draw from exists. Every branch is a `COUNT`
+    /// — no rows read, no objects registered — and the loop runs over the
+    /// EXCLUDED books (normally none, at most a handful of reference texts),
+    /// never over the library. A highlight belongs to at most one book, so the
+    /// subtraction is exact rather than an estimate.
+    func hasAnyVisibleHighlight(excluding excludedBookIDs: Set<UUID>) -> Bool {
+        var visible = count(FetchDescriptor<Highlight>())
+        for bookID in excludedBookIDs {
+            visible -= count(FetchDescriptor<Highlight>(
+                predicate: #Predicate<Highlight> { $0.book?.id == bookID }))
+        }
+        return visible > 0
+    }
+
+    /// Highlights per theme, narrowed to the books currently switched on.
+    ///
+    /// One fetch per excluded book to learn which highlight ids are out of
+    /// scope, then one query per theme against the tag join -- a `COUNT`
+    /// when nothing is excluded, an id-only fetch when something is. It used
+    /// to read `theme.highlights` for this, which materialises the whole
+    /// relationship, and `.reduce` over it then faulted every row -- text,
+    /// tags and the 2 KB embedding vector -- to read one `id` each. The
+    /// `themes.contains` predicate asks the store the same question without
+    /// registering a single highlight. `propertiesToFetch` on both id passes
+    /// keeps them to the id column.
+    func visibleCounts(excluding excludedBookIDs: Set<UUID>) -> [UUID: Int] {
+        var excludedHighlightIDs: Set<UUID> = []
+        for bookID in excludedBookIDs {
+            var descriptor = FetchDescriptor<Highlight>(
+                predicate: #Predicate<Highlight> { $0.book?.id == bookID })
+            descriptor.propertiesToFetch = [\.id]
+            for highlight in (try? modelContext.fetch(descriptor)) ?? [] {
+                excludedHighlightIDs.insert(highlight.id)
+            }
+        }
+
+        var counts: [UUID: Int] = [:]
+        for theme in (try? modelContext.fetch(FetchDescriptor<Theme>())) ?? [] {
+            let name = theme.name
+            var inTheme = FetchDescriptor<Highlight>(
+                predicate: #Predicate<Highlight> { $0.themes.contains { $0.name == name } })
+            guard !excludedHighlightIDs.isEmpty else {
+                counts[theme.id] = count(inTheme)
+                continue
+            }
+            inTheme.propertiesToFetch = [\.id]
+            counts[theme.id] = ((try? modelContext.fetch(inTheme)) ?? []).reduce(into: 0) { total, highlight in
+                if !excludedHighlightIDs.contains(highlight.id) { total += 1 }
+            }
+        }
+        return counts
+    }
+
+    /// One theme's lines as values, for `WisdomThemeDetailView`.
+    ///
+    /// A single fetch: predicate on the theme NAME (stable across a graph
+    /// rebuild, where ids are not -- the same reason the detail view resolves
+    /// its theme by name), sorted by `dateAdded` in the store rather than in
+    /// memory, `book` prefetched so the title read below is not a query per
+    /// row, and `embeddingData` left out of the columns -- the one thing a
+    /// citation card never shows. Should SwiftData need the rest of a
+    /// partially fetched row to follow `book`, it faults it here, on this
+    /// executor, never on the main actor.
+    ///
+    /// The book filter is `BookSourceFilter.isVisible`'s rule applied to the
+    /// snapshot: a line with no book is visible, a line whose book is
+    /// switched off is not. `totalCount` is the unfiltered size, which is
+    /// what lets the detail tell an empty theme from a switched-off one.
+    func themeRows(named name: String, excluding excludedBookIDs: Set<UUID>) -> WisdomThemeRows {
+        var descriptor = FetchDescriptor<Highlight>(
+            predicate: #Predicate<Highlight> { $0.themes.contains { $0.name == name } },
+            sortBy: [SortDescriptor(\Highlight.dateAdded, order: .reverse)])
+        descriptor.propertiesToFetch = [\.id, \.text, \.chapter, \.tags, \.dateAdded]
+        descriptor.relationshipKeyPathsForPrefetching = [\.book]
+        let all = (try? modelContext.fetch(descriptor)) ?? []
+
+        var visible: [WisdomThemeRow] = []
+        visible.reserveCapacity(all.count)
+        for highlight in all {
+            let book = highlight.book
+            if let book, excludedBookIDs.contains(book.id) { continue }
+            visible.append(WisdomThemeRow(
+                id: highlight.id,
+                text: highlight.text,
+                chapter: highlight.chapter,
+                tags: highlight.tags,
+                bookID: book?.id,
+                bookTitle: book?.title))
+        }
+        return WisdomThemeRows(totalCount: all.count, visible: visible)
+    }
+
+    private func count<T: PersistentModel>(_ descriptor: FetchDescriptor<T>) -> Int {
+        (try? modelContext.fetchCount(descriptor)) ?? 0
+    }
+}
+
 struct WisdomThemeDetailView: View {
-    let theme: Theme
-    let allThemes: [Theme]
+    /// THE CRASH ON AMAL'S PHONE, and why this view holds no model objects.
+    ///
+    /// Build 49, iPhone 13 Pro, 4 Sep: `EXC_BREAKPOINT` in `body`, frame 4
+    /// `Theme.relatedThemeNames.getter`, frame 5 `visibleRelatedNames`. The
+    /// view held `let theme: Theme` and `let allThemes: [Theme]` -- live
+    /// `@Model` references -- for as long as it was pushed. `WisdomGraphService`
+    /// rebuilds the graph by DELETING every Theme row and inserting fresh ones
+    /// (`modelContext.delete(theme)`), so after any rebuild every one of those
+    /// references pointed at a row that no longer existed, and the next body
+    /// pass read a persisted property off an invalidated model. That is the
+    /// Swift runtime trap, not a recoverable error. The new tab shell keeps
+    /// every tab's view tree alive across tab switches, which made a pushed
+    /// detail surviving a rebuild the ordinary case rather than a rare one.
+    /// Three more terminations on build 56, same device, carried no log; this
+    /// is the only crash class this screen has, and the fix removes it whole.
+    ///
+    /// So: the pushed value is used ONLY to read the theme's name at init.
+    /// Everything the body needs comes back out of the store through
+    /// `@Query`, which re-fetches on every store change and never hands out an
+    /// invalidated instance. The theme is resolved BY NAME rather than by id
+    /// on purpose: a rebuild recreates the same theme under a new UUID, so a
+    /// name lookup keeps the screen working straight through the rebuild,
+    /// where an id lookup would have gone blank. Themes are unique by name --
+    /// the merge and the rebuild both key on it.
+    private let themeName: String
     /// Carried down rather than re-derived from `@AppStorage`, so this screen
     /// and the card that pushed it can never disagree about what's in scope.
     let excludedBookIDs: Set<UUID>
 
-    private var visibleHighlights: [Highlight] {
-        excludedBookIDs.isEmpty
-            ? theme.highlights
-            : theme.highlights.filter { BookSourceFilter.isVisible($0, excluding: excludedBookIDs) }
+    @Query private var liveThemes: [Theme]
+    @Query(sort: \Theme.name) private var liveAllThemes: [Theme]
+    /// For the probe's container only; no fetch happens on this context here.
+    @Environment(\.modelContext) private var modelContext
+
+    init(theme: Theme, allThemes: [Theme], excludedBookIDs: Set<UUID>) {
+        // `liveAllThemes` is accepted so the two call sites do not change; it is
+        // deliberately not stored. A stale list of models is the same defect
+        // as a stale model.
+        let name = theme.name
+        self.themeName = name
+        self.excludedBookIDs = excludedBookIDs
+        _liveThemes = Query(filter: #Predicate<Theme> { $0.name == name })
     }
+
+    /// The theme as the store knows it right now, or nil if a rebuild has not
+    /// yet produced its successor. Nil renders a quiet notice, never a trap.
+    private var liveTheme: Theme? { liveThemes.first }
+
+    /// The theme's lines as VALUES, loaded off the main actor -- `nil` until
+    /// the first load lands.
+    ///
+    /// This screen has been through three shapes, and the doc comment above
+    /// says why the first two were wrong: live `@Model` references held across
+    /// a graph rebuild trap in `body`. This third shape keeps that invariant
+    /// exactly -- the theme is still resolved through `liveThemes` by name and
+    /// nothing here holds a `Theme` or a `Highlight` -- and fixes what the
+    /// second shape still cost:
+    ///
+    ///   * `prefaultBookTitles()` walked the ENTIRE `theme.highlights`
+    ///     relationship on the main actor from a synchronous `.task`,
+    ///     faulting every row -- text, tags, and the 2 KB embedding vector
+    ///     each -- for a theme this file says can hold thousands of lines.
+    ///   * `visibleHighlights()` ran in `body`: the same to-many fault plus a
+    ///     full sort, on every evaluation.
+    ///   * The empty-state branch faulted the relationship a second time.
+    ///
+    /// Now `WisdomProbe.themeRows(named:excluding:)` does one fetch on its own
+    /// executor -- predicate on the theme name, sorted by `dateAdded` in the
+    /// store, `book` prefetched, `embeddingData` left out -- and returns plain
+    /// `WisdomThemeRow` values: id, text, chapter, tags, the book's id and
+    /// title. Values cannot be invalidated by a rebuild or a deletion; a stale
+    /// one reads as slightly old text, never as a trap. The book link carries
+    /// the book's UUID and resolves the row only when it is opened
+    /// (`WisdomBookDestination`), so no `Book` is held either.
+    ///
+    /// `nil` is drawn as a quiet progress indicator, not as an empty state --
+    /// defect 1 in the comment above was exactly a `nil` collapsed to `[]`
+    /// and shown as "Its books are switched off" on every push.
+    @State private var rows: WisdomThemeRows?
+
+    /// Bumped on every store save so the rows follow the library the way the
+    /// live relationship did: delete a line from Library, come back, and it is
+    /// gone here too. Folded into the `.task(id:)` key rather than firing its
+    /// own `Task`, so reloads are serialised and a cancelled one never lands
+    /// on top of a newer one.
+    @State private var storeGeneration = 0
 
     /// A related theme built entirely out of switched-off books is dropped
     /// rather than shown greyed out — it isn't unavailable, it doesn't apply.
     private var visibleRelatedNames: [String] {
-        guard !excludedBookIDs.isEmpty else { return theme.relatedThemeNames }
-        return theme.relatedThemeNames.filter { name in
-            allThemes.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+        let related = liveTheme?.relatedThemeNames ?? []
+        guard !excludedBookIDs.isEmpty else { return related }
+        return related.filter { name in
+            liveAllThemes.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
         }
     }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                if visibleHighlights.isEmpty {
-                    Text("No highlights in this theme.")
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 24)
-                } else {
-                    ForEach(visibleHighlights.sorted(by: { $0.dateAdded > $1.dateAdded })) { highlight in
-                        HighlightCitationCard(highlight: highlight)
+            // Lazy, like every other long list in this app (`BookDetailView`'s
+            // two tabs, Library's grid). A plain `VStack` builds every card up
+            // front, so a broad theme constructed thousands of citation cards
+            // before the first frame could commit.
+            LazyVStack(alignment: .leading, spacing: 16) {
+                if let rows {
+                    if rows.visible.isEmpty {
+                        // Two different situations used to wear the same three
+                        // words. A theme whose books are all switched off is
+                        // not a theme with nothing in it -- the graph one
+                        // screen up already draws that distinction, and the
+                        // fix is a switch rather than a rebuild, so the copy
+                        // must not confuse them.
+                        if rows.totalCount == 0 {
+                            CobuxEmptyStateView(
+                                icon: "point.3.connected.trianglepath.dotted",
+                                title: "Nothing under this theme",
+                                message: "The highlights this theme was built from aren't in your library any more. Rebuilding the graph redraws it from what's there now."
+                            )
+                        } else {
+                            CobuxEmptyStateView(
+                                icon: "line.3.horizontal.decrease.circle",
+                                title: "Its books are switched off",
+                                message: "Every book behind this theme is currently switched off for Flow and the Wisdom Graph, so none of its lines can show here."
+                            )
+                        }
+                    } else {
+                        ForEach(rows.visible) { row in
+                            HighlightCitationCard(row: row)
+                        }
                     }
+                } else {
+                    // First load in flight. Says nothing about the library
+                    // until it knows something about it.
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 40)
                 }
 
                 if !visibleRelatedNames.isEmpty {
@@ -487,7 +829,7 @@ struct WisdomThemeDetailView: View {
 
                         RelatedThemeChips(
                             names: visibleRelatedNames,
-                            allThemes: allThemes,
+                            allThemes: liveAllThemes,
                             excludedBookIDs: excludedBookIDs
                         )
                     }
@@ -495,43 +837,96 @@ struct WisdomThemeDetailView: View {
             }
             .padding()
         }
-        .navigationTitle(theme.name)
+        .navigationTitle(themeName)
         .navigationBarTitleDisplayMode(.inline)
+        // Keyed on the NAME, which is stable across a rebuild, not on the live
+        // row's id -- that would mint a fresh key on every pass while the theme
+        // is absent and re-fire this task for nothing. The filter is in the
+        // key so switching a book off re-scopes the list; the store generation
+        // so a deletion elsewhere reaches it.
+        .task(id: "\(themeName)|\(excludedBookIDs.sorted().map(\.uuidString).joined())|\(storeGeneration)") {
+            await loadRows()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)
+                    .receive(on: DispatchQueue.main)) { _ in
+            // Not during a seed, which saves in small batches hundreds of
+            // times -- `MoreView` makes the same exception. The rows are
+            // re-read when the merge finishes and the key next moves.
+            guard !SeedingStatus.shared.isSeeding else { return }
+            storeGeneration += 1
+        }
+    }
+
+    /// `@MainActor` explicitly, the way `WisdomGraphView.loadCounts` is: this
+    /// assigns `@State`, and a bare `async` method makes no promise about
+    /// which actor it resumes on (SE-0338). The probe's method is isolated to
+    /// its `@ModelActor`, so the await hops off main and only `Sendable`
+    /// values come back.
+    @MainActor
+    private func loadRows() async {
+        // Same seed-merge guard as the graph one screen up: `WisdomProbe`
+        // reads the tag join, which must never race the background merge.
+        guard !SeedingStatus.shared.isSeeding else { return }
+        let probe = WisdomProbe(modelContainer: modelContext.container)
+        let loaded = await probe.themeRows(named: themeName, excluding: excludedBookIDs)
+        guard !Task.isCancelled else { return }
+        rows = loaded
     }
 }
 
+/// One line under a theme, as a value. Everything the citation card draws,
+/// and nothing that can be invalidated.
+struct WisdomThemeRow: Identifiable, Sendable, Equatable {
+    let id: UUID
+    let text: String
+    let chapter: String?
+    let tags: [String]
+    /// The owning book, by id only -- resolved to a row when the link is
+    /// opened, never held here.
+    let bookID: UUID?
+    let bookTitle: String?
+}
+
+/// A theme's lines, scoped to the books switched on, plus how many the theme
+/// holds in all -- the second number is what tells "nothing under this theme"
+/// apart from "its books are switched off".
+struct WisdomThemeRows: Sendable, Equatable {
+    let totalCount: Int
+    let visible: [WisdomThemeRow]
+}
+
 private struct HighlightCitationCard: View {
-    let highlight: Highlight
+    let row: WisdomThemeRow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("\"\(highlight.text)\"")
+            Text("\"\(row.text)\"")
                 .font(.body)
                 .italic()
 
-            if let book = highlight.book {
-                NavigationLink(destination: BookDetailView(book: book)) {
+            if let bookID = row.bookID, let bookTitle = row.bookTitle {
+                NavigationLink(destination: WisdomBookDestination(bookID: bookID)) {
                     HStack(spacing: 4) {
                         Image(systemName: "book.closed.fill")
                             .font(.caption2)
-                        Text(book.title)
-                        if let chapter = highlight.chapter, !chapter.isEmpty {
+                        Text(bookTitle)
+                        if let chapter = row.chapter, !chapter.isEmpty {
                             Text("· \(chapter)")
                         }
                     }
                     .font(.caption)
                     .foregroundStyle(Color.cobuxAccent)
                 }
-            } else if let chapter = highlight.chapter, !chapter.isEmpty {
+            } else if let chapter = row.chapter, !chapter.isEmpty {
                 Text(chapter)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            if !highlight.tags.isEmpty {
+            if !row.tags.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack {
-                        ForEach(highlight.tags, id: \.self) { tag in
+                        ForEach(row.tags, id: \.self) { tag in
                             TagBadge(tag: tag)
                         }
                     }
@@ -540,6 +935,31 @@ private struct HighlightCitationCard: View {
         }
         .padding()
         .cobuxCard()
+    }
+}
+
+/// Resolves a book by id at the moment it is opened, through `@Query`, so the
+/// citation card above never holds a `Book`. The same reason the theme is
+/// resolved by name through `liveThemes`: a model held across a store change
+/// is the trap on Amal's phone. A book deleted between the card being drawn
+/// and the link being tapped renders a quiet notice, never a trap.
+private struct WisdomBookDestination: View {
+    @Query private var books: [Book]
+
+    init(bookID: UUID) {
+        _books = Query(filter: #Predicate<Book> { $0.id == bookID })
+    }
+
+    var body: some View {
+        if let book = books.first {
+            BookDetailView(book: book)
+        } else {
+            CobuxEmptyStateView(
+                icon: "book.closed",
+                title: "This book isn't here any more",
+                message: "It was removed from your library after this theme was drawn. Rebuilding the graph redraws it from what's there now."
+            )
+        }
     }
 }
 

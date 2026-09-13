@@ -20,6 +20,12 @@ import Foundation
 /// meant for that nor safely enumerable for cleanup.
 enum JournalDraftStore {
     struct Draft: Codable {
+
+        /// Correspondence link carried through a crash -- a recovered
+        /// write-back keeps answering what it was answering. Optionals, so
+        /// old persisted drafts decode unchanged.
+        var answersEntryID: UUID?
+        var answersEntryDate: Date?
         var entryID: UUID?
         var title: String
         var text: String
@@ -41,12 +47,15 @@ enum JournalDraftStore {
     private static let writeInterval: TimeInterval = 2
     private static var lastWrite: [String: Date] = [:]
 
-    static func save(entryID: UUID?, title: String, text: String) {
+    static func save(entryID: UUID?, title: String, text: String,
+                     answersEntryID: UUID? = nil, answersEntryDate: Date? = nil) {
         let key = entryID?.uuidString ?? "new"
         if let last = lastWrite[key], Date.now.timeIntervalSince(last) < writeInterval { return }
         lastWrite[key] = .now
 
-        let draft = Draft(entryID: entryID, title: title, text: text, updated: .now)
+        var draft = Draft(entryID: entryID, title: title, text: text, updated: .now)
+        draft.answersEntryID = answersEntryID
+        draft.answersEntryDate = answersEntryDate
         guard let data = try? JSONEncoder().encode(draft) else { return }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try? data.write(to: fileURL(entryID: entryID), options: .atomic)

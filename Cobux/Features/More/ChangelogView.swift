@@ -14,7 +14,13 @@ struct ChangelogView: View {
             ForEach(entries) { entry in
                 Section {
                     ForEach(entry.changes, id: \.self) { change in
-                        Label(change, systemImage: "checkmark.circle.fill")
+                        // A sparkle, not a tick. A checkmark beside every
+                        // line read as a list of completed tasks -- the same
+                        // to-do vocabulary retired from the widget and the
+                        // app (`checklist:nothing-grades-the-user`) -- and
+                        // this is the first thing a tester reads. Same glyph
+                        // family as the What's New row that opens this.
+                        Label(change, systemImage: "sparkle")
                             .font(.subheadline)
                             .labelStyle(.titleAndIcon)
                             .foregroundStyle(.primary)

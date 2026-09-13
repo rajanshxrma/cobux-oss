@@ -77,8 +77,20 @@ final class NeuralVoiceStore {
     }
 
     /// Call at launch, off the critical path. Cheap and idempotent when already cached.
+    ///
+    /// Retries from `.unavailable`, not just `.notStarted`. The download is
+    /// Wi-Fi-only by design, so a user who first opened Cobux on cellular --
+    /// or with a flaky connection -- landed in `.unavailable`, which used to be
+    /// terminal for the whole app launch. They would keep hearing the robotic
+    /// system voice on Wi-Fi, forever, until they happened to fully relaunch.
+    /// "why cant we have the nice voice by defalut?" is partly this.
     func prepareIfNeeded() async {
-        guard state == .notStarted else { return }
+        switch state {
+        case .notStarted, .unavailable:
+            break
+        case .downloading, .ready:
+            return
+        }
         if isReady {
             state = .ready
             return

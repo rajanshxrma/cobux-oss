@@ -101,7 +101,7 @@ struct HighlightProvider: AppIntentTimelineProvider {
     /// lands here, and anchoring to "now" would let those reloads push the real
     /// rotation indefinitely into the future.
     func timeline(for configuration: SelectBookIntent, in context: Context) async -> Timeline<HighlightEntry> {
-        guard let entry = makeEntry(for: configuration, isSnapshot: false) else {
+        guard let entry = makeEntry(for: configuration, isSnapshot: false, family: context.family) else {
             // Nothing renderable yet — an empty library, or a container that
             // wouldn't open. Retry on the ordinary cadence rather than backing
             // off, so the widget fills itself in once content exists.
@@ -147,14 +147,40 @@ struct HighlightProvider: AppIntentTimelineProvider {
         return recommendations
     }
 
-    private func makeEntry(for configuration: SelectBookIntent, isSnapshot: Bool) -> HighlightEntry? {
+    /// Roughly what each family can show before `minimumScaleFactor` stops
+    /// rescuing it. Measured against the real layouts: systemSmall gives 8 lines
+    /// at footnote size in ~110pt of usable width. `nil` means no constraint --
+    /// large and the accessory families either fit anything or are inherently
+    /// one-line and truncate by design.
+    static func readableLimit(for family: WidgetFamily) -> Int? {
+        switch family {
+        case .systemSmall: 220
+        case .systemMedium: 420
+        default: nil
+        }
+    }
+
+    private func makeEntry(for configuration: SelectBookIntent, isSnapshot: Bool, family: WidgetFamily = .systemMedium) -> HighlightEntry? {
         guard let container = CobuxSchema.makeAppGroupContainer() else { return nil }
         let context = ModelContext(container)
         let scopeKey = configuration.scopeKey
 
-        guard let resolved = resolveHighlight(for: configuration, in: context, isSnapshot: isSnapshot),
+        guard let resolved = resolveHighlight(for: configuration, in: context, isSnapshot: isSnapshot, family: family),
               let book = resolved.highlight.book else { return nil }
         let highlight = resolved.highlight
+
+        // Pre-draw the NEXT quote while the store is open, so the cycle tap
+        // never has to open it (see `WidgetHighlightHistory.storeNext`). Not
+        // for snapshots: those never become what is showing.
+        if !isSnapshot,
+           let next = WidgetHighlightPool.randomHighlight(
+               in: context,
+               bookID: configuration.scopeBookID,
+               excluding: highlight.id,
+               maxLength: Self.readableLimit(for: family)
+           ), next.id != highlight.id {
+            WidgetHighlightHistory.storeNext(next.id, scope: scopeKey)
+        }
 
         // Chevron visibility is read AFTER the resolution above has settled
         // history, so it always describes the quote being returned here -- and
@@ -215,6 +241,7 @@ struct HighlightProvider: AppIntentTimelineProvider {
         for configuration: SelectBookIntent,
         in context: ModelContext,
         isSnapshot: Bool,
+        family: WidgetFamily = .systemMedium,
         now: Date = .now
     ) -> (highlight: Highlight, describesShownHighlight: Bool)? {
         let scopeKey = configuration.scopeKey
@@ -248,10 +275,18 @@ struct HighlightProvider: AppIntentTimelineProvider {
             return (held, true)
         }
 
+        // A widget cannot scroll -- WidgetKit has no scroll view at all -- so a
+        // quote longer than the family can render is simply cut off. His report:
+        // "some of the highlights in the iOS widget are not fully able to be
+        // read." Raising the line limits helped but could not fix it, because
+        // the real problem is CHOOSING a quote the space can never hold. The
+        // honest fix is to stop picking those for the small family; the same
+        // quote still appears on medium and large, where it fits.
         guard let picked = WidgetHighlightPool.randomHighlight(
             in: context,
             bookID: scopeBookID,
-            excluding: currentID
+            excluding: currentID,
+            maxLength: Self.readableLimit(for: family)
         ) else { return nil }
 
         guard !isSnapshot else { return (picked, false) }

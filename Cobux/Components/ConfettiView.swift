@@ -7,6 +7,11 @@ import SwiftUI
 /// stops rendering entirely so the timeline doesn't tick forever underneath
 /// a long-lived results screen. Purely decorative, so it's transparent to
 /// hit-testing and hidden from accessibility.
+///
+/// Reduce Motion is a hard gate (`CobuxMotion`): with it on, this renders
+/// nothing at all. 120 particles arcing across the whole screen for 2.5s is
+/// exactly the class of motion the setting exists to refuse, and the moment
+/// still lands -- the callers keep their `.sensoryFeedback(.success)`.
 struct ConfettiView: View {
     private struct Particle {
         let x: CGFloat          // horizontal start, 0...1 of width
@@ -35,10 +40,11 @@ struct ConfettiView: View {
 
     private let startDate = Date()
     @State private var finished = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
-            if !finished {
+            if !finished && !reduceMotion {
                 TimelineView(.animation) { timeline in
                     Canvas { canvasContext, size in
                         let elapsed = timeline.date.timeIntervalSince(startDate)

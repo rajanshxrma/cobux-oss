@@ -57,7 +57,7 @@ enum AutoBackupService {
     /// task against its OWN fresh `ModelContext`, never the caller's.
     @MainActor
     static func backupIfNeeded(modelContext: ModelContext) {
-        guard !SeedingStatus.shared.isSeeding, !StoreHealthStatus.shared.isDegraded else { return }
+        guard !SeedingStatus.shared.isSeeding, !StoreHealthStatus.shared.isDegraded else { return }  // retries: ContentView's onChange(of: seedingStatus.isSeeding)
         if let last = defaults.object(forKey: lastBackupDateKey) as? Date,
            Date.now.timeIntervalSince(last) < minimumInterval {
             return
@@ -108,6 +108,8 @@ enum AutoBackupService {
         let chatMessages = (try? context.fetch(FetchDescriptor<ChatMessage>())) ?? []
         let personalWritingEntries = (try? context.fetch(FetchDescriptor<PersonalWritingEntry>())) ?? []
         let quizAttempts = (try? context.fetch(FetchDescriptor<QuizAttempt>())) ?? []
+        let journalKeeps = (try? context.fetch(FetchDescriptor<JournalKeep>())) ?? []
+        let situations = (try? context.fetch(FetchDescriptor<SituationThread>())) ?? []
 
         // Never write an empty snapshot -- a degraded/in-memory store or a
         // launch-time race shouldn't ever get to overwrite real history with
@@ -120,6 +122,8 @@ enum AutoBackupService {
             chatMessages: chatMessages,
             personalWritingEntries: personalWritingEntries,
             quizAttempts: quizAttempts,
+            journalKeeps: journalKeeps,
+            situations: situations,
             attachmentPolicy: .sidecar
         ) else { return }
 
@@ -146,6 +150,12 @@ enum AutoBackupService {
             newEntryCount: personalWritingEntries.count, previousEntryCount: previousManifest?.personalWritingEntryCount
         )
 
+        // Not a render path and not a loop: `performBackup` writes ONE snapshot
+        // per run, on a detached off-main task, throttled to an interval. One
+        // formatter is built per backup, for one filename. Hoisting it would
+        // also put a shared `ISO8601DateFormatter` behind a background caller,
+        // which is the opposite of the condition `ChatView`'s pair documents.
+        // lint-ok: formatter-constructed-per-render -- once per backup run, off-main, for a single filename
         let stamp = ISO8601DateFormatter().string(from: .now).replacingOccurrences(of: ":", with: "-")
         let filename = "cobux-backup-\(stamp).json"
         let fileURL = backupsDir.appendingPathComponent(filename)
@@ -204,9 +214,17 @@ enum AutoBackupService {
         var pending = 0
         for entry in personalWritingEntries {
             for attachment in entry.attachments {
-                let sourceURL = JournalAttachmentStore.fileURL(for: attachment.id)
-                let destURL = attachmentsDir.appendingPathComponent(attachment.id.uuidString + ".jpg")
-                guard FileManager.default.fileExists(atPath: sourceURL.path) else { continue }
+                // Resolve by id, never by a hardcoded extension. This read
+                // `<id>.jpg` and nothing else, so a voice note failed the
+                // existence guard below and was skipped BEFORE the pending
+                // counter -- absent from every automatic snapshot while the
+                // manifest still reported success. An earlier fix corrected the
+                // manual export path and missed this one, which is the path that
+                // actually runs.
+                guard let sourceURL = JournalAttachmentStore.existingFileURL(for: attachment.id) else { continue }
+                let destURL = attachmentsDir.appendingPathComponent(
+                    attachment.id.uuidString + "." + sourceURL.pathExtension
+                )
                 guard !FileManager.default.fileExists(atPath: destURL.path) else { continue }
                 if copied >= maxAttachmentsPerRun {
                     pending += 1

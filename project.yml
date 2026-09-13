@@ -13,8 +13,8 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     TARGETED_DEVICE_FAMILY: "1"
-    MARKETING_VERSION: "2.5.22"
-    CURRENT_PROJECT_VERSION: "44"
+    MARKETING_VERSION: "3.2.0"
+    CURRENT_PROJECT_VERSION: "58"
     DEVELOPMENT_TEAM: "58Q76NHADF"
     CODE_SIGN_STYLE: "Automatic"
 
@@ -95,9 +95,10 @@ targets:
         type: folder
       # Same folder-reference treatment as SeedBooks, for the same reason -- a plain group
       # would flatten this to the bundle root instead of preserving the Figures/ subdirectory
-      # FigureImageLoader looks up by name. Empty right now (image extraction is blocked on
-      # Rajan's own Anthropic API key); ready to bundle real images the moment that unblocks,
-      # with zero further project.yml changes needed.
+      # FigureImageLoader looks up by name. This comment used to say the folder was
+      # "empty right now, blocked on Rajan's own Anthropic API key" -- that blocker
+      # cleared long ago and the note outlived it. 1,597 JPEGs plus the manifest are
+      # tracked here and seeded by SeedRunner.
       - path: Cobux/Resources/Figures
         type: folder
     info:
@@ -114,6 +115,8 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSMicrophoneUsageDescription: "Cobux uses your microphone in Voice Mode and Spoken Quiz so you can talk to your book wisdom hands-free."
+        NSContactsUsageDescription: "Cobux can add itself as a contact so a chat with yourself is named Cobux instead of your own name. It only ever writes that one contact, and never reads your address book."
+        NSLocationWhenInUseUsageDescription: "Cobux uses your approximate location to note the temperature and, when you're somewhere unusual, the city beside a journal entry's date. City-level only -- Cobux never stores your coordinates and never reads location in the background."
         NSSpeechRecognitionUsageDescription: "Cobux uses speech recognition to turn what you say into a question for Cobux AI or a graded quiz answer."
         NSFaceIDUsageDescription: "Cobux uses Face ID to keep your journal entries private."
         # Apple requires BOTH Health purpose strings the moment the HealthKit
@@ -143,6 +146,8 @@ targets:
       - target: CobuxWidgets
         embed: true
       - target: CobuxShareExtension
+        embed: true
+      - target: CobuxMessages
         embed: true
       - target: CobuxWatch
         embed: true
@@ -223,6 +228,126 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.rajansharma.Cobux.CobuxWidgets
         CODE_SIGN_ENTITLEMENTS: CobuxWidgets/CobuxWidgets.entitlements
         SKIP_INSTALL: YES
+
+  # Cobux inside the Messages app drawer. Reads NOTHING of any conversation --
+  # a Messages app extension is handed its own blank surface, which is exactly
+  # why this is the version that carries no privacy cost.
+  CobuxMessages:
+    type: app-extension.messages
+    platform: iOS
+    sources:
+      - path: CobuxMessages
+        excludes:
+          - "**/.DS_Store"
+      - path: Cobux/Models
+      - path: Cobux/Services/SpotlightIndexer.swift
+      - path: Cobux/Services/CrossProcessSync.swift
+      - path: Cobux/Services/CobuxSchema.swift
+      - path: Cobux/DesignSystem/CobuxColor.swift
+      # The rest of the design system. The Messages surface was the only place
+      # in the app rendering its own type scale, its own radii and raw system
+      # colours -- `swiftlint CobuxMessages` reported four errors against
+      # `no_raw_system_color` and `no_magic_corner_radius` before this, which is
+      # measurably what "it's out of the place, it's not beautiful" was. Every
+      # one of these is a pure value type or view modifier over
+      # SwiftUI/CoreGraphics: no model container, no assets, nothing an
+      # extension's memory ceiling minds.
+      - path: Cobux/DesignSystem/CobuxSpacing.swift
+      - path: Cobux/DesignSystem/CobuxRadius.swift
+      - path: Cobux/DesignSystem/CobuxTypography.swift
+      - path: Cobux/DesignSystem/View+CobuxControls.swift
+      - path: Cobux/DesignSystem/View+CobuxCard.swift
+      - path: Cobux/Extensions/Color+Hex.swift
+      - path: Cobux/Shared/JournalSessionStamp.swift
+      - path: Cobux/Shared/AmbientContext.swift
+      # Ask Cobux inside Messages (build 58). The MINIMAL set for one bare
+      # model turn, modelled on `AskCobuxIntent.perform()`: the key, the
+      # request, connectivity, spend, credit state, the diagnostic line. What
+      # is deliberately NOT here: SearchService / EmbeddingService /
+      # ChatPromptBuilder -- library-wide retrieval faults every highlight's
+      # 512-float vector (~72 MB measured) into a process on an extension's
+      # jetsam budget, where the kill reads as "Cobux crashes Messages".
+      # See docs/imessage-journaling.md §3.
+      - path: Cobux/Shared/CobuxDeepLink.swift
+      - path: Cobux/Shared/CobuxDeepLink+Messages.swift
+      - path: Cobux/Services/KeychainManager.swift
+      - path: Cobux/Services/AIService.swift
+      - path: Cobux/Services/ClaudeService.swift
+      - path: Cobux/Services/RetryPolicy.swift
+      - path: Cobux/Services/NetworkMonitor.swift
+      - path: Cobux/Services/UsageTracker.swift
+      - path: Cobux/Services/CreditStatusMonitor.swift
+      - path: Cobux/Services/DiagnosticLog.swift
+      # `CreditStatusMonitor.recordSuccess` constructs one to announce a
+      # restored key, which is the only reason it is here; it in turn reads
+      # `SeedingStatus.shared`.
+      - path: Cobux/Services/NotificationManager.swift
+      - path: Cobux/Services/SeedingStatus.swift
+      - path: Cobux/Services/PromptTemplates.swift
+    # `UsageTracker` (RateTable, CobuxModel) and `PromptTemplates`
+    # (CitationResolver) import it. Same form as the Cobux and CobuxWidgets
+    # targets; the package is UIKit/SwiftUI-free by design, so nothing heavy
+    # rides in with it.
+    dependencies:
+      - package: CobuxCore
+    info:
+      path: Generated/CobuxMessages-Info.plist
+      properties:
+        CFBundleDisplayName: "Cobux"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        # Named outright by App Store Connect's validator: "must contain the
+        # MSMessagesExtensionStoreIconName key. It may be missing if there's no
+        # large icon for your iMessage app in the iMessage extension asset
+        # catalog." Points at the .stickersiconset below.
+        MSMessagesExtensionStoreIconName: "iMessage App Icon"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.message-payload-provider
+          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).MessagesViewController"
+    settings:
+      # MUST be a child of the app's identifier. An iOS app extension's bundle id
+      # has to begin with the containing app's id plus a dot -- without this line
+      # XcodeGen derived `com.rajansharma.CobuxMessages`, a SIBLING, and Apple
+      # will never issue a profile for it no matter how it is registered.
+      PRODUCT_BUNDLE_IDENTIFIER: com.rajansharma.Cobux.CobuxMessages
+      # An iMessage extension needs its OWN icon set, and it is NOT the square
+      # app icon -- Apple requires 4:3 art at nine specific sizes. Uploading
+      # without it fails at App Store Connect validation, AFTER a successful
+      # archive and a successful codesign, with nine "Missing App Icon" errors.
+      ASSETCATALOG_COMPILER_APPICON_NAME: "iMessage App Icon"
+      # An extension's `Bundle.main` is the EXTENSION, not the app, so
+      # `Color("CobuxSurface")` and `Color.accentColor` resolve against
+      # `CobuxMessages/Assets.xcassets` and nothing else. The app's own
+      # catalogue cannot be added here -- it compiles to a 24 MB `Assets.car`
+      # (every seed book cover) and this is a memory-constrained extension --
+      # so the eight colour sets this surface uses are copied into the
+      # extension's catalogue, byte-identical to the app's. `check-app-icon.py`
+      # now fails the build if any copy drifts from the app's original.
+      #
+      # Without this line specifically, `Color.accentColor` fell back to system
+      # BLUE: the send arrow in the Messages drawer was iOS blue while every
+      # other accent in Cobux is violet, which is the single most visible
+      # reason that surface did not look like the app.
+      ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+      # Signing is inherited (Automatic) like every other target. It was briefly
+      # pinned to Manual/iPhone Distribution here, which broke the archive with
+      # "Embedded binary is not signed with the same certificate as the parent
+      # app" -- archive-time signing across the whole app is Apple Development,
+      # and only -exportArchive re-signs for distribution. The original "no
+      # profile for this bundle id" failure that prompted the override was
+      # really the SIBLING bundle id above, fixed on the line before this.
+
+    entitlements:
+      path: CobuxMessages/CobuxMessages.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.rajansharma.Cobux
+        # Same group as Cobux.entitlements, so the extension can read the API
+        # key the app stores (KeychainManager.sharedAccessGroup). XcodeGen
+        # regenerates the .entitlements file from these properties, which is
+        # why it is declared here and not only in the file.
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.rajansharma.Cobux.shared
 
   CobuxShareExtension:
     type: app-extension

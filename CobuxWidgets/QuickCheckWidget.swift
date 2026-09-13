@@ -48,7 +48,7 @@ enum QuickCheckState {
         // that can hold thousands of questions, and an unsorted limited
         // fetch would take an arbitrary 500 rows — on exactly the heavy
         // library the cap exists for, genuinely due cards could fall outside
-        // it and the widget would show "All clear" while cards are due.
+        // it and the widget would show "Nothing due" while cards are due.
         var descriptor = FetchDescriptor<QuizQuestion>(
             predicate: #Predicate { $0.isSuspended == false && $0.dueDate != nil },
             sortBy: [SortDescriptor(\.dueDate, order: .forward)]
@@ -175,7 +175,7 @@ struct QuickCheckWidgetView: View {
             if entry.hasCard {
                 cardBody
             } else {
-                allClearBody
+                nothingDueBody
             }
         }
         .containerBackground(for: .widget) {
@@ -217,12 +217,21 @@ struct QuickCheckWidgetView: View {
                     .foregroundStyle(accent)
                     .lineLimit(2)
 
+                // `.contentShape(Rectangle())` on each label below: a
+                // `.bordered` button DRAWS a full-width capsule, so these look
+                // like wide targets, but SwiftUI hit-tests the LABEL's drawn
+                // content -- the icon and the word -- and a widget tap that
+                // lands on no button launches the app. So aiming at the middle
+                // of a visibly-wide "Got it" button opened Cobux instead of
+                // grading the card. Not user-reported; found by the linter
+                // written for the same defect on the highlight widget.
                 HStack(spacing: 8) {
                     Button(intent: GradeQuickCheckIntent(gotIt: false)) {
                         Label("Missed", systemImage: "xmark")
                             .font(.system(size: 10, weight: .semibold))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 5)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.bordered)
                     .tint(.cobuxWarning)
@@ -232,6 +241,7 @@ struct QuickCheckWidgetView: View {
                             .font(.system(size: 10, weight: .semibold))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 5)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.bordered)
                     .tint(.cobuxGood)
@@ -242,6 +252,7 @@ struct QuickCheckWidgetView: View {
                         .font(.system(size: 10, weight: .semibold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 5)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.bordered)
                 .tint(accent)
@@ -250,12 +261,30 @@ struct QuickCheckWidgetView: View {
         .padding(2)
     }
 
-    private var allClearBody: some View {
+    /// What the widget says when there is nothing waiting: the fact, and
+    /// nothing about the person.
+    ///
+    /// It used to say "All clear" under a green `checkmark.seal.fill`. That is
+    /// a completion state -- a seal of approval, on his home screen, for a
+    /// queue he never agreed to owe -- and it is the exact frame he rejected on
+    /// the journal widget: "this shows a tick thats bad the jounral streak is
+    /// meant for fun info display. that doest mean it is supposed to be a work
+    /// or task for a user to necesarily complete." `JournalWidget`'s doc
+    /// comment works that reasoning out in full and it generalises here without
+    /// changing a word: a tick says a task existed, and by implication that its
+    /// absence is a failure.
+    ///
+    /// So the glyph is a book in `.secondary` and the line states the queue's
+    /// state, not a verdict on him. Deliberately NOT swapped for a different
+    /// grade -- a softer badge would be the same frame in a quieter voice. The
+    /// streak line below is untouched: he asked for that one by name, as "fun
+    /// info display".
+    private var nothingDueBody: some View {
         VStack(spacing: 6) {
-            Image(systemName: "checkmark.seal.fill")
+            Image(systemName: "book.closed")
                 .font(.title2)
-                .foregroundStyle(Color.cobuxGood)
-            Text("All clear")
+                .foregroundStyle(.secondary)
+            Text("Nothing due")
                 .font(.caption.weight(.semibold))
             if entry.streak > 0 {
                 Label("\(entry.streak)-day streak", systemImage: "flame.fill")

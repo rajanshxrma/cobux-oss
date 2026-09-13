@@ -71,6 +71,79 @@ final class SearchServiceTests: XCTestCase {
         XCTAssertTrue(result.context.contains("Summary of Beyond Order."))
         XCTAssertTrue(result.context.contains("Key lessons: Lesson"))
     }
+
+    // MARK: Semantic ranking parity
+
+    /// Deterministic pseudo-random vectors, distinct per seed, so no two rows
+    /// tie -- ties are the one thing the relationship pool and the probe's
+    /// table are allowed to order differently (see `SearchService.rankedHits`).
+    private func vector(seed: Int, dimension: Int = 8) -> [Float] {
+        var state = UInt64(seed &+ 1) &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+        return (0..<dimension).map { _ in
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Float(state >> 40) / Float(1 << 24) - 0.5
+        }
+    }
+
+    /// `SemanticSearchProbe.buildTable()` must yield exactly the pool
+    /// `books.flatMap(\.highlights)` did -- same rows, same book grouping,
+    /// same skips (a row with no vector, a row with the backfill's empty
+    /// marker) -- and both must rank through `rankedHits` to the same ids in
+    /// the same order with the same scores. This is the claim that lets the
+    /// synchronous chat path and the off-main Library path share one ranking.
+    func testProbeTableRanksIdenticallyToRelationshipPool() async throws {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: Book.self, Highlight.self, Chapter.self, ChatMessage.self, configurations: config)
+        let context = ModelContext(container)
+
+        var books: [Book] = []
+        var seed = 0
+        for title in ["Beyond Order", "12 Rules for Life", "The Art of Seduction"] {
+            let book = Book(title: title, author: "Author")
+            context.insert(book)
+            for n in 0..<7 {
+                let highlight = Highlight(text: "\(title) line \(n)")
+                highlight.book = book
+                book.highlights.append(highlight)
+                highlight.embedding = vector(seed: seed)
+                seed += 1
+            }
+            // Skipped by both pools: no vector yet, and the empty "nothing to
+            // index" marker.
+            let unembedded = Highlight(text: "\(title) not yet embedded")
+            unembedded.book = book
+            book.highlights.append(unembedded)
+            let marker = Highlight(text: "\(title) nothing to index")
+            marker.book = book
+            book.highlights.append(marker)
+            marker.embedding = []
+            books.append(book)
+        }
+        try context.save()
+
+        let query = vector(seed: 999)
+        let fromRelationships = SearchService.rankedHits(
+            queryVector: query, highlights: books.flatMap(\.highlights), topK: 5)
+
+        let table = await SemanticSearchProbe(modelContainer: container).buildTable()
+        XCTAssertEqual(table.entries.count, 21, "seven embedded rows per book, the two unscorable rows skipped")
+        let scope = Set(books.map(\.id))
+        let fromTable = SearchService.rankedHits(
+            queryVector: query, entries: table.entries(inBooks: scope), topK: 5)
+
+        XCTAssertFalse(fromRelationships.isEmpty)
+        XCTAssertEqual(fromRelationships, fromTable)
+
+        // Scoping the table to one book is the same pool `books: [one]` was.
+        let one = books[1]
+        XCTAssertEqual(
+            SearchService.rankedHits(queryVector: query, entries: table.entries(inBooks: [one.id]), topK: 5),
+            SearchService.rankedHits(queryVector: query, highlights: one.highlights, topK: 5))
+
+        // And the synchronous entry point hands back those rows, in that order.
+        let rows = SearchService.semanticSearch(queryVector: query, books: books, topK: 5)
+        XCTAssertEqual(rows.map(\.id), fromRelationships.map(\.id))
+    }
 }
 
 @MainActor

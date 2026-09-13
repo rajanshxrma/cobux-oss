@@ -1,8 +1,17 @@
 import SwiftUI
 
+/// First run. Four pages: the mark, the three pillars, who this is for, the
+/// key. Rewritten for 3.0 -- the previous copy still described the 1.0
+/// product ("Store Wisdom / Ask Questions / Get Reminded", "an AI that only
+/// knows what you've read", "daily push notifications") on a screen that a
+/// potential investor has now seen. Every sentence below names something
+/// the app does today, in the app's own words, and nothing it does not:
+/// Cobux has no push pipeline (reminders are local, off by default), and
+/// chat draws on the library AND, when allowed, the journal.
 struct OnboardingView: View {
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
     @AppStorage(UserPersona.storageKey) private var personaRaw = UserPersona.retention.rawValue
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var apiKey = ""
     @State private var currentTab = 0
     @State private var showingKeychainFailureAlert = false
@@ -10,34 +19,82 @@ struct OnboardingView: View {
 
     var body: some View {
         TabView(selection: $currentTab) {
-            // Page 1: Welcome
-            OnboardingPageScroll {
-                VStack(spacing: 24) {
-                    Text("📚")
-                        .font(.system(size: 100))
-                    Text("Welcome to Cobux")
-                        .font(.largeTitle)
-                        .fontWeight(.bold)
-                    Text("Your books, always with you.")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
+            // Page 1: the mark. The identity, not an emoji -- the icon's quote
+            // in violet light on black, and one honest line.
+            OnboardingPageScroll { _ in
+                VStack(spacing: 28) {
+                    OnboardingMark()
+                    VStack(spacing: 10) {
+                        Text("Cobux")
+                            .font(.system(size: 40, weight: .bold))
+                            .kerning(1.5)
+                            .foregroundStyle(.white)
+                        Text("Your library, your journal, and a conversation between them.")
+                            .font(.title3)
+                            .foregroundStyle(.white.opacity(0.72))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 12)
+                    }
                 }
                 .padding()
             }
             .tag(0)
 
-            // Page 2: Features
-            OnboardingPageScroll {
-                VStack(spacing: 32) {
-                    Text("Features")
+            // Page 2: the three pillars, each in its own hue, then chat --
+            // the surface that runs through all of them.
+            OnboardingPageScroll { _ in
+                VStack(spacing: 28) {
+                    Text("What's here")
                         .font(.largeTitle)
                         .fontWeight(.bold)
+                        .foregroundStyle(.white)
 
-                    VStack(alignment: .leading, spacing: 24) {
-                        FeatureRow(icon: "books.vertical.fill", title: "Store Wisdom", desc: "Save highlights and summaries from your favorite books.")
-                        FeatureRow(icon: "message.fill", title: "Ask Questions", desc: "Chat with an AI that only knows what you've read.")
-                        FeatureRow(icon: "bell.fill", title: "Get Reminded", desc: "Daily push notifications with quotes to keep you focused.")
+                    VStack(alignment: .leading, spacing: 22) {
+                        FeatureRow(icon: "sparkles", tint: Color.cobuxAccent, title: "Flow",
+                                   desc: "Your library, one highlight at a time. Swipe through it, go deeper on any line, or take one straight into a conversation.")
+                        FeatureRow(icon: "square.and.pencil", tint: Color.cobuxAccent, title: "Journal",
+                                   desc: "Write here, or bring in what you've already written. Keep a passage and Cobux brings it back later; answer an old entry and the journal becomes a correspondence with yourself.")
+                        FeatureRow(icon: "clock.arrow.circlepath", tint: Color.cobuxEbb, title: "Ebb",
+                                   desc: "Walk backward through your own writing, a card at a time — and meet the line from your library that sits closest to what you wrote.")
                     }
+                    .padding()
+                    .cobuxCard()
+
+                    Text("Chat runs through all of it. Ask about a book or about your own journal, and Cobux answers from what's actually there — it can look at a photo you attach, too.")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.72))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 8)
+
+                    // The five ways in that live OUTSIDE the app, none of which
+                    // this page named before -- so the Share Extension, the
+                    // Messages panel, three of the four Siri phrases, the Quick
+                    // Check widget and the entire Watch app could be learned
+                    // only by opening the iOS widget gallery, the Messages
+                    // drawer or the Shortcuts app and finding them by accident.
+                    //
+                    // His standing principle, which settles this: *"user shuold
+                    // be shown the features cobux offers and put them in fornt
+                    // of users eyes against them manually finding them out
+                    // wherever and feel they missed out for even a tiny bit of
+                    // time."* Onboarding is the one surface every new user
+                    // reads exactly once, which makes it the only place this
+                    // can be said without ever becoming a nag.
+                    //
+                    // One line each, not a second pitch: these are addresses,
+                    // not pillars. Nothing here is promised that the bundled
+                    // targets do not actually do.
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("And where you already are")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                        WayInRow("square.grid.2x2.fill", "Home Screen widgets — a line from your library, a card to answer, or the journal one tap away.")
+                        WayInRow("message.fill", "Messages — tap + in any conversation and choose Cobux to save a line to your journal.")
+                        WayInRow("square.and.arrow.up", "Share sheet — reading in Kindle, Books or Safari? Select the text, then Share → Cobux.")
+                        WayInRow("waveform", "Siri — “Journal in Cobux.” “Ask Cobux a question.” “Give me a highlight from Cobux.”")
+                        WayInRow("applewatch", "Apple Watch — your streak, what's due, and one line to carry. Add Cobux from the Watch app on your phone.")
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
                     .cobuxCard()
                 }
@@ -47,7 +104,7 @@ struct OnboardingView: View {
 
             // Page 3: Persona — tunes copy/recommendation framing app-wide.
             // Default is `retention`; every choice keeps the full feature set.
-            OnboardingPageScroll {
+            OnboardingPageScroll { _ in
                 VStack(spacing: 24) {
                     Text("What brings you here?")
                         .font(.largeTitle)
@@ -58,7 +115,8 @@ struct OnboardingView: View {
                         ForEach(UserPersona.allCases) { persona in
                             Button {
                                 personaRaw = persona.rawValue
-                                withAnimation { currentTab = 3 }
+                                // Reduce Motion: the page changes, it does not slide.
+                                withAnimation(reduceMotion ? nil : .default) { currentTab = 3 }
                             } label: {
                                 HStack(spacing: 14) {
                                     Image(systemName: persona.icon)
@@ -80,10 +138,11 @@ struct OnboardingView: View {
                                             .multilineTextAlignment(.leading)
                                     }
                                     Spacer()
-                                    if personaRaw == persona.rawValue {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundStyle(Color.cobuxAccent)
-                                    }
+                                    // A radio mark for the current choice -- a
+                                    // selection, not a completed task, so not
+                                    // a tick.
+                                    Image(systemName: personaRaw == persona.rawValue ? "largecircle.fill.circle" : "circle")
+                                        .foregroundStyle(personaRaw == persona.rawValue ? Color.cobuxAccent : .white.opacity(0.35))
                                 }
                                 .padding(14)
                                 .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: CobuxRadius.card))
@@ -100,16 +159,17 @@ struct OnboardingView: View {
             }
             .tag(2)
 
-            // Page 4: Setup
-            OnboardingPageScroll {
+            // Page 4: the key. Honest about what needs it and what does not.
+            OnboardingPageScroll { _ in
                 VStack(spacing: 24) {
-                    Text("Let's get started")
+                    Text("One key for Chat")
                         .font(.largeTitle)
                         .fontWeight(.bold)
+                        .foregroundStyle(.white)
 
-                    Text("Cobux uses Claude AI to answer your questions. Enter your Anthropic API Key below.")
+                    Text("Chat, voice and quiz writing run on Claude, using your own Anthropic API key. It's stored in this phone's keychain and sent only to Anthropic. Flow, your journal, Ebb and the library work without one.")
                         .multilineTextAlignment(.center)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.white.opacity(0.72))
 
                     SecureField("Anthropic API Key (sk-...)", text: $apiKey)
                         .padding()
@@ -139,14 +199,19 @@ struct OnboardingView: View {
                             showingKeychainFailureAlert = true
                         }
                     }) {
-                        Text(trimmedAPIKey.isEmpty ? "Skip for now" : "Get Started")
-                            .font(.headline)
-                            .padding()
+                        // The primary pill, through the token: its type is white
+                        // or the dark ink by measured contrast, never hardcoded
+                        // white on a tint that cannot carry it (the dark-mode
+                        // accent measured 3.2:1 under white).
+                        Text(trimmedAPIKey.isEmpty ? "Skip for now" : "Continue")
                             .frame(maxWidth: .infinity)
-                            .background(trimmedAPIKey.isEmpty ? Color.secondary.opacity(0.3) : Color.cobuxAccent)
-                            .foregroundStyle(.white)
-                            .clipShape(RoundedRectangle(cornerRadius: CobuxRadius.card))
+                            .cobuxPrimaryPill(tint: trimmedAPIKey.isEmpty ? Color.white.opacity(0.14) : Color.cobuxAccent)
                     }
+                    .buttonStyle(.plain)
+
+                    Text("Add or change it any time under More → Settings.")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.6))
                 }
                 .padding()
             }
@@ -155,26 +220,21 @@ struct OnboardingView: View {
         .tabViewStyle(.page)
         .indexViewStyle(.page(backgroundDisplayMode: .always))
         .background(
-            // Same dark backdrop family as VoiceModeView's -- both are always-dark,
-            // full-screen, no-system-chrome moments regardless of the system color
-            // scheme, so they share one gradient token instead of two near-identical
-            // hardcoded hex values (this one was #1e1b4b -- CobuxColor.voiceGradient's
-            // own first stop, byte-identical, just spelled out a second time).
-            LinearGradient(colors: CobuxColor.voiceGradient, startPoint: .top, endPoint: .bottom)
+            // The 3.0 identity ground -- the icon's field and the Flow button's
+            // capsule -- rather than voice mode's indigo wash. Same token the
+            // Flow button paints, so the first screen and the button he will
+            // press next are visibly one thing.
+            LinearGradient(colors: CobuxColor.identityGradient, startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
         )
-        // The comment above promises the same "always-dark regardless of system
-        // color scheme" behavior VoiceModeView/SpokenQuizView have -- but unlike
-        // both of those, this view never actually forced it, and this screen
-        // (unlike voice mode) can't inherit a dark override from anywhere else:
-        // it's the very first thing a fresh install shows, before `themeRaw` in
-        // CobuxApp has any value other than its `.system` default (`colorScheme`
-        // == nil, i.e. "follow the device"). On a phone in Light Mode -- exactly
-        // Gulab's first launch -- every unstyled `Text` here (`.primary`/
-        // `.secondary`, pages 1, 2, and 4) rendered near-black on this near-black
-        // gradient: real, close-to-unreadable contrast on a brand-new tester's
-        // very first screen. Page 3 alone was readable, because it's the one
-        // page that happens to hardcode `.foregroundStyle(.white)` throughout.
+        // Always dark, regardless of the system colour scheme. This screen
+        // (unlike voice mode) can't inherit a dark override from anywhere
+        // else: it's the very first thing a fresh install shows, before
+        // `themeRaw` in CobuxApp has any value other than its `.system`
+        // default. On a phone in Light Mode -- exactly Gulab's first launch
+        // -- every unstyled `Text` here used to render near-black on this
+        // near-black gradient: real, close-to-unreadable contrast on a
+        // brand-new tester's very first screen.
         .preferredColorScheme(.dark)
         .alert("Couldn't Save Key", isPresented: $showingKeychainFailureAlert) {
             Button("OK", role: .cancel) { }
@@ -184,41 +244,94 @@ struct OnboardingView: View {
     }
 }
 
-/// Wraps a single onboarding page's content in a `ScrollView` sized to at
-/// least fill the page (via `GeometryReader`), instead of the bare `VStack`
-/// each page used to sit in directly. `TabView(.page)` never scrolls a page
-/// on its own -- content that doesn't fit just clips silently at the bottom
-/// of the screen. On a small phone (iPhone SE-class) with a larger Dynamic
-/// Type accessibility size, page 3's three persona rows (each with a
-/// wrapping title + subtitle) or page 4's description + field + button can
-/// genuinely exceed the screen height, which used to mean the "Get
-/// Started"/"Skip for now" button -- the only way page 4 completes
-/// onboarding -- became unreachable. `minHeight: proxy.size.height` keeps
-/// every page centered exactly as before whenever content fits, and makes
-/// it scrollable instead of clipped whenever it doesn't.
-private struct OnboardingPageScroll<Content: View>: View {
-    @ViewBuilder var content: () -> Content
+/// The app's mark, drawn: the icon's opening quote in violet light on the
+/// identity ground. Drawn rather than loaded from the icon set so it cannot
+/// go stale against the asset and needs no runtime lookup.
+private struct OnboardingMark: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: CobuxRadius.glassCard, style: .continuous)
+            .fill(LinearGradient(colors: CobuxColor.identityGradient, startPoint: .top, endPoint: .bottom))
+            .frame(width: 104, height: 104)
+            .overlay {
+                Image(systemName: "quote.opening")
+                    .font(.system(size: 46, weight: .bold))
+                    .foregroundStyle(Color.cobuxAccent)
+                    .shadow(color: Color.cobuxAccent.opacity(0.65), radius: 14)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: CobuxRadius.glassCard, style: .continuous)
+                    .strokeBorder(LinearGradient(colors: [.white.opacity(0.35), .clear],
+                                                 startPoint: .top, endPoint: .bottom), lineWidth: 1)
+            }
+            .shadow(color: Color.cobuxAccent.opacity(0.35), radius: 24, y: 10)
+            .accessibilityHidden(true)
+    }
+}
+
+/// Wraps a single page's content in a `ScrollView` sized to at least fill the
+/// page (via `GeometryReader`), instead of a bare `VStack`. `TabView(.page)`
+/// never scrolls a page on its own -- content that doesn't fit just clips
+/// silently at the bottom of the screen. On a small phone (iPhone SE-class)
+/// with a larger Dynamic Type accessibility size, page 3's three persona rows
+/// or page 4's description + field + button can genuinely exceed the screen
+/// height, which used to mean the "Continue"/"Skip for now" button -- the only
+/// way page 4 completes onboarding -- became unreachable. `minHeight:
+/// proxy.size.height` keeps every page centered exactly as before whenever
+/// content fits, and makes it scrollable instead of clipped whenever it
+/// doesn't. The content closure receives the page size so a fixed-height
+/// element (the widget mock in `WidgetInviteView`) can shrink to fit it.
+struct OnboardingPageScroll<Content: View>: View {
+    @ViewBuilder var content: (CGSize) -> Content
 
     var body: some View {
         GeometryReader { proxy in
             ScrollView {
-                content()
+                content(proxy.size)
                     .frame(minWidth: proxy.size.width, minHeight: proxy.size.height)
             }
         }
     }
 }
 
+/// One address, one line. Deliberately lighter than `FeatureRow` -- a `.title`
+/// glyph and a headline for each of these would make five entry points read as
+/// five more pillars, which they are not.
+private struct WayInRow: View {
+    let icon: String
+    let text: String
+
+    init(_ icon: String, _ text: String) {
+        self.icon = icon
+        self.text = text
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.subheadline)
+                .foregroundStyle(Color.cobuxAccent)
+                // A floor, not a fixed width -- the same Dynamic-Type
+                // clipping fix every glyph column on this screen carries.
+                .frame(minWidth: 22, alignment: .leading)
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 struct FeatureRow: View {
     let icon: String
+    var tint: Color = Color.cobuxAccent
     let title: String
     let desc: String
 
     var body: some View {
-        HStack(spacing: 16) {
+        HStack(alignment: .top, spacing: 16) {
             Image(systemName: icon)
                 .font(.title)
-                .foregroundStyle(Color.cobuxAccent)
+                .foregroundStyle(tint)
                 // Same Dynamic-Type-clipping fix as the persona icon above --
                 // `.title` grows at accessibility text sizes, so the frame
                 // needs a floor, not a fixed width.
@@ -230,6 +343,7 @@ struct FeatureRow: View {
                 Text(desc)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

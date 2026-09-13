@@ -28,6 +28,16 @@ struct JournalLocked<Content: View>: View {
     /// sheet is up, letting the sheet's own `JournalLocked` (always `true`,
     /// since nothing is ever presented on top of a sheet) own the prompt.
     var autoPromptsWhenTopmost: Bool = true
+    /// Whether there is anything behind this gate worth a Face ID prompt.
+    /// The lock is armed by CONTENT, not by install: `lockEnabled` defaults
+    /// on, and a brand-new install used to demand biometrics to see the
+    /// first-run carousel -- sample cards protecting zero entries -- then, on
+    /// the cancelled system sheet, told the person "That didn't work." That
+    /// was the first-run path shown to a potential investor. A caller with
+    /// nothing to protect passes `false`; the content renders and nothing
+    /// prompts. `JournalListView` passes `!entries.isEmpty`; the composer
+    /// passes whether the journal already has an entry.
+    var armed: Bool = true
     @ViewBuilder var content: () -> Content
 
     @AppStorage(JournalLockStatus.enabledKey) private var lockEnabled = true
@@ -35,7 +45,7 @@ struct JournalLocked<Content: View>: View {
     @State private var isAuthenticating = false
     @State private var authenticationFailed = false
 
-    private var isLocked: Bool { lockEnabled && !lockStatus.isUnlocked }
+    private var isLocked: Bool { lockEnabled && armed && !lockStatus.isUnlocked }
 
     var body: some View {
         Group {
@@ -60,8 +70,17 @@ struct JournalLocked<Content: View>: View {
         CobuxEmptyStateView(
             icon: "faceid",
             title: "Journal Locked",
+            // True whether the system sheet was cancelled or Face ID genuinely
+            // failed -- `authenticate()` reports only a Bool, so this copy
+            // must not guess. It used to say "That didn't work. Try again, or
+            // check your device passcode is set up" to someone who had simply
+            // tapped Cancel. It then offered the passcode as the way through;
+            // there is no passcode any more (Rajan, 2026-09-12: "I just don't
+            // want the passcode as the second option" -- see
+            // `JournalLockStatus.authenticate`), so the copy names the one
+            // path that exists and nothing else.
             message: authenticationFailed
-                ? "That didn't work. Try again, or check your device passcode is set up."
+                ? "Not unlocked yet. Tap Unlock to try Face ID again."
                 : "Unlock with Face ID to see your entries."
         ) {
             CobuxEmptyStateButton("Unlock", systemImage: "faceid") {
@@ -72,8 +91,39 @@ struct JournalLocked<Content: View>: View {
 
     private func attemptUnlock() async {
         isAuthenticating = true
-        let success = await lockStatus.authenticate()
+        let success = await JournalUnlockCoordinator.authenticate(lockStatus)
         authenticationFailed = !success
         isAuthenticating = false
+    }
+}
+
+/// One in-flight authentication for every gate in the app.
+///
+/// Two `JournalLocked` gates can be live at once -- a detail screen under a
+/// compose sheet, say -- and both watch the same `isUnlocked`. A relock then
+/// used to make each one call `authenticate()`, racing two concurrent
+/// `LAContext.evaluatePolicy` calls: the second is rejected by the system
+/// while the first is up, so one gate reported a failure nobody caused. The
+/// `autoPromptsWhenTopmost` discipline is the first line against that; this
+/// is the second, so that no ordering mistake in any caller can ever produce
+/// two prompts. Every caller joins the prompt already in progress and gets
+/// its real answer.
+///
+/// **Anything that offers an unlock calls this, never `status.authenticate()`
+/// directly.** That is not a style note: a single direct caller re-opens the
+/// race for the whole app, and one had drifted back in (chat's journal-weave
+/// unlock notice), which is how this line came to be written down.
+@MainActor
+enum JournalUnlockCoordinator {
+    private static var inFlight: Task<Bool, Never>?
+
+    static func authenticate(_ status: JournalLockStatus) async -> Bool {
+        if let inFlight { return await inFlight.value }
+        let task = Task<Bool, Never> {
+            defer { inFlight = nil }
+            return await status.authenticate()
+        }
+        inFlight = task
+        return await task.value
     }
 }

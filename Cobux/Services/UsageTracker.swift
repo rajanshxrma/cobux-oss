@@ -18,10 +18,34 @@ import CobuxCore
 /// self-failing staleness test, so this can't quietly go stale the same way.
 struct UsageTracker {
     private static let defaults = UserDefaults.standard
+
+    /// No `DateFormatter`, for the same reasons as
+    /// `JournalHighlightCard.todayKey` -- see that comment for the full
+    /// argument.
+    ///
+    /// This one IS on a render path: three separate bodies read
+    /// `currentMonthEstimate()` (`QuizAnalyticsView`'s spend row,
+    /// `DiagnosticsView`'s, and `SettingsView`'s two per-purpose lines) and
+    /// every one of them landed here and built a `DateFormatter`, resolving a
+    /// locale and a calendar, just to spell a month. Hoisting it to a shared
+    /// `static let` fixed the cost and introduced two subtler problems: the
+    /// key's meaning became locale-dependent, and its time zone froze at
+    /// launch.
+    ///
+    /// Components off `Calendar.current` are cheaper than either version and
+    /// have neither problem. They also make the thread-safety question moot,
+    /// which matters here because unlike `ChatView`'s pair these callers are
+    /// NOT all on the main actor -- the three bodies are, but `record` is
+    /// reached from the generation and voice paths' async work off it. There
+    /// is no shared mutable object left to reason about.
+    ///
+    /// One-time cost, worth knowing rather than discovering: on a device set
+    /// to a non-Gregorian calendar the old formatter spelled a different year,
+    /// so that install's accumulated month total resets once.
     private static func monthKey(for date: Date = .now) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM"
-        return "cobux.usageEstimate." + formatter.string(from: date)
+        let parts = Calendar.current.dateComponents([.year, .month], from: date)
+        return String(format: "cobux.usageEstimate.%04d-%02d",
+                      parts.year ?? 0, parts.month ?? 0)
     }
 
     /// Adds one turn's token usage to this calendar month's running total.

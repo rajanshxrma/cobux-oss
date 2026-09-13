@@ -23,6 +23,9 @@ struct SeedBookDocument: Codable {
     /// Maps to `BookContentProfile.rawValue`; unknown/missing values fall
     /// back to `.propositional` rather than failing the whole book.
     let contentProfile: String
+    /// What game this book's counsel plays. Optional so every seed file written
+    /// before traditions existed still decodes.
+    let tradition: String?
     /// Compared against `Book.seedContentVersion` — a book already seeded at
     /// this version or newer is left untouched. Bump this whenever a book's
     /// JSON is revised so the update actually reaches devices that already
@@ -108,6 +111,7 @@ enum SeedLoader {
             guard existingBook.seedContentVersion < doc.contentVersion else { return }
             book = existingBook
             book.contentProfile = BookContentProfile(rawValue: doc.contentProfile) ?? .propositional
+            book.tradition = doc.tradition.flatMap(BookTradition.init(rawValue:))
         } else {
             book = Book(
                 title: doc.title,
@@ -118,6 +122,7 @@ enum SeedLoader {
                 category: doc.category,
                 contentProfile: BookContentProfile(rawValue: doc.contentProfile) ?? .propositional
             )
+            book.tradition = doc.tradition.flatMap(BookTradition.init(rawValue:))
             modelContext.insert(book)
         }
 

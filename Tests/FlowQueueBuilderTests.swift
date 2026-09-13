@@ -229,10 +229,86 @@ final class FlowQueueBuilderTests: XCTestCase {
                 XCTAssertNotEqual(b.book?.id, dropped.id)
             case .sessionRecap(_, _, let nextBook):
                 XCTAssertNotEqual(nextBook, dropped.title, "the recap's next-book line must respect the filter too")
-            case .weakTopic, .dailyOpener:
+            // A journal echo carries no book at all, so a book filter cannot
+            // apply to it.
+            case .weakTopic, .dailyOpener, .journalEcho:
                 break
             }
         }
+    }
+
+    // MARK: - Per-card "Don't show this again"
+
+    func testSuppressedHighlightNeverReachesAnyCardType() throws {
+        let context = try makeContext()
+        let book = makeLibrary(context: context, highlightCount: 6)
+        let chapter = try XCTUnwrap(book.chapters.first)
+        let hidden = try XCTUnwrap(book.highlights.first)
+        let partner = try XCTUnwrap(book.highlights.last)
+        let third = book.highlights[1]
+
+        // A quick check BUILT FROM the hidden line, a quick check hidden by
+        // its own id, and a control check that must still be dealt.
+        func dueQuestion(_ prompt: String) -> QuizQuestion {
+            let question = QuizQuestion(book: book, chapter: chapter, questionType: .recallMCQ, prompt: prompt, explanation: "e")
+            question.choices = ["a", "b"]
+            question.correctAnswerIndex = 0
+            question.dueDate = Date().addingTimeInterval(-3600)
+            context.insert(question)
+            chapter.quizQuestions.append(question)
+            return question
+        }
+        let fromHidden = dueQuestion("from the hidden line")
+        fromHidden.sourceHighlights.append(hidden)
+        let hiddenCheck = dueQuestion("hidden by its own id")
+        let control = dueQuestion("still dealt")
+
+        let suppressed: Set<UUID> = [hidden.id, hiddenCheck.id]
+        var c = FlowQueueBuilder.BatchContinuation()
+        var cards: [FlowCard] = []
+        for batch in 0..<3 {
+            cards += FlowQueueBuilder.buildBatch(
+                books: [book],
+                batch: batch,
+                seedBase: 88,
+                // Both pairs would otherwise ride the first recap; only the
+                // one clear of the hidden line may.
+                resonancePairs: [(hidden, partner), (partner, third)],
+                continuation: &c,
+                suppressedIDs: suppressed
+            )
+        }
+
+        XCTAssertEqual(cards.count, 3 * FlowQueueBuilder.batchSize, "a hidden card must not shorten the feed")
+        var dealtClozes = Set<UUID>()
+        var dealtResonance = 0
+        for card in cards {
+            switch card {
+            case .highlight(let highlight):
+                XCTAssertNotEqual(highlight.id, hidden.id, "the hidden line was dealt as a quote")
+            case .clozeTeaser(let question):
+                XCTAssertNotEqual(question.id, hiddenCheck.id, "a check hidden by id was dealt")
+                XCTAssertNotEqual(question.id, fromHidden.id, "a check built from the hidden line was dealt")
+                dealtClozes.insert(question.id)
+            case .resonance(let a, let b):
+                XCTAssertNotEqual(a.id, hidden.id)
+                XCTAssertNotEqual(b.id, hidden.id)
+                dealtResonance += 1
+            case .keyLesson, .weakTopic, .dailyOpener, .sessionRecap, .journalEcho:
+                break
+            }
+        }
+        // The filter removes exactly the hidden cards, not the card types: the
+        // control check and the clean pair still reach the feed.
+        XCTAssertTrue(dealtClozes.contains(control.id), "an unhidden due check must still be dealt")
+        XCTAssertGreaterThan(dealtResonance, 0, "a pair clear of the hidden line must still ride a recap")
+
+        // An empty set is a no-op, byte for byte -- the seeded order is untouched.
+        var plain = FlowQueueBuilder.BatchContinuation()
+        let a = FlowQueueBuilder.buildBatch(books: [book], batch: 0, seedBase: 88, continuation: &plain)
+        var explicit = FlowQueueBuilder.BatchContinuation()
+        let b = FlowQueueBuilder.buildBatch(books: [book], batch: 0, seedBase: 88, continuation: &explicit, suppressedIDs: [])
+        XCTAssertEqual(a.map(\.id), b.map(\.id))
     }
 
     func testExcludingEveryBookProducesAnEmptyFeed() throws {
@@ -397,5 +473,46 @@ final class FlowQueueBuilderTests: XCTestCase {
         }
         XCTAssertTrue(clozePrompts.contains("fresh"))
         XCTAssertFalse(clozePrompts.contains("just reviewed"), "12h re-review guard must hold")
+    }
+}
+
+/// The journal echo dealt into Flow.
+///
+/// Its whole safety property is that its absence is never visible: on a day
+/// with no echo the card simply is not dealt, so it can never become something
+/// he failed to have.
+extension FlowQueueBuilderTests {
+
+    func testNoEchoMeansNoEchoCard() throws {
+        let context = try makeContext()
+        _ = makeLibrary(context: context)
+        var continuation = FlowQueueBuilder.BatchContinuation()
+        let cards = FlowQueueBuilder.buildBatch(
+            books: try context.fetch(FetchDescriptor<Book>()),
+            batch: 0, seedBase: 7, journalEcho: nil,
+            continuation: &continuation)
+        XCTAssertFalse(cards.contains { if case .journalEcho = $0 { return true }; return false },
+                       "with no echo, nothing about it may appear")
+    }
+
+    func testEchoIsDealtEarlyAndOnlyInTheFirstBatch() throws {
+        let context = try makeContext()
+        _ = makeLibrary(context: context)
+        let books = try context.fetch(FetchDescriptor<Book>())
+        let echo = (entryID: UUID(), date: Date(timeIntervalSince1970: 1_600_000_000),
+                    passage: "A sentence I wrote a long time ago and had forgotten.")
+
+        var first = FlowQueueBuilder.BatchContinuation()
+        let batch0 = FlowQueueBuilder.buildBatch(
+            books: books, batch: 0, seedBase: 7, journalEcho: echo, continuation: &first)
+        let index = batch0.firstIndex { if case .journalEcho = $0 { return true }; return false }
+        XCTAssertNotNil(index, "an echo that exists must be dealt")
+        XCTAssertLessThan(index ?? .max, 3, "it is true of today, so it cannot be buried")
+
+        var second = FlowQueueBuilder.BatchContinuation()
+        let batch1 = FlowQueueBuilder.buildBatch(
+            books: books, batch: 1, seedBase: 7, journalEcho: echo, continuation: &second)
+        XCTAssertFalse(batch1.contains { if case .journalEcho = $0 { return true }; return false },
+                       "the echo belongs to the first batch only, never repeated deeper in the feed")
     }
 }

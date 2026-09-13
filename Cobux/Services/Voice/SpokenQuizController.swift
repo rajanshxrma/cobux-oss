@@ -1,6 +1,7 @@
 import Foundation
 import Speech
 import AVFoundation
+import UIKit
 import CobuxCore
 
 enum SpokenQuizState: Equatable {
@@ -17,7 +18,7 @@ enum SpokenQuizState: Equatable {
 /// questions use in `QuizSessionView` -- eyes-free mode doesn't care about the MCQ mechanic,
 /// it just wants a natural spoken answer, graded the same way.
 @Observable
-final class SpokenQuizController: NSObject, AVSpeechSynthesizerDelegate {
+final class SpokenQuizController: NSObject {
     private(set) var state: SpokenQuizState = .idle
     private(set) var liveTranscript = ""
     private(set) var currentIndex = 0
@@ -34,7 +35,13 @@ final class SpokenQuizController: NSObject, AVSpeechSynthesizerDelegate {
     private let audioEngine = AVAudioEngine()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private let synthesizer = AVSpeechSynthesizer()
+    /// The same speech queue Voice Mode speaks through -- on-device neural voice
+    /// first, system voice per sentence when it declines, sentences pipelined so
+    /// they join without a gap. Spoken Quiz once had no neural path at all, so
+    /// the same app spoke in the good voice in Voice Mode and the robotic system
+    /// voice here, which is the voice he has asked repeatedly to be rid of; one
+    /// shared queue is what keeps the two surfaces from drifting apart again.
+    private let speaker = SentenceSpeaker()
 
     private var silenceTimer: Timer?
     private var lastTranscript = ""
@@ -56,7 +63,12 @@ final class SpokenQuizController: NSObject, AVSpeechSynthesizerDelegate {
         self.questions = questions
         self.onAnswer = onAnswer
         super.init()
-        synthesizer.delegate = self
+        // The one place "an utterance finished" advances the quiz, whichever
+        // engine spoke it -- a neural utterance that finished anywhere else
+        // would leave the quiz sitting there forever.
+        speaker.onDrained = { [weak self] in
+            Task { @MainActor [weak self] in self?.handleSpeechFinished() }
+        }
     }
 
     func requestPermissions(completion: @escaping (Bool) -> Void) {
@@ -75,7 +87,10 @@ final class SpokenQuizController: NSObject, AVSpeechSynthesizerDelegate {
         guard !sessionActive, !questions.isEmpty else { return }
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playAndRecord, mode: .default, options: [.duckOthers, .defaultToSpeaker])
+            // `.allowBluetoothA2DP`, not `.allowBluetooth` (HFP): with AirPods in, the
+            // questions play through them at full bandwidth instead of out of the phone
+            // speaker. HFP would narrow every voice to telephony bandwidth.
+            try session.setCategory(.playAndRecord, mode: .default, options: [.duckOthers, .defaultToSpeaker, .allowBluetoothA2DP])
             try session.setActive(true, options: .notifyOthersOnDeactivation)
             sessionActive = true
             registerAudioObservers()
@@ -83,18 +98,34 @@ final class SpokenQuizController: NSObject, AVSpeechSynthesizerDelegate {
             onError?("Couldn't set up the audio session.")
             return
         }
+        // Neural weights load now, overlapping the first question's synthesis
+        // being requested, rather than as a pause before the first spoken word.
+        speaker.prewarm()
+        // Eyes-free means no touch keeps the screen awake; auto-lock used to
+        // background the scene and end the quiz mid-question.
+        setKeepsScreenAwake(true)
         askCurrentQuestion()
     }
 
     func end() {
         stopListening()
-        synthesizer.stopSpeaking(at: .immediate)
+        // Both engines, not just the synthesizer. The neural voice plays through
+        // its own AVAudioEngine and used to keep reading the question after End,
+        // then advance the quiz on a controller that had already been torn down.
+        speaker.stop()
         silenceTimer?.invalidate()
         silenceTimer = nil
         NotificationCenter.default.removeObserver(self)
         guard sessionActive else { return }
+        setKeepsScreenAwake(false)
         deactivateSession()
         sessionActive = false
+    }
+
+    /// `UIApplication.isIdleTimerDisabled`, hopped to the main actor: this class
+    /// isn't isolated to it, even though every caller is on the main thread.
+    private func setKeepsScreenAwake(_ awake: Bool) {
+        Task { @MainActor in UIApplication.shared.isIdleTimerDisabled = awake }
     }
 
     // MARK: - Audio interruptions and route changes
@@ -122,7 +153,7 @@ final class SpokenQuizController: NSObject, AVSpeechSynthesizerDelegate {
             guard let self, self.sessionActive else { return }
             switch type {
             case .began:
-                self.synthesizer.stopSpeaking(at: .immediate)
+                self.speaker.stop()
                 self.stopListeningInternal()
             case .ended:
                 let options = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt)
@@ -161,7 +192,8 @@ final class SpokenQuizController: NSObject, AVSpeechSynthesizerDelegate {
         NotificationCenter.default.removeObserver(self)
         if sessionActive {
             audioEngine.stop()
-            synthesizer.stopSpeaking(at: .immediate)
+            speaker.stop()
+            setKeepsScreenAwake(false)
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         }
     }
@@ -181,37 +213,47 @@ final class SpokenQuizController: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     private func speak(_ text: String) {
-        let utterance = AVSpeechUtterance(string: text)
-        // `VoicePreference.selectedVoice()`, exactly like `VoiceSessionController`
-        // -- NOT `AVSpeechSynthesisVoice(language:)`, which is the plain system
-        // default (the old robotic Samantha-class voice) and ignored both the
-        // user's explicit Settings pick AND the automatic
-        // best-quality-available fallback. Voice Mode has always honored the
-        // preference; Spoken Quiz silently didn't, so the same app spoke in two
-        // different voices depending on which screen you were on.
-        utterance.voice = VoicePreference.selectedVoice()
-            ?? AVSpeechSynthesisVoice(language: AVSpeechSynthesisVoice.currentLanguageCode())
-        synthesizer.speak(utterance)
+        // Through the same sentence cutter Voice Mode's stream runs through, so
+        // the queue speaks a question or a long explanation one sentence at a
+        // time -- pipelined, and each sentence comfortably under Kokoro's 510
+        // phoneme-token limit. Spoken whole, a long explanation tripped that
+        // limit and flipped mid-quiz to the system voice for one utterance.
+        // `sanitize` also strips any markdown a generated explanation carries.
+        let chunker = SpeechChunker()
+        var sentences = chunker.ingest(text)
+        sentences += chunker.finish()
+        guard !sentences.isEmpty else {
+            // Nothing speakable (markdown-only text). Advance rather than hang.
+            Task { @MainActor [weak self] in self?.handleSpeechFinished() }
+            return
+        }
+        speaker.enqueue(sentences)
     }
 
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            switch self.state {
-            case .speakingQuestion:
-                self.startListening()
-            case .speakingFeedback:
-                self.currentIndex += 1
-                self.askCurrentQuestion()
-            default:
-                break
-            }
+    /// The one place "an utterance finished" advances the quiz, driven by the
+    /// speaker's drain whichever engine spoke.
+    @MainActor
+    private func handleSpeechFinished() {
+        // Never on an ended controller: a neural utterance that outlived End
+        // used to land here and either restart the mic or read the next
+        // question into a torn-down session.
+        guard sessionActive else { return }
+        switch state {
+        case .speakingQuestion:
+            startListening()
+        case .speakingFeedback:
+            currentIndex += 1
+            askCurrentQuestion()
+        default:
+            break
         }
     }
 
     // MARK: - Listening / STT (same pattern as VoiceSessionController.startListening)
 
     private func startListening() {
+        // Same guard as `handleSpeechFinished`: no hot mic on a dead controller.
+        guard sessionActive else { return }
         stopListeningInternal()
         liveTranscript = ""
 
@@ -262,10 +304,14 @@ final class SpokenQuizController: NSObject, AVSpeechSynthesizerDelegate {
 
             if let result {
                 let text = result.bestTranscription.formattedString
-                if text != self.lastTranscript {
+                // Recognizer queue here, main-runloop silence timer there:
+                // compare and write `lastTranscript`/`lastChangeDate` where
+                // they're read, alongside the `liveTranscript` hop.
+                DispatchQueue.main.async {
+                    guard text != self.lastTranscript else { return }
                     self.lastTranscript = text
                     self.lastChangeDate = Date()
-                    DispatchQueue.main.async { self.liveTranscript = text }
+                    self.liveTranscript = text
                 }
             }
 

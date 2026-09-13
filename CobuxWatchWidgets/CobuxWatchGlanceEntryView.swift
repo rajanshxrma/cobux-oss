@@ -45,8 +45,17 @@ struct CobuxWatchGlanceEntryView: View {
                         .fontWeight(.bold)
                 }
             } else {
+                // A stack of cards, not the `checkmark.circle.fill` this used
+                // to show. A tick beside a count of cards STILL DUE says the
+                // opposite of what the number says, and it is the completion
+                // frame he rejected on the journal widget -- see
+                // `JournalWidget`, whose doc comment works out why a checkmark
+                // is the vocabulary of a to-do list and why this app does not
+                // speak it. A hollow `circle` would not fix it either: that is
+                // the unchecked-checkbox glyph. This one names what is being
+                // counted and grades nothing.
                 VStack(spacing: 0) {
-                    Image(systemName: "checkmark.circle.fill")
+                    Image(systemName: "rectangle.stack")
                         .font(.caption2)
                     Text("\(entry.dueCount)")
                         .font(.headline)

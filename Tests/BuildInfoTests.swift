@@ -12,8 +12,21 @@ final class BuildInfoTests: XCTestCase {
     func testNewestChangelogEntryMatchesCurrentShippedVersion() {
         // Mirrors project.yml's MARKETING_VERSION/CURRENT_PROJECT_VERSION —
         // update both together when bumping either.
-        let expectedVersion = "2.5.21"
-        let expectedBuild = "34"
+        //
+        // This assertion is NOT the real gate and must not be trusted as one.
+        // It sat here asserting 2.5.21 / build 34 while builds 35 through 53
+        // shipped, because this target needs a booted iOS Simulator and that
+        // is a standing never-do-this on the machine Cobux is built on — so
+        // the self-failing chore was never in a position to fail. A gate that
+        // cannot run is worse than no gate: everyone believes it is watching.
+        //
+        // `scripts/check-version-sync.py` is the gate. It runs from ship.sh
+        // before the archive, reads both files off disk so it cannot go stale,
+        // and additionally enforces that the version string moves every build.
+        // Keep these literals current anyway, so this says something true if
+        // the suite is ever run somewhere it can be.
+        let expectedVersion = "3.2.0"
+        let expectedBuild = "58"
 
         guard let newest = BuildInfo.changelog.first else {
             XCTFail("BuildInfo.changelog is empty")

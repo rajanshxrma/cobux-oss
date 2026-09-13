@@ -39,6 +39,29 @@ final class PersonalWritingEntry {
     /// number rather than a fake zero. Lightweight migration only: adding an
     /// optional attribute is the one schema change SwiftData handles in place.
     var writingSeconds: Int?
+    /// The entry this one answers, when it was written as a reply to his own
+    /// past writing -- The Correspondence. A reference, never a copy: the
+    /// original is never touched, and the reply is an ordinary entry in every
+    /// other respect (streaks, export, embedding, widgets). Same contract as
+    /// `JournalKeep.entryID`.
+    ///
+    /// Additive optional -- the one schema change SwiftData handles in place
+    /// (see `writingSeconds` above, which carries the migration ruling).
+    var answersEntryID: UUID?
+    /// The original's date AS IT STOOD when he answered it --
+    /// `JournalKeep.sourceDate`'s exact reasoning. "Continue Entry" moves the
+    /// original's `modifiedDate` forward, so reading the live date later could
+    /// postdate the reply; this pins "what he was answering" to something that
+    /// stays true. Also what lets a dangling link (post-restore) still render
+    /// an honest dated line.
+    var answersEntryDate: Date?
+    /// Where this was written -- the locality name, captured once at first
+    /// save when ambient context knows it. HIS order, 2026-09-05: "in journal
+    /// the location should also be saved." Saved ALWAYS (unlike the stamp,
+    /// which stays quiet about the usual place -- that rule governs what the
+    /// TEXT says; this is data he owns, on-device, shown quietly in the
+    /// colophon). Never transmitted as a field; additive optional.
+    var locality: String?
     var embeddingData: Data?
     /// Photos attached to this entry -- see `JournalAttachment`'s own doc
     /// comment for why the image bytes live on disk (`JournalAttachmentStore`)
@@ -67,13 +90,9 @@ final class PersonalWritingEntry {
     var embedding: [Float]? {
         get {
             guard let embeddingData else { return nil }
-            // `loadUnaligned`, not `bindMemory` -- see `Highlight.embedding`'s
-            // identical comment on why `bindMemory`'s alignment assumption
-            // doesn't hold for a `Data` slice from SwiftData's own storage.
-            return embeddingData.withUnsafeBytes { rawBuffer in
-                let count = rawBuffer.count / MemoryLayout<Float>.size
-                return (0..<count).map { rawBuffer.loadUnaligned(fromByteOffset: $0 * MemoryLayout<Float>.size, as: Float.self) }
-            }
+            // See `Highlight.embedding` -- one shared, unaligned-safe bulk
+            // decoder rather than three copies of a per-element load.
+            return EmbeddingCodec.decode(embeddingData)
         }
         set {
             guard let newValue else {

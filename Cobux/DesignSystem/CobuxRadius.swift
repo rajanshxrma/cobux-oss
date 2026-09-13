@@ -16,6 +16,16 @@ enum CobuxRadius {
     static let structural: CGFloat = 0
     /// Freestanding single cards that aren't part of a grid — a quiz session
     /// card, a standalone panel.
+    /// **Corner-adjacent controls.** A control placed in a rounded card's
+    /// corner must have its CENTRE at least this radius in from both edges.
+    /// Nearer than that and the control sits inside the corner's arc, where
+    /// the background is already curving away from it, and it reads as
+    /// slipping off the card rather than sitting on it. A 44pt tap frame
+    /// pinned to the corner does this for free (centre at 22, clear of every
+    /// radius here) -- which is why the same frame that satisfies the tap
+    /// target also fixes the look. Reported on two surfaces at once: "the top
+    /// corss here is weirdly palced formatted absed on the curve similarly the
+    /// rigt arrow thingy here".
     static let card: CGFloat = 14
     /// Fully round — chips, tags, pill buttons.
     static let pill: CGFloat = 100
@@ -31,4 +41,15 @@ enum CobuxRadius {
     /// this is the standard "squircle-ish app icon glyph" radius at 28pt box
     /// size, distinct from `pill` (fully round, for chips/tags, not icons).
     static let iconBadge: CGFloat = 8
+
+    /// A chat message bubble. Continuous-curvature at 18 reads as soft rather
+    /// than as a box -- the old shape hand-plotted an iMessage tail with 20pt
+    /// corners, and on a one-line reply the two corner curves plus the tail
+    /// consumed the whole silhouette, which is what made short bubbles look
+    /// lumpy and no two of them look alike.
+    static let bubble: CGFloat = 18
+
+    /// A quote card inside a reply. Smaller than a bubble on purpose: it is an
+    /// object sitting ON the reply, not a peer of it.
+    static let quote: CGFloat = 12
 }

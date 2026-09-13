@@ -42,6 +42,14 @@ enum QuizModeService {
     struct WeakTheme {
         let theme: Theme
         let wrongRate: Double
+        /// How many answered questions this rate is computed over.
+        ///
+        /// Published because it was already being computed here and then
+        /// recomputed by `QuizAnalyticsView` -- which rebuilt this theme's
+        /// highlight-id `Set` INSIDE a filter closure, once per answer record,
+        /// for each of the five topics it shows. The number is the same number;
+        /// this is the one that was measured.
+        let sampleSize: Int
     }
 
     static func weakestThemes(themes: [Theme], answerRecords: [QuizAnswerRecord]) -> [WeakTheme] {
@@ -67,7 +75,9 @@ enum QuizModeService {
                 if !record.isCorrect { wrongCount += 1 }
             }
             guard matched >= minSampleSizeForWeakTopic else { return nil }
-            return WeakTheme(theme: theme, wrongRate: Double(wrongCount) / Double(matched))
+            return WeakTheme(theme: theme,
+                             wrongRate: Double(wrongCount) / Double(matched),
+                             sampleSize: matched)
         }
         .sorted { $0.wrongRate > $1.wrongRate }
     }
@@ -80,12 +90,32 @@ enum QuizModeService {
     }
 
     static func weakSpotsPool(among allQuestions: [QuizQuestion], themes: [Theme], answerRecords: [QuizAnswerRecord]) -> [QuizQuestion] {
-        let weakest = weakestThemes(themes: themes, answerRecords: answerRecords).prefix(weakestThemeLimit)
-        guard !weakest.isEmpty else { return [] }
-        let weakHighlightIDs = Set(weakest.flatMap { $0.theme.highlights.map(\.id) })
+        let weakHighlightIDs = weakHighlightIDs(themes: themes, answerRecords: answerRecords)
+        guard !weakHighlightIDs.isEmpty else { return [] }
         return allQuestions.filter { question in
             !question.isSuspended && !Set(question.sourceHighlights.map(\.id)).isDisjoint(with: weakHighlightIDs)
         }
+    }
+
+    /// The highlight ids behind the current weakest themes -- the one set both
+    /// `weakSpotsPool` (which builds the session on tap) and `QuizHomeProbe`
+    /// (which counts it for the row, off the main actor) read from. One
+    /// definition, so the number on the row and the size of the session it
+    /// starts cannot drift apart.
+    static func weakHighlightIDs(themes: [Theme], answerRecords: [QuizAnswerRecord]) -> Set<UUID> {
+        Set(weakHighlights(themes: themes, answerRecords: answerRecords).map(\.id))
+    }
+
+    /// The highlights themselves, for a caller that walks their
+    /// `quizQuestions` inverse rather than testing every question's
+    /// `sourceHighlights` -- `QuizHomeProbe` counts the Weak Spots pool that
+    /// way. Deduplicated by id: a highlight tagged with two weak themes is
+    /// one highlight.
+    static func weakHighlights(themes: [Theme], answerRecords: [QuizAnswerRecord]) -> [Highlight] {
+        let weakest = weakestThemes(themes: themes, answerRecords: answerRecords).prefix(weakestThemeLimit)
+        guard !weakest.isEmpty else { return [] }
+        var seen: Set<UUID> = []
+        return weakest.flatMap(\.theme.highlights).filter { seen.insert($0.id).inserted }
     }
 
     /// "Assembled from a confusion matrix built out of wrong-answer tag pairs" (the plan's own
@@ -99,18 +129,56 @@ enum QuizModeService {
     }
 
     static func discriminationDrillPool(among allQuestions: [QuizQuestion], answerRecords: [QuizAnswerRecord]) -> [QuizQuestion] {
-        let missedTags = Set(
+        let missedTags = missedTopicTags(answerRecords: answerRecords)
+        guard !missedTags.isEmpty else { return [] }
+        return allQuestions.filter { question in
+            !question.isSuspended
+                && isDiscriminationCandidate(questionType: question.questionType,
+                                             choices: question.choices,
+                                             topicTags: question.topicTags,
+                                             missedTags: missedTags)
+        }
+    }
+
+    /// Every topic tag on a question the user has answered wrongly. Shared
+    /// with `QuizHomeProbe` for the same reason as `weakHighlightIDs`.
+    static func missedTopicTags(answerRecords: [QuizAnswerRecord]) -> Set<String> {
+        Set(
             answerRecords
                 .filter { !$0.isCorrect }
                 .compactMap { $0.question }
                 .flatMap(\.topicTags)
         )
-        guard !missedTags.isEmpty else { return [] }
-        return allQuestions.filter { question in
-            !question.isSuspended
-                && question.questionType != .application
-                && !question.choices.isEmpty
-                && !Set(question.topicTags).isDisjoint(with: missedTags)
-        }
+    }
+
+    /// The per-question half of the drill filter, on plain values so a probe
+    /// that fetched only these columns can apply the identical test.
+    /// `isSuspended` is the caller's to check -- the probe puts it in the
+    /// predicate, the pool reads it off the object.
+    static func isDiscriminationCandidate(questionType: QuizQuestionType,
+                                          choices: [String],
+                                          topicTags: [String],
+                                          missedTags: Set<String>) -> Bool {
+        questionType != .application
+            && !choices.isEmpty
+            && !Set(topicTags).isDisjoint(with: missedTags)
+    }
+
+    /// Opens a quiz with its easiest questions, then shuffles the rest.
+    ///
+    /// His report: "the quiz section in Cobux is very hard... a user comes
+    /// across the quiz part of the app and it doesn't appeal." A purely random
+    /// order means the first card is as likely to be the hardest as the easiest,
+    /// and the first card is what decides whether someone keeps going. Three
+    /// easy ones first is enough to get moving; after that the mix is honest,
+    /// so this makes the quiz feel approachable without making it easier.
+    ///
+    /// Ties are broken randomly so the same three don't lead every session.
+    static func warmUpOrdered(_ questions: [QuizQuestion], warmUpCount: Int = 3) -> [QuizQuestion] {
+        guard questions.count > warmUpCount else { return questions.shuffled() }
+        let byEase = questions.shuffled().sorted { $0.difficulty < $1.difficulty }
+        let warmUp = Array(byEase.prefix(warmUpCount))
+        let warmUpIDs = Set(warmUp.map(\.id))
+        return warmUp + questions.filter { !warmUpIDs.contains($0.id) }.shuffled()
     }
 }

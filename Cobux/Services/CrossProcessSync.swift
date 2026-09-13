@@ -7,7 +7,7 @@ import Foundation
 /// on `scenePhase == .active`, alongside the existing `WidgetCenter.reloadAllTimelines()` (which
 /// only refreshes the widget's own timeline, not the host app's in-memory `@Query` results).
 enum CrossProcessSync {
-    private static let defaults = UserDefaults(suiteName: "group.com.rajansharma.Cobux") ?? .standard
+    private static var defaults: UserDefaults { CobuxSchema.groupDefaults }
     private static let dirtyKey = "cobux.crossProcessSync.dirty"
 
     /// Call from any process other than the main app after a store write it needs the main

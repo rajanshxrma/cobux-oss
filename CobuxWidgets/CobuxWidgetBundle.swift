@@ -8,5 +8,11 @@ struct CobuxWidgetBundle: WidgetBundle {
         CobuxQuickCheckWidget()
         CobuxJournalWidget()
         CobuxQuizLiveActivity()
+        // Lock Screen Controls / Control Center / Action Button -- a
+        // `ControlWidget` is a distinct mechanism from the widgets above but
+        // registers the same way, straight in this bundle. See
+        // `JournalControl.swift` for the "bottom-right camera, bottom-left
+        // flashlight" ask this answers.
+        CobuxJournalControl()
     }
 }
